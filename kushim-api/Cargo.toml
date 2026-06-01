@@ -1,0 +1,13 @@
+[package]
+name = "kushim-api"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+axum = "0.8.7"
+redis = { version = "1.0.0-alpha.1", default-features = false, features = ["tokio-comp"] }
+serde = { version = "1.0.228", features = ["derive"] }
+sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio-rustls", "postgres"] }
+tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread", "net"] }
+tracing = "0.1.43"
+tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }

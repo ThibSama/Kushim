@@ -1,0 +1,126 @@
+services:
+  kushim-website:
+    build:
+      context: ./kushim-website
+    env_file:
+      - ./kushim-website/.env.local.example
+    expose:
+      - "3000"
+    networks:
+      - kushim-internal
+
+  kushim-auth-front:
+    build:
+      context: ./kushim-auth/front
+    env_file:
+      - ./kushim-auth/front/.env.local.example
+    expose:
+      - "3001"
+    networks:
+      - kushim-internal
+
+  kushim-auth-api:
+    build:
+      context: ./kushim-auth/api
+    env_file:
+      - ./kushim-auth/api/.env.example
+    expose:
+      - "3002"
+    networks:
+      - kushim-internal
+
+  kushim-app:
+    build:
+      context: ./kushim-app
+    env_file:
+      - ./kushim-app/.env.example
+    expose:
+      - "5173"
+    networks:
+      - kushim-internal
+
+  kushim-api:
+    build:
+      context: ./kushim-api
+    env_file:
+      - ./.env.example
+      - ./kushim-api/.env.example
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    expose:
+      - "8080"
+    networks:
+      - kushim-internal
+
+  kushim-market-data:
+    build:
+      context: ./kushim-market-data
+    env_file:
+      - ./kushim-market-data/.env.example
+    networks:
+      - kushim-internal
+
+  kushim-worker:
+    build:
+      context: ./kushim-worker
+    env_file:
+      - ./kushim-worker/.env.example
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - kushim-internal
+
+  postgres:
+    image: postgres:18-alpine
+    env_file:
+      - ./.env.example
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - kushim-internal
+
+  redis:
+    image: redis:8-alpine
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
+    volumes:
+      - redis-data:/data
+      - ./infra/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - kushim-internal
+
+  nginx:
+    image: nginx:1.29-alpine
+    depends_on:
+      - kushim-website
+      - kushim-auth-front
+      - kushim-app
+      - kushim-api
+    ports:
+      - "80:80"
+    volumes:
+      - ./infra/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - kushim-internal
+
+networks:
+  kushim-internal:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  redis-data:

@@ -1,0 +1,442 @@
+"use client";
+
+import React, { useState } from "react";
+import { Link, useLocation, useNavigate } from "@/lib/router-shim";
+import {
+  LayoutDashboard,
+  BarChart2,
+  List,
+  Compass,
+  Settings,
+  Sun,
+  Moon,
+  Menu,
+  X,
+  Box,
+  Shield,
+  CreditCard,
+} from "lucide-react";
+import { ENABLE_DISCOVER } from "../config/features";
+
+interface NavbarProps {
+  isAuthenticated?: boolean;
+  onThemeToggle?: () => void;
+  isDark?: boolean;
+}
+
+export function Navbar({
+  isAuthenticated = false,
+  onThemeToggle,
+  isDark = false,
+}: NavbarProps) {
+  const websiteUrl = process.env.NEXT_PUBLIC_WEBSITE_URL ?? "http://localhost:3000";
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  const isActive = (path: string) => location.pathname === path;
+
+  const handleAnchorClick = (e: React.MouseEvent, href: string) => {
+    const hashIndex = href.indexOf("#");
+    if (hashIndex === -1) return;
+    const hash = href.slice(hashIndex);
+    const basePath = href.slice(0, hashIndex) || "/";
+
+    if (location.pathname === basePath) {
+      e.preventDefault();
+      const el = document.querySelector(hash);
+      if (el) el.scrollIntoView({ behavior: "smooth" });
+    } else {
+      e.preventDefault();
+      navigate(basePath);
+      setTimeout(() => {
+        const el = document.querySelector(hash);
+        if (el) el.scrollIntoView({ behavior: "smooth" });
+      }, 100);
+    }
+  };
+
+  const publicLinks = [
+    { label: "Produit", href: `${websiteUrl}/fonctionnalites`, icon: Box },
+    { label: "Sécurité", href: "/securite", icon: Shield },
+    { label: "Tarifs", href: `${websiteUrl}/tarifs`, icon: CreditCard },
+  ];
+
+  const appLinks = [
+    { label: "Tableau de bord", href: "/dashboard", icon: LayoutDashboard },
+    { label: "Actifs", href: "/assets", icon: BarChart2 },
+    { label: "Transactions", href: "/transactions", icon: List },
+    ...(ENABLE_DISCOVER
+      ? [{ label: "Découvrir", href: "/discover", icon: Compass }]
+      : []),
+    { label: "Paramètres", href: "/settings", icon: Settings },
+  ];
+
+  const links = isAuthenticated ? appLinks : publicLinks;
+
+  return (
+    <>
+      <nav
+        className="fixed inset-x-0 z-50 flex justify-center px-3 sm:px-4"
+        style={{ top: "clamp(16px, 3vw, 28px)" }}>
+        <div
+          className="glass-elevated flex max-w-full items-center rounded-[9999px]"
+          style={{
+            minHeight: "clamp(44px, 8vw, 48px)",
+            padding: "4px",
+            paddingInline: "clamp(10px, 1.6vw, 14px)",
+            maxWidth: "calc(100vw - 24px)",
+            gap: "clamp(8px, 1vw, 12px)",
+          }}>
+          <Link
+            to={isAuthenticated ? "/dashboard" : websiteUrl}
+            onClick={(e: React.MouseEvent) => {
+              if (!isAuthenticated && location.pathname === "/") {
+                e.preventDefault();
+                window.scrollTo({ top: 0, behavior: "smooth" });
+              }
+            }}
+            className="uppercase tracking-wider shrink-0"
+            style={{
+              fontSize: "clamp(14px, 2.5vw, 16px)",
+              color: "var(--text-primary)",
+              letterSpacing: "0.04em",
+              fontWeight: 800,
+              paddingInline: "clamp(6px, 1vw, 8px)",
+              whiteSpace: "nowrap",
+            }}>
+            KUSHIM
+          </Link>
+
+          <div
+            className="hidden md:flex items-center shrink-0"
+            style={{ gap: "clamp(4px, 0.6vw, 6px)" }}>
+            {links.map((link) => {
+              const active = isActive(link.href);
+              const isAnchor = link.href.includes("#");
+              return (
+                <Link
+                  key={link.href}
+                  to={link.href}
+                  onClick={
+                    isAnchor
+                      ? (e: React.MouseEvent) => handleAnchorClick(e, link.href)
+                      : undefined
+                  }
+                  className="rounded-[9999px] transition-all duration-200"
+                  style={{
+                    fontSize: "clamp(13px, 1.6vw, 14px)",
+                    fontWeight: active ? 600 : 500,
+                    color: active
+                      ? isDark
+                        ? "#FAFAFA"
+                        : "var(--text-primary)"
+                      : isDark
+                        ? "#A1A1AA"
+                        : "var(--text-secondary)",
+                    background: active
+                      ? "linear-gradient(180deg, rgba(255,255,255,0.08), rgba(255,255,255,0.02)), var(--surface-2-bg)"
+                      : "transparent",
+                    border: active
+                      ? "1px solid var(--glass-border)"
+                      : "1px solid transparent",
+                    boxShadow: active ? "var(--glass-highlight)" : "none",
+                    minHeight: "36px",
+                    display: "flex",
+                    alignItems: "center",
+                    padding: "0 14px",
+                    whiteSpace: "nowrap",
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!active) {
+                      e.currentTarget.style.background = isDark
+                        ? "linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.015)), rgba(255, 255, 255, 0.04)"
+                        : "linear-gradient(180deg, rgba(255,255,255,0.08), rgba(255,255,255,0.02)), rgba(255, 255, 255, 0.24)";
+                      e.currentTarget.style.color = isDark
+                        ? "#FAFAFA"
+                        : "var(--text-primary)";
+                      e.currentTarget.style.borderColor = "var(--glass-border)";
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (!active) {
+                      e.currentTarget.style.background = "transparent";
+                      e.currentTarget.style.borderColor = "transparent";
+                      e.currentTarget.style.color = isDark
+                        ? "#A1A1AA"
+                        : "var(--text-secondary)";
+                    }
+                  }}>
+                  {link.label}
+                </Link>
+              );
+            })}
+          </div>
+
+          <div
+            className="flex items-center shrink-0"
+            style={{ gap: "clamp(2px, 0.75vw, 4px)" }}>
+            <button
+              onClick={onThemeToggle}
+              className="rounded-full flex items-center justify-center shrink-0 transition-all duration-200"
+              style={{
+                color: "var(--text-secondary)",
+                minWidth: "36px",
+                minHeight: "36px",
+                width: "clamp(36px, 6vw, 40px)",
+                height: "clamp(36px, 6vw, 40px)",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background =
+                  "linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02)), var(--surface-2-bg)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = "transparent";
+              }}
+              aria-label="Changer le thème">
+              {isDark ? <Sun size={16} /> : <Moon size={16} />}
+            </button>
+
+            <button
+              className="rounded-full flex items-center justify-center shrink-0 transition-all duration-200"
+              style={{
+                color: "var(--text-secondary)",
+                fontSize: "clamp(11px, 2vw, 12px)",
+                fontWeight: 600,
+                minWidth: "36px",
+                minHeight: "36px",
+                width: "clamp(36px, 6vw, 40px)",
+                height: "clamp(36px, 6vw, 40px)",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background =
+                  "linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02)), var(--surface-2-bg)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = "transparent";
+              }}
+              aria-label="Langue">
+              FR
+            </button>
+
+            <div
+              className="hidden md:flex items-center shrink-0"
+              style={{ gap: "clamp(4px, 1vw, 6px)" }}>
+              <div
+                className="mx-1 shrink-0"
+                style={{
+                  width: "1px",
+                  height: "20px",
+                  background: isDark
+                    ? "rgba(255, 255, 255, 0.10)"
+                    : "rgba(0, 0, 0, 0.08)",
+                }}
+              />
+
+              {!isAuthenticated ? (
+                <>
+                  <Link
+                    to="/connexion"
+                    className="px-3.5 py-1.5 rounded-[9999px] transition-all duration-200"
+                    style={{
+                      fontSize: "clamp(13px, 2vw, 14px)",
+                      fontWeight: 500,
+                      color: "var(--text-secondary)",
+                      minHeight: "36px",
+                      whiteSpace: "nowrap",
+                      display: "flex",
+                      alignItems: "center",
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.color = "var(--text-primary)";
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.color = "var(--text-secondary)";
+                    }}>
+                    Se connecter
+                  </Link>
+                  <Link
+                    to="/inscription"
+                    className="rounded-[9999px] transition-opacity duration-200 hover:opacity-90 flex items-center justify-center shrink-0"
+                    style={{
+                      background: isDark ? "#FAFAFA" : "#09090B",
+                      color: isDark ? "#09090B" : "#FFFFFF",
+                      fontSize: "clamp(13px, 2vw, 14px)",
+                      fontWeight: 600,
+                      minHeight: "36px",
+                      whiteSpace: "nowrap",
+                      padding: "0 clamp(16px, 3vw, 20px)",
+                    }}>
+                    Commencer
+                  </Link>
+                </>
+              ) : (
+                <div
+                  className="glass-field flex items-center px-1 pr-3 rounded-[9999px] shrink-0"
+                  style={{
+                    minHeight: "36px",
+                    gap: "clamp(6px, 1vw, 8px)",
+                  }}>
+                  <div
+                    className="rounded-full flex items-center justify-center"
+                    style={{
+                      background: "var(--color-accent)",
+                      color: "white",
+                      fontSize: "clamp(11px, 2vw, 12px)",
+                      fontWeight: 700,
+                      width: "clamp(28px, 5vw, 32px)",
+                      height: "clamp(28px, 5vw, 32px)",
+                    }}>
+                    U
+                  </div>
+                  <span
+                    style={{
+                      fontSize: "clamp(13px, 2vw, 14px)",
+                      fontWeight: 500,
+                      color: "var(--text-primary)",
+                      whiteSpace: "nowrap",
+                    }}>
+                    Utilisateur
+                  </span>
+                </div>
+              )}
+            </div>
+
+            <button
+              onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+              className="md:hidden rounded-full flex items-center justify-center transition-all duration-200"
+              style={{
+                color: "var(--text-secondary)",
+                minWidth: "36px",
+                minHeight: "36px",
+                width: "clamp(36px, 6vw, 40px)",
+                height: "clamp(36px, 6vw, 40px)",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background =
+                  "linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02)), var(--surface-2-bg)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = "transparent";
+              }}
+              aria-label="Menu">
+              <Menu size={20} />
+            </button>
+          </div>
+        </div>
+      </nav>
+
+      {mobileMenuOpen && (
+        <>
+          <div
+            className="fixed inset-0 z-40"
+            style={{ background: "rgba(0, 0, 0, 0.30)", backdropFilter: "blur(8px)" }}
+            onClick={() => setMobileMenuOpen(false)}
+          />
+
+          <div
+            className="glass-strong fixed top-0 left-0 right-0 z-50 rounded-b-[var(--radius-xl)]"
+            style={{
+              padding: "clamp(16px, 4vw, 20px)",
+            }}>
+            <div
+              className="flex justify-between items-center"
+              style={{ marginBottom: "clamp(16px, 3vw, 20px)" }}>
+              <span
+                className="uppercase tracking-wider font-extrabold"
+                style={{ fontSize: "clamp(14px, 2.5vw, 16px)" }}>
+                KUSHIM
+              </span>
+              <button
+                onClick={() => setMobileMenuOpen(false)}
+                className="rounded-full flex items-center justify-center"
+                style={{
+                  minWidth: "44px",
+                  minHeight: "44px",
+                  color: "var(--text-primary)",
+                }}
+                aria-label="Fermer le menu">
+                <X size={20} />
+              </button>
+            </div>
+
+            <div
+              className="flex flex-col"
+              style={{ gap: "clamp(8px, 2vw, 10px)" }}>
+              {links.map((link) => {
+                const Icon = link.icon;
+                const isAnchor = link.href.includes("#");
+                return (
+                  <Link
+                    key={link.href}
+                    to={link.href}
+                    onClick={(e: React.MouseEvent) => {
+                      setMobileMenuOpen(false);
+                      if (isAnchor) handleAnchorClick(e, link.href);
+                    }}
+                    className="flex items-center rounded-lg"
+                    style={{
+                      color: "var(--text-primary)",
+                      background: isActive(link.href)
+                        ? "var(--surface-2-bg)"
+                        : "transparent",
+                      gap: "clamp(10px, 2vw, 12px)",
+                      padding:
+                        "clamp(12px, 2.5vw, 14px) clamp(14px, 3vw, 16px)",
+                      minHeight: "44px",
+                      fontSize: "clamp(14px, 2.5vw, 15px)",
+                    }}>
+                    <Icon size={20} />
+                    {link.label}
+                  </Link>
+                );
+              })}
+
+              {!isAuthenticated && (
+                <div
+                  className="flex flex-col mt-4"
+                  style={{ gap: "clamp(10px, 2vw, 12px)" }}>
+                  <Link
+                    to="/connexion"
+                    onClick={() => setMobileMenuOpen(false)}
+                    className="text-center rounded-[9999px]"
+                    style={{
+                      border: "1px solid var(--surface-1-border)",
+                      color: "var(--text-primary)",
+                      padding:
+                        "clamp(12px, 2.5vw, 14px) clamp(14px, 3vw, 16px)",
+                      minHeight: "44px",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      fontSize: "clamp(14px, 2.5vw, 15px)",
+                    }}>
+                    Se connecter
+                  </Link>
+                  <Link
+                    to="/inscription"
+                    onClick={() => setMobileMenuOpen(false)}
+                    className="text-center rounded-[9999px]"
+                    style={{
+                      background: "var(--color-cta-bg)",
+                      color: "var(--color-cta-text)",
+                      fontWeight: 600,
+                      padding:
+                        "clamp(12px, 2.5vw, 14px) clamp(14px, 3vw, 16px)",
+                      minHeight: "44px",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      fontSize: "clamp(14px, 2.5vw, 15px)",
+                    }}>
+                    Commencer
+                  </Link>
+                </div>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+    </>
+  );
+}
