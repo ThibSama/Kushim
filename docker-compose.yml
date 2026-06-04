@@ -7,7 +7,7 @@ services:
     expose:
       - "3000"
     networks:
-      - kushim-internal
+      - kushim_network
 
   kushim-auth-front:
     build:
@@ -17,7 +17,7 @@ services:
     expose:
       - "3001"
     networks:
-      - kushim-internal
+      - kushim_network
 
   kushim-auth-api:
     build:
@@ -27,7 +27,7 @@ services:
     expose:
       - "3002"
     networks:
-      - kushim-internal
+      - kushim_network
 
   kushim-app:
     build:
@@ -37,7 +37,7 @@ services:
     expose:
       - "5173"
     networks:
-      - kushim-internal
+      - kushim_network
 
   kushim-api:
     build:
@@ -46,14 +46,14 @@ services:
       - ./.env.example
       - ./kushim-api/.env.example
     depends_on:
-      postgres:
+      database:
         condition: service_healthy
       redis:
         condition: service_healthy
     expose:
       - "8080"
     networks:
-      - kushim-internal
+      - kushim_network
 
   kushim-market-data:
     build:
@@ -61,7 +61,7 @@ services:
     env_file:
       - ./kushim-market-data/.env.example
     networks:
-      - kushim-internal
+      - kushim_network
 
   kushim-worker:
     build:
@@ -72,22 +72,28 @@ services:
       redis:
         condition: service_healthy
     networks:
-      - kushim-internal
+      - kushim_network
 
-  postgres:
-    image: postgres:18-alpine
+  database:
+    image: postgres:16
+    container_name: kushim_database
     env_file:
-      - ./.env.example
+      - ./.env.docker.example
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
-      - postgres-data:/var/lib/postgresql/data
-      - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro
+      - kushim_postgres_data:/var/lib/postgresql/data
+      - ./infra/postgres/init/001_init.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 10s
       timeout: 5s
       retries: 5
     networks:
-      - kushim-internal
+      kushim_network:
+        aliases:
+          - postgres
+          - database
 
   redis:
     image: redis:8-alpine
@@ -101,7 +107,7 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - kushim-internal
+      - kushim_network
 
   nginx:
     image: nginx:1.29-alpine
@@ -115,12 +121,12 @@ services:
     volumes:
       - ./infra/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
     networks:
-      - kushim-internal
+      - kushim_network
 
 networks:
-  kushim-internal:
+  kushim_network:
     driver: bridge
 
 volumes:
-  postgres-data:
+  kushim_postgres_data:
   redis-data:
