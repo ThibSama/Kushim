@@ -21,11 +21,29 @@ services:
 
   kushim-auth-api:
     build:
-      context: ./kushim-auth/api
+      context: .
+      dockerfile: ./kushim-auth/api/Dockerfile
     env_file:
       - ./kushim-auth/api/.env.example
+    environment:
+      DATABASE_URL: postgresql://kushim:kushim_secret_dev@database:5432/kushim
+      REDIS_URL: redis://redis:6379/0
+      RATE_LIMIT_ENABLED: "true"
+      APP_ENV: docker
+    depends_on:
+      database:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     expose:
       - "3002"
+    ports:
+      - "3002:3002"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3002/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     networks:
       - kushim_network
 
