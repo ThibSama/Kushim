@@ -1,21 +1,45 @@
 # kushim-website
 
-Next.js + TypeScript public marketing site with the Kushim landing page reproduced from the mockup.
+Public marketing website for Kushim.
 
-Local port: `3000`
+## Stack
 
-Run:
+- Next.js
+- TypeScript
+- Tailwind
 
-```bash
+## Current status
+
+Status:
+
+- **Implemented for marketing/landing use**
+
+What currently exists:
+
+- landing page
+- product presentation
+- navigation toward auth
+
+This service does not own business logic.
+
+## Local run
+
+```powershell
+cd E:\Kushim\kushim-website
 copy .env.local.example .env.local
 npm install
 npm run dev
 ```
 
-Checks:
+## Validation
 
-```bash
+```powershell
 npm run lint
 npm run build
-npm audit
 ```
+
+## Scope note
+
+This website is not the authenticated application.
+
+It presents Kushim publicly and routes users toward the auth and app surfaces.

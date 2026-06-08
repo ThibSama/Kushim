@@ -11,4 +11,10 @@ target/
 .DS_Store
 Thumbs.db
 
-documentation/
+.codex/*
+.claude/*
+
+documentation/*
+
+agents.md
+claude.md

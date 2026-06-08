@@ -1,160 +1,143 @@
 # Kushim
 
-Kushim is scaffolded as independent services under `E:/Kushim/`. There is no monorepo tool; each frontend and Rust service owns its own dependencies, build files, README, and environment example.
+Kushim is an investment portfolio tracking and analytics application.
 
-```txt
+Kushim is **not**:
+
+- a broker;
+- a trading execution platform;
+- a bank;
+- a payment provider;
+- a market data vendor.
+
+Kushim helps users:
+
+- centralize portfolios;
+- record `portfolio_operations`;
+- search and select assets;
+- view current summaries and holdings;
+- view historical snapshots when they exist;
+- audit corrections and portfolio history;
+- progressively analyze historical performance and portfolio evolution.
+
+## Current status
+
+Current repository state, at a high level:
+
+- `kushim-auth/api`: implemented and hardened
+- `kushim-api`: implemented and validated for the current synchronous MVP perimeter
+- `kushim-worker`: implemented for current-state rebuilds, daily snapshots, composite refresh, and first controlled historical backfill
+- `kushim-market-data`: scaffolded only
+- `kushim-auth/front`: interactive frontend scaffold, not fully wired to the auth API yet
+- `kushim-app`: private frontend with advanced mock UI, not fully wired to `kushim-api` yet
+- `kushim-website`: marketing website present
+
+Important:
+
+- the backend is significantly more advanced than the frontends;
+- the project is **MVP-oriented**, not production-ready;
+- some services are fully usable internally, while others are still scaffolded or partially wired.
+
+## Service map
+
+```text
 E:/Kushim/
-├── kushim-website/       # Next.js public marketing site
+├── kushim-website/       # public marketing website (Next.js)
 ├── kushim-auth/
-│   ├── front/            # Next.js auth UI
-│   └── api/              # Rust + Axum auth stubs
-├── kushim-app/           # React + Vite private app
-├── kushim-api/           # Rust + Axum + sqlx + redis-rs API stubs
-├── kushim-market-data/   # Rust internal service scaffold
-├── kushim-worker/        # Rust internal worker scaffold
+│   ├── front/            # auth frontend (Next.js)
+│   └── api/              # authentication service (Rust/Axum/SQLx)
+├── kushim-app/           # authenticated app (React/Vite)
+├── kushim-api/           # main synchronous business API (Rust/Axum/SQLx)
+├── kushim-worker/        # worker jobs, rebuilds, snapshots, backfills (Rust)
+├── kushim-market-data/   # future market-data sync service (Rust, scaffolded)
 └── infra/
-    ├── nginx/
     ├── postgres/
-    └── redis/
+    ├── redis/
+    └── nginx/
 ```
 
-## Source Notes
+## Core architecture truth
 
-- Mockup preview inspected: `https://kushimmaquette.vercel.app/`.
-- Mockup repository inspected: `https://github.com/ThibSama/Kushimmake`.
-- Visual surfaces reproduced from the mockup: auth screens and private app screens. The public website is a clean scaffold as requested.
+Critical project rules:
 
-## Services
+- `portfolio_operations` is the source of truth.
+- read models are derived and rebuildable.
+- snapshots are derived historical states.
+- `asset_price_history_cache` is the deterministic historical price cache.
+- `kushim-api` writes user-facing source-of-truth actions and exposes read-only derived data.
+- `kushim-api` does **not** generate read models or snapshots.
+- `kushim-worker` generates read models, snapshots, and controlled historical backfills.
+- `kushim-market-data` is the future service responsible for market provider sync and price cache population.
+- PostgreSQL DDL remains the schema source of truth:
+  - `infra/postgres/init/001_init.sql`
 
-### `kushim-website`
-
-Next.js + TypeScript public marketing scaffold on port `3000`.
+## Quick local Docker start
 
 ```powershell
-cd E:/Kushim/kushim-website
-copy .env.local.example .env.local
-npm install
-npm run dev
+cd E:\Kushim
+docker compose build
+docker compose up -d --force-recreate database redis kushim-auth-api kushim-api kushim-worker
 ```
 
-### `kushim-auth/front`
-
-Next.js + TypeScript auth UI on port `3001`.
-
-Routes:
-
-- `/connexion`
-- `/inscription`
-- `/recuperation`
-- `/recuperation/confirmation`
+Useful health checks:
 
 ```powershell
-cd E:/Kushim/kushim-auth/front
-copy .env.local.example .env.local
-npm install
-npm run dev
+curl http://127.0.0.1:3002/health
+curl http://127.0.0.1:3002/ready
+curl http://127.0.0.1:8080/health
+curl http://127.0.0.1:8080/ready
+curl http://127.0.0.1:8081/health
+curl http://127.0.0.1:8081/ready
 ```
 
-### `kushim-auth/api`
+Why `--force-recreate` matters:
 
-Rust + Axum auth API scaffold on port `8090`.
+- after rebuilds, it avoids validating stale containers still running older binaries.
 
-Stub routes:
+## Detailed documentation
 
-- `POST /login`
-- `POST /register`
-- `POST /forgot-password`
+Start here:
 
-```powershell
-cd E:/Kushim/kushim-auth/api
-copy .env.example .env
-cargo run
-```
+- [Documentation index](documentation/README.md)
+- [Architecture overview](documentation/architecture/overview.md)
+- [Service boundaries](documentation/architecture/service-boundaries.md)
+- [Data flow](documentation/architecture/data-flow.md)
+- [Database architecture](documentation/database/database-architecture.md)
+- [Portfolio reconstruction and snapshots](documentation/database/portfolio-reconstruction.md)
+- [MVP scope](documentation/mvp/mvp-scope.md)
+- [Deferred TODOs](documentation/mvp/deferred-todos.md)
+- [Docker local development](documentation/operations/docker-local-dev.md)
+- [Validation commands](documentation/operations/validation-commands.md)
 
-### `kushim-app`
+Current progress reports:
 
-React + Vite + TypeScript private app on port `5173`.
+- [MVP progress report (FR)](documentation/reports/kushim-mvp-progress-report.fr.md)
+- [MVP progress report (EN)](documentation/reports/kushim-mvp-progress-report.en.md)
 
-Routes:
+Agent guidance for Codex or similar tooling:
 
-- `/dashboard`
-- `/actifs`
-- `/actifs/:id`
-- `/transactions`
-- `/parametres`
+- [AGENTS.md](AGENTS.md)
 
-```powershell
-cd E:/Kushim/kushim-app
-copy .env.example .env
-npm install
-npm run dev
-```
+## Known non-production status
 
-### `kushim-api`
+The repository is not production-ready yet.
 
-Rust + Axum + sqlx + redis-rs API scaffold on port `8080`.
+Main reasons:
 
-Stub routes:
+- `kushim-market-data` is not implemented yet;
+- frontends are not fully wired to the backend;
+- there is no complete CI/CD or deployment strategy visible in the repo;
+- observability, production secrets handling, and backup strategy are still incomplete;
+- some V1 business calculations intentionally remain conservative.
 
-- `GET /v1/portfolios`
-- `GET /v1/transactions`
-- `GET /v1/assets`
+This repository is the private project workspace and should be treated as the real working repository, including its documentation.
 
-```powershell
-cd E:/Kushim/kushim-api
-copy .env.example .env
-cargo run
-```
+## Service-specific READMEs
 
-### Internal Rust Services
-
-`kushim-market-data` and `kushim-worker` are Rust scaffolds intended for the internal Docker network only.
-
-```powershell
-cd E:/Kushim/kushim-market-data
-copy .env.example .env
-cargo run
-
-cd E:/Kushim/kushim-worker
-copy .env.example .env
-cargo run
-```
-
-## Docker
-
-The root `docker-compose.yml` defines all services on one internal network. Only nginx exposes a host port.
-
-Local nginx routing:
-
-- `kushim.localhost` -> `kushim-website:3000`
-- `app.kushim.localhost` -> `kushim-app:5173`
-- `auth.kushim.localhost` -> `kushim-auth-front:3001`
-- `api.kushim.localhost` -> `kushim-api:8080`
-
-```powershell
-cd E:/Kushim
-copy .env.example .env
-docker compose up --build
-```
-
-## Verification
-
-Frontend checks:
-
-```powershell
-npm run lint
-npm run build
-npm audit
-```
-
-Rust checks:
-
-```powershell
-cargo check
-```
-
-Docker config check:
-
-```powershell
-docker compose config --quiet
-```
+- [kushim-auth/api](kushim-auth/api/README.md)
+- [kushim-api](kushim-api/README.md)
+- [kushim-worker](kushim-worker/README.md)
+- [kushim-market-data](kushim-market-data/README.md)
+- [kushim-app](kushim-app/README.md)
+- [kushim-auth/front](kushim-auth/front/README.md)
+- [kushim-website](kushim-website/README.md)

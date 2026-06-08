@@ -1,79 +1,86 @@
-use axum::{Json, Router, routing::get};
-use serde::Serialize;
-use std::{env, net::SocketAddr};
+use anyhow::Result;
+use kushim_api::{
+    auth::JwtValidator,
+    config::Config,
+    db, http,
+    repositories::{
+        assets::AssetRepository, portfolio_operations::PortfolioOperationRepository,
+        portfolio_read_models::PortfolioReadModelRepository,
+        portfolio_snapshots::PortfolioSnapshotRepository, portfolios::PortfolioRepository,
+    },
+    services::{
+        assets::AssetService, portfolio_operations::PortfolioOperationService,
+        portfolio_read_models::PortfolioReadModelService,
+        portfolio_snapshots::PortfolioSnapshotService, portfolios::PortfolioService,
+    },
+    state::AppState,
+};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
-#[derive(Clone)]
-struct AppConfig {
-    database_url: String,
-    redis_url: String,
-}
-
-#[derive(Serialize)]
-struct StubResponse {
-    service: &'static str,
-    route: &'static str,
-    status: &'static str,
-}
-
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<()> {
+    dotenvy::dotenv().ok();
+
+    let config = Config::from_env()?;
+
     tracing_subscriber::registry()
-        .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
+        .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| config.rust_log.clone().into()))
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    let config = AppConfig {
-        database_url: env::var("DATABASE_URL").unwrap_or_else(|_| {
-            "postgres://kushim:kushim@localhost:5432/kushim".to_string()
-        }),
-        redis_url: env::var("REDIS_URL").unwrap_or_else(|_| "redis://localhost:6379".to_string()),
-    };
+    let db_pool = db::create_pool(&config.database_url).await?;
+    db::check_connectivity(&db_pool).await?;
+    tracing::info!("PostgreSQL connection established");
 
-    tracing::info!(
-        database_configured = !config.database_url.is_empty(),
-        redis_configured = !config.redis_url.is_empty(),
-        "loaded service config"
+    if config.redis_url.is_some() {
+        tracing::info!("Redis configuration detected but not used in this implementation pass");
+    } else {
+        tracing::info!("Redis not configured");
+    }
+
+    let portfolio_repository = PortfolioRepository::new(db_pool.clone());
+    let asset_service = AssetService::new(AssetRepository::new(db_pool.clone()));
+    let portfolio_service = PortfolioService::new(portfolio_repository.clone());
+    let portfolio_operation_service = PortfolioOperationService::new(
+        AssetRepository::new(db_pool.clone()),
+        portfolio_repository,
+        PortfolioOperationRepository::new(db_pool.clone()),
+    );
+    let portfolio_read_model_service = PortfolioReadModelService::new(
+        PortfolioRepository::new(db_pool.clone()),
+        PortfolioReadModelRepository::new(db_pool.clone()),
+    );
+    let portfolio_snapshot_service = PortfolioSnapshotService::new(
+        PortfolioRepository::new(db_pool.clone()),
+        PortfolioSnapshotRepository::new(db_pool.clone()),
     );
 
-    let app = Router::new()
-        .route("/health", get(health))
-        .route("/v1/portfolios", get(portfolios))
-        .route("/v1/transactions", get(transactions))
-        .route("/v1/assets", get(assets));
+    let state = AppState {
+        db_pool,
+        jwt_validator: JwtValidator::new(&config.auth_jwt_secret, config.jwt_issuer.clone()),
+        asset_service,
+        portfolio_service,
+        portfolio_operation_service,
+        portfolio_read_model_service,
+        portfolio_snapshot_service,
+        service_name: "kushim-api",
+        service_version: env!("CARGO_PKG_VERSION"),
+        routes_version: "api-routes-v1",
+        environment: config.environment.clone(),
+    };
 
-    let port = env::var("PORT").unwrap_or_else(|_| "8080".to_string());
-    let addr: SocketAddr = format!("0.0.0.0:{port}")
-        .parse()
-        .expect("PORT must produce a valid socket address");
+    let app = http::router(state);
+    let addr = config.socket_addr()?;
 
-    tracing::info!(%addr, "starting kushim-api");
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .expect("bind api listener");
-    axum::serve(listener, app).await.expect("serve api");
-}
+    tracing::info!(
+        routes = http::ROUTES_DESCRIPTION,
+        routes_version = "api-routes-v1",
+        "kushim-api routes mounted"
+    );
+    tracing::info!(%addr, environment = %config.environment, "starting kushim-api");
 
-async fn health() -> Json<StubResponse> {
-    Json(stub("/health"))
-}
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    axum::serve(listener, app).await?;
 
-async fn portfolios() -> Json<StubResponse> {
-    Json(stub("/v1/portfolios"))
-}
-
-async fn transactions() -> Json<StubResponse> {
-    Json(stub("/v1/transactions"))
-}
-
-async fn assets() -> Json<StubResponse> {
-    Json(stub("/v1/assets"))
-}
-
-fn stub(route: &'static str) -> StubResponse {
-    StubResponse {
-        service: "kushim-api",
-        route,
-        status: "stub",
-    }
+    Ok(())
 }

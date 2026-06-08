@@ -63,13 +63,25 @@ services:
     env_file:
       - ./.env.example
       - ./kushim-api/.env.example
+    environment:
+      DATABASE_URL: postgresql://kushim:kushim_secret_dev@database:5432/kushim
+      APP_ENV: docker
+      KUSHIM_API_HOST: 0.0.0.0
+      KUSHIM_API_PORT: 8080
+      AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:-dev_only_change_me_minimum_32_chars}
+      JWT_ISSUER: ${JWT_ISSUER:-kushim-auth}
     depends_on:
       database:
         condition: service_healthy
-      redis:
-        condition: service_healthy
     expose:
       - "8080"
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     networks:
       - kushim_network
 
@@ -86,9 +98,34 @@ services:
       context: ./kushim-worker
     env_file:
       - ./kushim-worker/.env.example
+    environment:
+      DATABASE_URL: postgresql://kushim:kushim_secret_dev@database:5432/kushim
+      APP_ENV: docker
+      WORKER_NAME: kushim-worker
+      WORKER_MODE: idle
+      WORKER_JOB: noop
+      WORKER_POLL_INTERVAL_SECONDS: 30
+      WORKER_TARGET_PORTFOLIO_ID: ""
+      WORKER_SNAPSHOT_DATE: ""
+      WORKER_BACKFILL_DATE_FROM: ""
+      WORKER_BACKFILL_DATE_TO: ""
+      REDIS_URL: redis://redis:6379/0
+      WORKER_HEALTH_HOST: 0.0.0.0
+      WORKER_HEALTH_PORT: 8081
     depends_on:
+      database:
+        condition: service_healthy
       redis:
         condition: service_healthy
+    expose:
+      - "8081"
+    ports:
+      - "8081:8081"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8081/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     networks:
       - kushim_network
 
