@@ -124,6 +124,7 @@ export const fr: Dictionary = {
     invalidUsername: "Format de nom d'utilisateur invalide.",
     blankPassword: "Le mot de passe ne peut pas être vide.",
     invalidRecoveryPhrase: "Phrase de récupération invalide.",
+    handoffFailed: "Impossible d'ouvrir votre session dans l'application. Réessayez.",
     genericError: "Une erreur est survenue.",
     unexpectedError: "Une erreur inattendue est survenue.",
     networkError:

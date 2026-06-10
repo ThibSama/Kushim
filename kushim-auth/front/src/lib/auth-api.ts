@@ -141,3 +141,18 @@ export function me(accessToken: string): Promise<MeResponse> {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
 }
+
+export interface HandoffCodeResponse {
+  handoff_code: string;
+}
+
+export function createHandoffCode(
+  accessToken: string,
+  refreshToken: string,
+): Promise<HandoffCodeResponse> {
+  return request<HandoffCodeResponse>("/auth/handoff", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}` },
+    body: JSON.stringify({ refresh_token: refreshToken }),
+  });
+}

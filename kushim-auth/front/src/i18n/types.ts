@@ -113,6 +113,7 @@ export interface Dictionary {
     invalidUsername: string;
     blankPassword: string;
     invalidRecoveryPhrase: string;
+    handoffFailed: string;
     genericError: string;
     unexpectedError: string;
     networkError: string;

@@ -99,6 +99,7 @@ fn build_app_state(pool: sqlx::PgPool) -> AppState {
         db_pool: pool,
         auth_service,
         rate_limiter: None,
+        handoff_service: None,
         rate_limit_enabled: false,
         service_name: "kushim-auth",
         service_version: env!("CARGO_PKG_VERSION"),
@@ -598,7 +599,7 @@ async fn cors_normal_response_includes_origin_header() {
 }
 
 #[tokio::test]
-async fn cors_disallowed_origin_gets_configured_origin_only() {
+async fn cors_disallowed_origin_gets_no_allow_header() {
     let pool = test_pool().await;
     let app = http::router_with_cors(build_app_state(pool), Some("http://localhost:3001"));
 
@@ -615,14 +616,12 @@ async fn cors_disallowed_origin_gets_configured_origin_only() {
         .expect("health response");
 
     assert_eq!(response.status(), StatusCode::OK);
-    // tower-http with a fixed origin always returns the configured value;
-    // the browser enforces the mismatch and blocks the response.
-    assert_eq!(
+    assert!(
         response
             .headers()
             .get("access-control-allow-origin")
-            .expect("allow-origin header"),
-        "http://localhost:3001"
+            .is_none(),
+        "disallowed origin should not receive access-control-allow-origin"
     );
 }
 

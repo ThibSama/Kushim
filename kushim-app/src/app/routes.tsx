@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import {
   createBrowserRouter,
   Navigate,
@@ -15,28 +15,55 @@ import { AssetDetail } from "./pages/AssetDetail";
 import { Transactions } from "./pages/Transactions";
 import { Settings } from "./pages/Settings";
 
+const AUTH_API_URL =
+  import.meta.env.VITE_AUTH_API_URL || "http://localhost:3002";
+
+async function exchangeHandoffCode(
+  code: string,
+): Promise<{ access_token: string; refresh_token: string } | null> {
+  try {
+    const response = await fetch(`${AUTH_API_URL}/auth/handoff/exchange`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ handoff_code: code }),
+    });
+    if (!response.ok) return null;
+    return await response.json();
+  } catch {
+    return null;
+  }
+}
+
 function Handoff() {
   const location = useLocation();
   const navigate = useNavigate();
-  const { token, setToken } = useAuthStore();
+  const { token, setTokens } = useAuthStore();
+  const [exchanging, setExchanging] = useState(false);
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);
-    const nextToken = params.get("token");
+    const handoffCode = params.get("handoff_code");
 
-    if (nextToken) {
-      setToken(nextToken);
-      navigate("/dashboard", { replace: true });
+    if (handoffCode && !exchanging) {
+      setExchanging(true);
+      exchangeHandoffCode(handoffCode).then((result) => {
+        if (result) {
+          setTokens(result.access_token, result.refresh_token);
+          navigate("/dashboard", { replace: true });
+        } else {
+          window.location.href = getWebsiteLoginUrl();
+        }
+      });
       return;
     }
 
-    if (token || localStorage.getItem("kushim_token")) {
+    if (token) {
       navigate("/dashboard", { replace: true });
       return;
     }
 
     window.location.href = getWebsiteLoginUrl();
-  }, [location.search, navigate, setToken, token]);
+  }, [location.search, navigate, setTokens, token, exchanging]);
 
   return null;
 }
@@ -45,12 +72,12 @@ function RequireAuth() {
   const token = useAuthStore((state) => state.token);
 
   useEffect(() => {
-    if (!token && !localStorage.getItem("kushim_token")) {
+    if (!token) {
       window.location.href = getWebsiteLoginUrl();
     }
   }, [token]);
 
-  if (!token && !localStorage.getItem("kushim_token")) {
+  if (!token) {
     return null;
   }
 

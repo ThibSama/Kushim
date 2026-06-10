@@ -121,6 +121,7 @@ export const en: Dictionary = {
     invalidUsername: "Invalid username format.",
     blankPassword: "Password cannot be empty.",
     invalidRecoveryPhrase: "Invalid recovery phrase.",
+    handoffFailed: "Unable to open your session in the app. Please try again.",
     genericError: "An error occurred.",
     unexpectedError: "An unexpected error occurred.",
     networkError: "Unable to reach the authentication server.",

@@ -8,7 +8,7 @@ import { Card } from "@/mockup/components/Card";
 import { Input } from "@/mockup/components/Input";
 import * as authApi from "@/lib/auth-api";
 import { AuthApiError } from "@/lib/auth-api";
-import { storeTokens } from "@/lib/auth-storage";
+import { storeTokens, clearTokens } from "@/lib/auth-storage";
 import { generateRecoveryPhrase } from "@/lib/recovery-phrase";
 import { useI18n } from "@/i18n/context";
 import type { Dictionary } from "@/i18n/types";
@@ -116,11 +116,22 @@ export function LoginForm() {
         password,
       });
       storeTokens(response.access_token, response.refresh_token);
-      setStatus("success");
+
       const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:5173";
-      window.setTimeout(() => {
-        window.location.href = appUrl;
-      }, 350);
+      try {
+        const handoff = await authApi.createHandoffCode(
+          response.access_token,
+          response.refresh_token,
+        );
+        setStatus("success");
+        window.setTimeout(() => {
+          window.location.href = `${appUrl}?handoff_code=${encodeURIComponent(handoff.handoff_code)}`;
+        }, 350);
+      } catch {
+        clearTokens();
+        setStatus("idle");
+        setErrors({ api: t.apiErrors.handoffFailed });
+      }
     } catch (error) {
       setStatus("idle");
       setErrors({ api: mapApiError(error, t) });
@@ -183,6 +194,7 @@ export function RegisterForm() {
   const [step, setStep] = useState<"form" | "phraseSetup">("form");
   const [generatedPhrase, setGeneratedPhrase] = useState("");
   const [accessToken, setAccessToken] = useState("");
+  const [refreshToken, setRefreshToken] = useState("");
   const [savedPassword, setSavedPassword] = useState("");
   const [confirmed, setConfirmed] = useState(false);
   const [setupStatus, setSetupStatus] = useState<"idle" | "loading" | "success">("idle");
@@ -206,6 +218,7 @@ export function RegisterForm() {
       const response = await authApi.signup({ username, password });
       storeTokens(response.access_token, response.refresh_token);
       setAccessToken(response.access_token);
+      setRefreshToken(response.refresh_token);
       setSavedPassword(password);
       const phrase = generateRecoveryPhrase();
       setGeneratedPhrase(phrase);
@@ -225,11 +238,18 @@ export function RegisterForm() {
         current_password: savedPassword,
         recovery_phrase: generatedPhrase,
       });
-      setSetupStatus("success");
       const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:5173";
-      window.setTimeout(() => {
-        window.location.href = appUrl;
-      }, 550);
+      try {
+        const handoff = await authApi.createHandoffCode(accessToken, refreshToken);
+        setSetupStatus("success");
+        window.setTimeout(() => {
+          window.location.href = `${appUrl}?handoff_code=${encodeURIComponent(handoff.handoff_code)}`;
+        }, 550);
+      } catch {
+        clearTokens();
+        setSetupStatus("idle");
+        setSetupError(t.apiErrors.handoffFailed);
+      }
     } catch (error) {
       setSetupStatus("idle");
       setSetupError(mapApiError(error, t));

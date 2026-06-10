@@ -7,8 +7,8 @@ use kushim_auth_api::{
         roles::RoleRepository, users::UserRepository,
     },
     services::{
-        auth::AuthService, password::PasswordService, rate_limit::RateLimitService,
-        recovery::RecoveryService, token::TokenService,
+        auth::AuthService, handoff::HandoffService, password::PasswordService,
+        rate_limit::RateLimitService, recovery::RecoveryService, token::TokenService,
     },
     state::AppState,
 };
@@ -59,10 +59,23 @@ async fn main() -> Result<()> {
         ),
     );
 
+    let handoff_service = match config.redis_url.as_deref() {
+        Some(url) => {
+            let service = HandoffService::new(url)?;
+            tracing::info!("Handoff service initialized (Redis-backed)");
+            Some(service)
+        }
+        None => {
+            tracing::info!("Handoff service disabled (no REDIS_URL)");
+            None
+        }
+    };
+
     let state = AppState {
         db_pool,
         auth_service,
         rate_limiter,
+        handoff_service,
         rate_limit_enabled: config.rate_limit_enabled,
         service_name: "kushim-auth",
         service_version: env!("CARGO_PKG_VERSION"),
@@ -70,11 +83,11 @@ async fn main() -> Result<()> {
         environment: config.environment.clone(),
     };
 
-    let app = http::router_with_cors(state, config.cors_allowed_origin.as_deref());
+    let app = http::router_with_cors(state, config.cors_allowed_origins.as_deref());
     let addr = config.socket_addr()?;
 
     tracing::info!(
-        routes = "/health, /ready, /auth/signup, /auth/login, /auth/refresh, /auth/logout, /auth/me, /auth/recovery/setup, /auth/recovery/reset-password",
+        routes = "/health, /ready, /auth/signup, /auth/login, /auth/refresh, /auth/logout, /auth/me, /auth/recovery/setup, /auth/recovery/reset-password, /auth/handoff, /auth/handoff/exchange",
         routes_version = "auth-routes-v1",
         "kushim-auth routes mounted"
     );
