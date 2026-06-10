@@ -17,6 +17,7 @@ import {
   CreditCard,
 } from "lucide-react";
 import { ENABLE_DISCOVER } from "../config/features";
+import { useI18n } from "@/i18n/context";
 
 interface NavbarProps {
   isAuthenticated?: boolean;
@@ -33,6 +34,7 @@ export function Navbar({
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
+  const { locale, toggleLocale, t } = useI18n();
 
   const isActive = (path: string) => location.pathname === path;
 
@@ -57,9 +59,9 @@ export function Navbar({
   };
 
   const publicLinks = [
-    { label: "Produit", href: `${websiteUrl}/fonctionnalites`, icon: Box },
-    { label: "Sécurité", href: "/securite", icon: Shield },
-    { label: "Tarifs", href: `${websiteUrl}/tarifs`, icon: CreditCard },
+    { label: t.nav.product, href: `${websiteUrl}/fonctionnalites`, icon: Box },
+    { label: t.nav.security, href: "/securite", icon: Shield },
+    { label: t.nav.pricing, href: `${websiteUrl}/tarifs`, icon: CreditCard },
   ];
 
   const appLinks = [
@@ -193,11 +195,12 @@ export function Navbar({
               onMouseLeave={(e) => {
                 e.currentTarget.style.background = "transparent";
               }}
-              aria-label="Changer le thème">
+              aria-label={t.nav.toggleTheme}>
               {isDark ? <Sun size={16} /> : <Moon size={16} />}
             </button>
 
             <button
+              onClick={toggleLocale}
               className="rounded-full flex items-center justify-center shrink-0 transition-all duration-200"
               style={{
                 color: "var(--text-secondary)",
@@ -215,8 +218,8 @@ export function Navbar({
               onMouseLeave={(e) => {
                 e.currentTarget.style.background = "transparent";
               }}
-              aria-label="Langue">
-              FR
+              aria-label={t.nav.language}>
+              {locale.toUpperCase()}
             </button>
 
             <div
@@ -253,7 +256,7 @@ export function Navbar({
                     onMouseLeave={(e) => {
                       e.currentTarget.style.color = "var(--text-secondary)";
                     }}>
-                    Se connecter
+                    {t.nav.signIn}
                   </Link>
                   <Link
                     to="/inscription"
@@ -267,7 +270,7 @@ export function Navbar({
                       whiteSpace: "nowrap",
                       padding: "0 clamp(16px, 3vw, 20px)",
                     }}>
-                    Commencer
+                    {t.nav.getStarted}
                   </Link>
                 </>
               ) : (
@@ -319,7 +322,7 @@ export function Navbar({
               onMouseLeave={(e) => {
                 e.currentTarget.style.background = "transparent";
               }}
-              aria-label="Menu">
+              aria-label={t.nav.menu}>
               <Menu size={20} />
             </button>
           </div>
@@ -355,7 +358,7 @@ export function Navbar({
                   minHeight: "44px",
                   color: "var(--text-primary)",
                 }}
-                aria-label="Fermer le menu">
+                aria-label={t.nav.closeMenu}>
                 <X size={20} />
               </button>
             </div>
@@ -411,7 +414,7 @@ export function Navbar({
                       justifyContent: "center",
                       fontSize: "clamp(14px, 2.5vw, 15px)",
                     }}>
-                    Se connecter
+                    {t.nav.signIn}
                   </Link>
                   <Link
                     to="/inscription"
@@ -429,7 +432,7 @@ export function Navbar({
                       justifyContent: "center",
                       fontSize: "clamp(14px, 2.5vw, 15px)",
                     }}>
-                    Commencer
+                    {t.nav.getStarted}
                   </Link>
                 </div>
               )}

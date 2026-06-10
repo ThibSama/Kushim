@@ -177,6 +177,78 @@ Erreurs communes :
 - `401 invalid_bearer_token`
 - `401 token_expired`
 
+### `GET /v1/reference/operation-types`
+
+But :
+- exposer la liste statique des types d'operations supportes
+- permettre au frontend de construire des formulaires sans hardcoder les valeurs
+
+Auth :
+- `Authorization: Bearer <access_token>`
+
+Reponse :
+
+```json
+{
+  "data": [
+    { "value": "buy", "label": "Buy" },
+    { "value": "sell", "label": "Sell" },
+    { "value": "deposit", "label": "Deposit" },
+    { "value": "withdrawal", "label": "Withdrawal" },
+    { "value": "dividend", "label": "Dividend" },
+    { "value": "interest", "label": "Interest" },
+    { "value": "fee", "label": "Fee" },
+    { "value": "tax", "label": "Tax" },
+    { "value": "split", "label": "Split" },
+    { "value": "spin_off", "label": "Spin Off" },
+    { "value": "symbol_change", "label": "Symbol Change" },
+    { "value": "transfer_in", "label": "Transfer In" },
+    { "value": "transfer_out", "label": "Transfer Out" },
+    { "value": "adjustment", "label": "Adjustment" }
+  ]
+}
+```
+
+### `GET /v1/reference/operation-statuses`
+
+But :
+- exposer la liste statique des statuts d'operations supportes
+
+Auth :
+- `Authorization: Bearer <access_token>`
+
+Reponse :
+
+```json
+{
+  "data": [
+    { "value": "pending", "label": "Pending" },
+    { "value": "posted", "label": "Posted" },
+    { "value": "cancelled", "label": "Cancelled" }
+  ]
+}
+```
+
+### `GET /v1/reference/portfolio-visibilities`
+
+But :
+- exposer la liste statique des visibilites de portefeuille supportees
+
+Auth :
+- `Authorization: Bearer <access_token>`
+
+Reponse :
+
+```json
+{
+  "data": [
+    { "value": "private", "label": "Private" },
+    { "value": "public", "label": "Public" },
+    { "value": "unlisted", "label": "Unlisted" }
+  ]
+}
+```
+
 ### `GET /v1/assets`
 
 But :
@@ -1077,6 +1149,7 @@ src/
     portfolio_read_models.rs
     portfolio_snapshots.rs
     portfolios.rs
+    reference.rs
   auth/
     mod.rs
     claims.rs
@@ -1124,6 +1197,9 @@ curl http://127.0.0.1:8080/health
 curl http://127.0.0.1:8080/ready
 curl http://127.0.0.1:8080/v1/me
 curl http://127.0.0.1:8080/v1/me -H "Authorization: Bearer <access_token>"
+curl http://127.0.0.1:8080/v1/reference/operation-types -H "Authorization: Bearer <access_token>"
+curl http://127.0.0.1:8080/v1/reference/operation-statuses -H "Authorization: Bearer <access_token>"
+curl http://127.0.0.1:8080/v1/reference/portfolio-visibilities -H "Authorization: Bearer <access_token>"
 curl http://127.0.0.1:8080/v1/assets -H "Authorization: Bearer <access_token>"
 curl http://127.0.0.1:8080/v1/assets/<id_asset> -H "Authorization: Bearer <access_token>"
 curl http://127.0.0.1:8080/v1/portfolios -H "Authorization: Bearer <access_token>"

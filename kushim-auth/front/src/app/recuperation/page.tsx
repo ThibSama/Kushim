@@ -3,7 +3,7 @@ import { pageMetadata } from "../metadata";
 
 export const metadata = pageMetadata(
   "Recuperation",
-  "Demandez les instructions de recuperation de votre acces Kushim.",
+  "Reinitialiser votre mot de passe Kushim avec votre phrase de recuperation.",
   "/recuperation",
 );
 

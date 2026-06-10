@@ -56,9 +56,14 @@ impl UserRepository {
         match result {
             Ok(user) => Ok(user),
             Err(sqlx::Error::Database(error))
+                if error.constraint() == Some("uq_users_username_active") =>
+            {
+                Err(RepositoryError::Conflict("username"))
+            }
+            Err(sqlx::Error::Database(error))
                 if error.constraint() == Some("uq_users_public_handle_active") =>
             {
-                Err(RepositoryError::Conflict("public_handle"))
+                Err(RepositoryError::Conflict("username"))
             }
             Err(error) => Err(RepositoryError::Database(error)),
         }
@@ -120,6 +125,38 @@ impl UserRepository {
             "#,
         )
         .bind(public_handle)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(user)
+    }
+
+    pub async fn find_active_by_username(
+        &self,
+        username: &str,
+    ) -> Result<Option<User>, RepositoryError> {
+        let user = sqlx::query_as::<_, User>(
+            r#"
+            SELECT
+                id_user,
+                id_role,
+                username,
+                public_handle,
+                password_hash,
+                recovery_setup_completed,
+                is_active,
+                deleted_at,
+                anonymized_at,
+                created_at,
+                updated_at
+            FROM users
+            WHERE lower(username) = lower($1)
+              AND deleted_at IS NULL
+              AND is_active = true
+            LIMIT 1
+            "#,
+        )
+        .bind(username)
         .fetch_optional(&self.pool)
         .await?;
 

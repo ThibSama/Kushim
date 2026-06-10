@@ -1,25 +1,127 @@
-use std::{env, time::Duration};
+use kushim_market_data::{
+    config::{Config, MarketDataJob, MarketDataMode, MarketDataProviderKind},
+    db, health,
+    jobs::{
+        fill_missing_price_history_cache::FillMissingPriceHistoryCacheJob, noop::NoopJob,
+        refresh_current_market_data::RefreshCurrentMarketDataJob,
+    },
+    providers::mock::MockProvider,
+    runner::JobRunner,
+    state::AppState,
+};
+use std::net::SocketAddr;
+use tokio_util::sync::CancellationToken;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
 async fn main() {
+    let config = Config::from_env().expect("failed to load configuration");
+
     tracing_subscriber::registry()
-        .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
+        .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| config.rust_log.clone().into()))
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    let interval_seconds = env::var("POLL_INTERVAL_SECONDS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(60);
-
     tracing::info!(
-        interval_seconds,
-        "starting internal kushim-market-data scaffold"
+        app_env = %config.app_env,
+        mode = %config.mode.as_str(),
+        job = %config.job.as_str(),
+        provider = %config.provider.as_str(),
+        "starting kushim-market-data"
     );
 
-    loop {
-        tracing::info!("market data poll stub");
-        tokio::time::sleep(Duration::from_secs(interval_seconds)).await;
+    let pg_pool = db::connect_and_check(&config.database_url)
+        .await
+        .expect("failed to connect to PostgreSQL");
+
+    tracing::info!("PostgreSQL connection verified");
+
+    let state = AppState { pg_pool };
+    let cancel = CancellationToken::new();
+
+    let health_addr = SocketAddr::new(config.host, config.port);
+    let health_cancel = cancel.clone();
+    let health_state = state.clone();
+
+    let health_handle = tokio::spawn(async move {
+        if let Err(e) = health::spawn_health_server(health_state, health_addr, health_cancel).await
+        {
+            tracing::error!(%e, "health server failed");
+        }
+    });
+
+    let shutdown_handle = if matches!(config.mode, MarketDataMode::Idle | MarketDataMode::Loop) {
+        let shutdown_cancel = cancel.clone();
+        Some(tokio::spawn(async move {
+            wait_for_shutdown_signal().await;
+            tracing::info!("shutdown signal received");
+            shutdown_cancel.cancel();
+        }))
+    } else {
+        None
+    };
+
+    let run_result = run_job(&config, &state, cancel.clone()).await;
+
+    cancel.cancel();
+
+    if let Some(handle) = shutdown_handle {
+        let _ = handle.await;
+    }
+    let _ = health_handle.await;
+
+    if let Err(e) = run_result {
+        tracing::error!(%e, "job runner failed");
+        std::process::exit(1);
+    }
+
+    tracing::info!("kushim-market-data shut down cleanly");
+}
+
+async fn run_job(
+    config: &Config,
+    state: &AppState,
+    cancel: CancellationToken,
+) -> Result<(), kushim_market_data::errors::MarketDataError> {
+    match config.job {
+        MarketDataJob::Noop => {
+            let runner = JobRunner::new(config.mode, config.run_interval, NoopJob);
+            runner.run(state, cancel).await
+        }
+        MarketDataJob::RefreshCurrentMarketData => match config.provider {
+            MarketDataProviderKind::Mock => {
+                let job = RefreshCurrentMarketDataJob::new(MockProvider);
+                let runner = JobRunner::new(config.mode, config.run_interval, job);
+                runner.run(state, cancel).await
+            }
+        },
+        MarketDataJob::FillMissingPriceHistoryCache => match config.provider {
+            MarketDataProviderKind::Mock => {
+                let date_from = config.history_date_from.expect("validated in config");
+                let date_to = config.history_date_to.expect("validated in config");
+                let job = FillMissingPriceHistoryCacheJob::new(MockProvider, date_from, date_to);
+                let runner = JobRunner::new(config.mode, config.run_interval, job);
+                runner.run(state, cancel).await
+            }
+        },
+    }
+}
+
+async fn wait_for_shutdown_signal() {
+    let ctrl_c = tokio::signal::ctrl_c();
+
+    #[cfg(unix)]
+    {
+        let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to register SIGTERM handler");
+        tokio::select! {
+            _ = ctrl_c => {}
+            _ = sigterm.recv() => {}
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        ctrl_c.await.expect("failed to listen for ctrl+c");
     }
 }

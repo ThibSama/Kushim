@@ -9,7 +9,7 @@ Il gere :
 - la revocation de refresh tokens
 - l'identite de l'utilisateur courant
 - la phrase de recuperation
-- le reset de mot de passe via `public_handle + recovery_phrase`
+- le reset de mot de passe via `username + recovery_phrase`
 - le rate limiting Redis des flux sensibles
 
 Il ne gere pas :
@@ -50,6 +50,7 @@ Variables supportees :
 - `JWT_ISSUER`
 - `ACCESS_TOKEN_TTL_SECONDS`
 - `REFRESH_TOKEN_TTL_SECONDS`
+- `CORS_ALLOWED_ORIGIN`
 
 Exemple hote :
 
@@ -65,6 +66,7 @@ AUTH_JWT_SECRET=dev_only_change_me_minimum_32_chars
 JWT_ISSUER=kushim-auth
 ACCESS_TOKEN_TTL_SECONDS=900
 REFRESH_TOKEN_TTL_SECONDS=2592000
+CORS_ALLOWED_ORIGIN=http://localhost:3001
 ```
 
 Exemple Docker :
@@ -81,6 +83,7 @@ AUTH_JWT_SECRET=dev_only_change_me_minimum_32_chars
 JWT_ISSUER=kushim-auth
 ACCESS_TOKEN_TTL_SECONDS=900
 REFRESH_TOKEN_TTL_SECONDS=2592000
+CORS_ALLOWED_ORIGIN=http://localhost:3001
 ```
 
 Regles importantes :
@@ -92,6 +95,8 @@ Regles importantes :
 - les secrets de production ne doivent jamais etre commites
 - `AUTH_JWT_SECRET` doit faire au moins 32 caracteres
 - en `APP_ENV=production`, le secret JWT ne peut pas reutiliser le secret de dev ni contenir des placeholders evidents (`dev_only`, `change_me`, `changeme`, `secret`, `example`)
+- `CORS_ALLOWED_ORIGIN` est optionnel ; s'il est absent ou vide, aucun header CORS n'est ajoute
+- ne pas utiliser `*` en production ; configurer l'origin exacte du frontend autorise
 
 ## Endpoints
 
@@ -135,6 +140,8 @@ Erreurs communes :
 
 But :
 - creer un utilisateur actif
+- `username` est l'identifiant unique (format handle : 3-40 caracteres, minuscules, chiffres, `_`, `-`)
+- `public_handle` est automatiquement mis a `username` pour compatibilite interne
 - emettre un couple `access_token + refresh_token`
 
 Auth :
@@ -144,11 +151,12 @@ Requete :
 
 ```json
 {
-  "username": "Alice",
-  "public_handle": "alice_handle",
+  "username": "camille_durand",
   "password": "correct horse battery"
 }
 ```
+
+Le `username` doit etre unique (index `lower(username)` sur les utilisateurs actifs). Le `public_handle` interne prend la meme valeur que `username`.
 
 Reponse :
 
@@ -156,22 +164,22 @@ Reponse :
 {
   "user": {
     "id_user": "2ff2d2ae-9f7c-4d7b-bf35-3a7d7c2d6f4f",
-    "username": "Alice",
-    "public_handle": "alice_handle",
+    "username": "camille_durand",
+    "public_handle": "camille_durand",
     "role": "user",
     "recovery_setup_completed": false,
-    "created_at": "2026-06-05T10:00:00Z"
+    "created_at": "2026-06-09T10:00:00Z"
   },
   "access_token": "eyJ...",
   "refresh_token": "eyJ...",
-  "access_token_expires_at": "2026-06-05T10:15:00Z",
-  "refresh_token_expires_at": "2026-07-05T10:00:00Z"
+  "access_token_expires_at": "2026-06-09T10:15:00Z",
+  "refresh_token_expires_at": "2026-07-09T10:00:00Z"
 }
 ```
 
 Erreurs communes :
 - `400` validation
-- `409 public_handle_conflict`
+- `409 username_conflict`
 - `429 rate_limited`
 
 ### `POST /auth/login`
@@ -187,7 +195,7 @@ Requete :
 
 ```json
 {
-  "public_handle": "alice_handle",
+  "username": "camille_durand",
   "password": "correct horse battery"
 }
 ```
@@ -331,7 +339,8 @@ Erreurs communes :
 ### `POST /auth/recovery/reset-password`
 
 But :
-- reinitialiser un mot de passe a partir de `public_handle + recovery_phrase`
+- reinitialiser un mot de passe a partir de `username + recovery_phrase`
+- effectuer une rotation de la phrase de recuperation (l'ancienne phrase devient invalide)
 
 Auth :
 - aucune
@@ -340,11 +349,14 @@ Requete :
 
 ```json
 {
-  "public_handle": "alice_handle",
+  "username": "camille_durand",
   "recovery_phrase": "this is a long recovery phrase",
-  "new_password": "a brand new secure password"
+  "new_password": "a brand new secure password",
+  "new_recovery_phrase": "replacement phrase that is long enough"
 }
 ```
+
+Le champ `new_recovery_phrase` est obligatoire. Apres un reset reussi, l'ancienne phrase de recuperation n'est plus valide. Seule la nouvelle phrase permet un futur reset.
 
 Reponse :
 
@@ -415,9 +427,10 @@ Flux :
   - mot de passe courant requis
   - phrase de recuperation hachee et upsertee
 - `POST /auth/recovery/reset-password`
-  - `public_handle`
-  - `recovery_phrase`
+  - `username`
+  - `recovery_phrase` (phrase courante)
   - `new_password`
+  - `new_recovery_phrase` (rotation obligatoire : l'ancienne phrase est invalidee)
 
 ## Rate limiting
 
@@ -439,11 +452,11 @@ Scopes utilises :
 
 Limites actuelles :
 - login : `20 / 10 min` par IP
-- login : `10 / 10 min` par `public_handle`
+- login : `10 / 10 min` par `username`
 - signup : `10 / 1 h` par IP
 - refresh : `60 / 10 min` par IP
 - recovery reset : `10 / 1 h` par IP
-- recovery reset : `5 / 1 h` par `public_handle`
+- recovery reset : `5 / 1 h` par `username`
 - recovery setup : `20 / 1 h` par IP
 - recovery setup : `5 / 1 h` par utilisateur
 - fallback global auth : `120 / min` par IP
@@ -477,6 +490,17 @@ But :
 - eviter la mise en cache accidentelle des reponses contenant des tokens
 - durcir le comportement navigateur/client
 
+## CORS
+
+Si `CORS_ALLOWED_ORIGIN` est defini, le service ajoute les headers CORS necessaires :
+- `Access-Control-Allow-Origin` : la valeur exacte de la variable
+- `Access-Control-Allow-Methods` : `GET, POST, OPTIONS`
+- `Access-Control-Allow-Headers` : `Content-Type, Authorization`
+
+Les credentials (`Access-Control-Allow-Credentials`) ne sont pas actives car le frontend utilise des tokens Bearer en localStorage, pas des cookies.
+
+Si `CORS_ALLOWED_ORIGIN` n'est pas defini ou est vide, aucun header CORS n'est ajoute. En production, configurer l'origin exacte du frontend autorise.
+
 ## JSON request hardening
 
 Les DTOs de requete utilisent `serde(deny_unknown_fields)`.
@@ -506,7 +530,7 @@ Le service loggue des evenements securite utiles sans secrets :
 Regles :
 - ne jamais logguer mot de passe, phrase de recuperation, JWT, `password_hash` ou `phrase_hash`
 - ne pas logguer de body brut
-- les `public_handle` sont redacted dans les logs quand utilises
+- les `username` sont redacted dans les logs quand utilises
 
 ## Limitation connue
 
@@ -583,7 +607,7 @@ curl http://127.0.0.1:3002/ready
 ```powershell
 curl -X POST http://127.0.0.1:3002/auth/signup `
   -H "Content-Type: application/json" `
-  -d "{\"username\":\"Alice\",\"public_handle\":\"alice_handle\",\"password\":\"correct horse battery\"}"
+  -d "{\"username\":\"camille_durand\",\"password\":\"correct horse battery\"}"
 ```
 
 ### Login
@@ -591,7 +615,7 @@ curl -X POST http://127.0.0.1:3002/auth/signup `
 ```powershell
 curl -X POST http://127.0.0.1:3002/auth/login `
   -H "Content-Type: application/json" `
-  -d "{\"public_handle\":\"alice_handle\",\"password\":\"correct horse battery\"}"
+  -d "{\"username\":\"camille_durand\",\"password\":\"correct horse battery\"}"
 ```
 
 ### Refresh
@@ -631,7 +655,7 @@ curl -X POST http://127.0.0.1:3002/auth/recovery/setup `
 ```powershell
 curl -X POST http://127.0.0.1:3002/auth/recovery/reset-password `
   -H "Content-Type: application/json" `
-  -d "{\"public_handle\":\"alice_handle\",\"recovery_phrase\":\"this is a long recovery phrase\",\"new_password\":\"a brand new secure password\"}"
+  -d "{\"username\":\"camille_durand\",\"recovery_phrase\":\"this is a long recovery phrase\",\"new_password\":\"a brand new secure password\",\"new_recovery_phrase\":\"replacement phrase that is long enough\"}"
 ```
 
 ## Notes de test

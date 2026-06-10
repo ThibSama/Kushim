@@ -1,0 +1,48 @@
+# Rust build artifacts
+**/target/
+target/
+
+# Node.js dependencies and build output
+**/node_modules/
+node_modules/
+**/.next/
+**/dist/
+**/build/
+**/.turbo/
+**/.vite/
+**/coverage/
+
+# Git
+.git/
+
+# IDE and OS
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Logs
+**/*.log
+
+# Local env files (keep examples)
+.env
+.env.*
+!.env.example
+!.env.docker.example
+!**/.env.example
+!**/.env.local.example
+
+# Documentation archive (not needed at runtime)
+documentation/_archive/
+
+# Claude / tooling
+.claude/
+CLAUDE.md
+AGENTS.md
+**/*.md
+!**/README.md
+
+# Scripts (dev-only)
+scripts/

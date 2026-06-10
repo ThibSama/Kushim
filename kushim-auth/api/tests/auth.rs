@@ -20,6 +20,11 @@ use uuid::Uuid;
 
 static ROLE_FIXTURE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
+fn unique_username(prefix: &str) -> String {
+    let short = &Uuid::new_v4().simple().to_string()[..8];
+    format!("{prefix}_{short}")
+}
+
 async fn test_pool() -> sqlx::PgPool {
     dotenvy::dotenv().ok();
     let database_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
@@ -73,12 +78,6 @@ async fn ensure_user_role(pool: &sqlx::PgPool) {
     .expect("insert user role fixture");
 }
 
-fn unique_handle(prefix: &str) -> String {
-    let short_uuid = Uuid::new_v4().simple().to_string();
-    let short_uuid = &short_uuid[..12];
-    format!("{prefix}_{short_uuid}")
-}
-
 fn build_auth_service(pool: sqlx::PgPool) -> AuthService {
     let roles = RoleRepository::new(pool.clone());
     let users = UserRepository::new(pool.clone());
@@ -109,33 +108,31 @@ async fn auth_signup_creates_user_and_returns_tokens() {
     let pool = test_pool().await;
     ensure_user_role(&pool).await;
     let service = build_auth_service(pool);
-    let public_handle = unique_handle("signup");
+    let uname = unique_username("signup");
 
     let response = service
         .signup(SignupRequest {
-            username: "Signup User".to_string(),
-            public_handle: public_handle.clone(),
+            username: uname.clone(),
             password: "correct horse battery".to_string(),
         })
         .await
         .expect("signup should succeed");
 
-    assert_eq!(response.user.public_handle, public_handle);
+    assert_eq!(response.user.public_handle, uname);
     assert!(!response.access_token.is_empty());
     assert!(!response.refresh_token.is_empty());
 }
 
 #[tokio::test]
-async fn auth_duplicate_public_handle_returns_conflict() {
+async fn auth_signup_rejects_duplicate_username() {
     let pool = test_pool().await;
     ensure_user_role(&pool).await;
     let service = build_auth_service(pool);
-    let public_handle = unique_handle("duplicate");
+    let uname = unique_username("dup");
 
     service
         .signup(SignupRequest {
-            username: "First User".to_string(),
-            public_handle: public_handle.clone(),
+            username: uname.clone(),
             password: "correct horse battery".to_string(),
         })
         .await
@@ -143,14 +140,13 @@ async fn auth_duplicate_public_handle_returns_conflict() {
 
     let error = service
         .signup(SignupRequest {
-            username: "Second User".to_string(),
-            public_handle,
+            username: uname,
             password: "correct horse battery".to_string(),
         })
         .await
-        .expect_err("duplicate signup should fail");
+        .expect_err("second signup should fail");
 
-    assert_eq!(error, AuthServiceError::PublicHandleAlreadyExists);
+    assert_eq!(error, AuthServiceError::UsernameAlreadyExists);
 }
 
 #[tokio::test]
@@ -158,22 +154,20 @@ async fn auth_login_works_with_correct_password() {
     let pool = test_pool().await;
     ensure_user_role(&pool).await;
     let service = build_auth_service(pool);
-    let public_handle = unique_handle("loginok");
-    let password = "correct horse battery".to_string();
+    let uname = unique_username("login_ok");
 
     service
         .signup(SignupRequest {
-            username: "Login User".to_string(),
-            public_handle: public_handle.clone(),
-            password: password.clone(),
+            username: uname.clone(),
+            password: "correct horse battery".to_string(),
         })
         .await
         .expect("signup should succeed");
 
     let response = service
         .login(LoginRequest {
-            public_handle,
-            password,
+            username: uname,
+            password: "correct horse battery".to_string(),
         })
         .await
         .expect("login should succeed");
@@ -187,12 +181,11 @@ async fn auth_login_fails_with_wrong_password() {
     let pool = test_pool().await;
     ensure_user_role(&pool).await;
     let service = build_auth_service(pool);
-    let public_handle = unique_handle("loginbad");
+    let uname = unique_username("login_bad");
 
     service
         .signup(SignupRequest {
-            username: "Login User".to_string(),
-            public_handle: public_handle.clone(),
+            username: uname.clone(),
             password: "correct horse battery".to_string(),
         })
         .await
@@ -200,7 +193,7 @@ async fn auth_login_fails_with_wrong_password() {
 
     let error = service
         .login(LoginRequest {
-            public_handle,
+            username: uname,
             password: "wrong password value".to_string(),
         })
         .await
@@ -214,12 +207,11 @@ async fn auth_refresh_rotates_refresh_token_and_old_one_cannot_be_reused() {
     let pool = test_pool().await;
     ensure_user_role(&pool).await;
     let service = build_auth_service(pool);
-    let public_handle = unique_handle("refresh");
+    let uname = unique_username("refresh");
 
     let signup = service
         .signup(SignupRequest {
-            username: "Refresh User".to_string(),
-            public_handle,
+            username: uname,
             password: "correct horse battery".to_string(),
         })
         .await
@@ -249,12 +241,11 @@ async fn auth_logout_revokes_refresh_token() {
     let pool = test_pool().await;
     ensure_user_role(&pool).await;
     let service = build_auth_service(pool);
-    let public_handle = unique_handle("logout");
+    let uname = unique_username("logout");
 
     let signup = service
         .signup(SignupRequest {
-            username: "Logout User".to_string(),
-            public_handle,
+            username: uname,
             password: "correct horse battery".to_string(),
         })
         .await
@@ -293,12 +284,11 @@ async fn auth_logout_rejects_access_token() {
     let pool = test_pool().await;
     ensure_user_role(&pool).await;
     let service = build_auth_service(pool);
-    let public_handle = unique_handle("logoutaccess");
+    let uname = unique_username("logout_at");
 
     let signup = service
         .signup(SignupRequest {
-            username: "Logout Access User".to_string(),
-            public_handle,
+            username: uname,
             password: "correct horse battery".to_string(),
         })
         .await
@@ -335,12 +325,11 @@ async fn auth_me_returns_user_with_valid_access_token() {
     let pool = test_pool().await;
     ensure_user_role(&pool).await;
     let service = build_auth_service(pool);
-    let public_handle = unique_handle("meok");
+    let uname = unique_username("me");
 
     let signup = service
         .signup(SignupRequest {
-            username: "Me User".to_string(),
-            public_handle: public_handle.clone(),
+            username: uname,
             password: "correct horse battery".to_string(),
         })
         .await
@@ -351,7 +340,7 @@ async fn auth_me_returns_user_with_valid_access_token() {
         .await
         .expect("me should succeed");
 
-    assert_eq!(me.user.public_handle, public_handle);
+    assert_eq!(me.user.public_handle, signup.user.public_handle);
 }
 
 #[tokio::test]
@@ -373,12 +362,11 @@ async fn recovery_setup_recovery_phrase() {
     let pool = test_pool().await;
     ensure_user_role(&pool).await;
     let service = build_auth_service(pool.clone());
-    let public_handle = unique_handle("recoverysetup");
+    let uname = unique_username("rec_setup");
 
     let signup = service
         .signup(SignupRequest {
-            username: "Recovery Setup User".to_string(),
-            public_handle,
+            username: uname,
             password: "correct horse battery".to_string(),
         })
         .await
@@ -437,12 +425,11 @@ async fn recovery_setup_fails_with_wrong_current_password() {
     let pool = test_pool().await;
     ensure_user_role(&pool).await;
     let service = build_auth_service(pool);
-    let public_handle = unique_handle("recoverywrongpw");
+    let uname = unique_username("rec_wpw");
 
     let signup = service
         .signup(SignupRequest {
-            username: "Recovery Wrong Password User".to_string(),
-            public_handle,
+            username: uname,
             password: "correct horse battery".to_string(),
         })
         .await
@@ -463,16 +450,15 @@ async fn recovery_setup_fails_with_wrong_current_password() {
 }
 
 #[tokio::test]
-async fn recovery_reset_password_with_valid_phrase() {
+async fn recovery_reset_password_with_valid_phrase_and_rotation() {
     let pool = test_pool().await;
     ensure_user_role(&pool).await;
     let service = build_auth_service(pool);
-    let public_handle = unique_handle("resetvalid");
+    let uname = unique_username("reset_pw");
 
     let signup = service
         .signup(SignupRequest {
-            username: "Reset Password User".to_string(),
-            public_handle: public_handle.clone(),
+            username: uname.clone(),
             password: "correct horse battery".to_string(),
         })
         .await
@@ -491,9 +477,10 @@ async fn recovery_reset_password_with_valid_phrase() {
 
     let response = service
         .reset_password(ResetPasswordRequest {
-            public_handle: public_handle.clone(),
+            username: uname.clone(),
             recovery_phrase: "this is a long recovery phrase".to_string(),
             new_password: "a brand new secure password".to_string(),
+            new_recovery_phrase: "brand new recovery phrase words here".to_string(),
         })
         .await
         .expect("reset password should succeed");
@@ -502,7 +489,7 @@ async fn recovery_reset_password_with_valid_phrase() {
 
     service
         .login(LoginRequest {
-            public_handle: public_handle.clone(),
+            username: uname.clone(),
             password: "a brand new secure password".to_string(),
         })
         .await
@@ -510,7 +497,7 @@ async fn recovery_reset_password_with_valid_phrase() {
 
     let error = service
         .login(LoginRequest {
-            public_handle,
+            username: uname,
             password: "correct horse battery".to_string(),
         })
         .await
@@ -520,16 +507,119 @@ async fn recovery_reset_password_with_valid_phrase() {
 }
 
 #[tokio::test]
+async fn recovery_reset_old_phrase_no_longer_works_after_rotation() {
+    let pool = test_pool().await;
+    ensure_user_role(&pool).await;
+    let service = build_auth_service(pool);
+    let uname = unique_username("rot_chk");
+
+    let signup = service
+        .signup(SignupRequest {
+            username: uname.clone(),
+            password: "correct horse battery".to_string(),
+        })
+        .await
+        .expect("signup should succeed");
+
+    service
+        .setup_recovery_phrase(
+            &signup.access_token,
+            RecoverySetupRequest {
+                current_password: "correct horse battery".to_string(),
+                recovery_phrase: "original recovery phrase for this user".to_string(),
+            },
+        )
+        .await
+        .expect("recovery setup should succeed");
+
+    service
+        .reset_password(ResetPasswordRequest {
+            username: uname.clone(),
+            recovery_phrase: "original recovery phrase for this user".to_string(),
+            new_password: "a brand new secure password".to_string(),
+            new_recovery_phrase: "rotated recovery phrase for this user".to_string(),
+        })
+        .await
+        .expect("reset password should succeed");
+
+    let error = service
+        .reset_password(ResetPasswordRequest {
+            username: uname,
+            recovery_phrase: "original recovery phrase for this user".to_string(),
+            new_password: "yet another secure password".to_string(),
+            new_recovery_phrase: "another rotated phrase for user".to_string(),
+        })
+        .await
+        .expect_err("old recovery phrase should no longer work");
+
+    assert_eq!(error, AuthServiceError::InvalidRecoveryPhrase);
+}
+
+#[tokio::test]
+async fn recovery_reset_new_phrase_works_after_rotation() {
+    let pool = test_pool().await;
+    ensure_user_role(&pool).await;
+    let service = build_auth_service(pool);
+    let uname = unique_username("new_phr");
+
+    let signup = service
+        .signup(SignupRequest {
+            username: uname.clone(),
+            password: "correct horse battery".to_string(),
+        })
+        .await
+        .expect("signup should succeed");
+
+    service
+        .setup_recovery_phrase(
+            &signup.access_token,
+            RecoverySetupRequest {
+                current_password: "correct horse battery".to_string(),
+                recovery_phrase: "first recovery phrase for the user".to_string(),
+            },
+        )
+        .await
+        .expect("recovery setup should succeed");
+
+    service
+        .reset_password(ResetPasswordRequest {
+            username: uname.clone(),
+            recovery_phrase: "first recovery phrase for the user".to_string(),
+            new_password: "second secure password here".to_string(),
+            new_recovery_phrase: "second recovery phrase for the user".to_string(),
+        })
+        .await
+        .expect("first reset should succeed");
+
+    service
+        .reset_password(ResetPasswordRequest {
+            username: uname.clone(),
+            recovery_phrase: "second recovery phrase for the user".to_string(),
+            new_password: "third secure password here".to_string(),
+            new_recovery_phrase: "third recovery phrase for the user".to_string(),
+        })
+        .await
+        .expect("second reset with new phrase should succeed");
+
+    service
+        .login(LoginRequest {
+            username: uname,
+            password: "third secure password here".to_string(),
+        })
+        .await
+        .expect("login with latest password should succeed");
+}
+
+#[tokio::test]
 async fn recovery_reset_fails_with_wrong_phrase() {
     let pool = test_pool().await;
     ensure_user_role(&pool).await;
     let service = build_auth_service(pool);
-    let public_handle = unique_handle("resetwrong");
+    let uname = unique_username("rst_wph");
 
     let signup = service
         .signup(SignupRequest {
-            username: "Reset Wrong Phrase User".to_string(),
-            public_handle: public_handle.clone(),
+            username: uname.clone(),
             password: "correct horse battery".to_string(),
         })
         .await
@@ -548,9 +638,10 @@ async fn recovery_reset_fails_with_wrong_phrase() {
 
     let error = service
         .reset_password(ResetPasswordRequest {
-            public_handle,
+            username: uname,
             recovery_phrase: "this is the wrong recovery phrase".to_string(),
             new_password: "a brand new secure password".to_string(),
+            new_recovery_phrase: "brand new recovery phrase words".to_string(),
         })
         .await
         .expect_err("wrong recovery phrase should fail");
@@ -563,12 +654,11 @@ async fn recovery_reset_fails_if_no_recovery_phrase_configured() {
     let pool = test_pool().await;
     ensure_user_role(&pool).await;
     let service = build_auth_service(pool);
-    let public_handle = unique_handle("resetmissing");
+    let uname = unique_username("rst_nop");
 
     service
         .signup(SignupRequest {
-            username: "Reset Missing Phrase User".to_string(),
-            public_handle: public_handle.clone(),
+            username: uname.clone(),
             password: "correct horse battery".to_string(),
         })
         .await
@@ -576,9 +666,10 @@ async fn recovery_reset_fails_if_no_recovery_phrase_configured() {
 
     let error = service
         .reset_password(ResetPasswordRequest {
-            public_handle,
+            username: uname,
             recovery_phrase: "this is a long recovery phrase".to_string(),
             new_password: "a brand new secure password".to_string(),
+            new_recovery_phrase: "brand new recovery phrase words".to_string(),
         })
         .await
         .expect_err("missing recovery phrase should fail");

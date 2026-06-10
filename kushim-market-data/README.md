@@ -1,28 +1,46 @@
 # kushim-market-data
 
-`kushim-market-data` is the future internal Rust service responsible for market-data ingestion and normalization.
+`kushim-market-data` is the internal Rust service responsible for market-data ingestion and normalization.
 
 ## Current status
 
 Status:
 
-- **Scaffolded**
+- **Foundation scaffolded and validated with job runner architecture**
+- **First controlled write job: `refresh_current_market_data` with mock provider**
+- **Second controlled write job: `fill_missing_price_history_cache` with mock provider**
 
 What currently exists:
 
-- a minimal Rust binary
-- tracing initialization
-- a simple polling stub loop
-- Docker build wiring
+- modular Rust service structure (`config`, `db`, `domain`, `errors`, `health`, `jobs`, `providers`, `repositories`, `runner`, `state`)
+- environment-based config loading with validation
+- PostgreSQL pool with connectivity check at startup
+- `/health` liveness endpoint
+- `/ready` readiness endpoint (DB connectivity check via `SELECT 1`)
+- explicit job runner with three modes: `idle`, `once`, `loop`
+- `noop` job (logs execution, no side effects)
+- `refresh_current_market_data` job (reads active assets, fetches quotes from provider, upserts into `asset_market_data`)
+- provider abstraction trait (`MarketDataProvider`) with mock implementation
+- `fill_missing_price_history_cache` job (reads active assets, fills missing historical prices in `asset_price_history_cache`)
+- provider abstraction supports current and historical quotes
+- repository layer (`assets`, `asset_market_data`, `price_history_cache`) with SQLx bind parameters
+- configurable date range for historical fill (MARKET_DATA_HISTORY_DATE_FROM/TO)
+- configurable run interval for loop mode
+- CancellationToken-based graceful shutdown (all modes)
+- FK violation (23503) resilience for concurrent asset deletion
+- structured logging with `tracing` + `RUST_LOG` env-filter
+- Docker build with `curl` for healthcheck
+- docker-compose wiring with `depends_on database`, health checks, and port mapping
+- unit tests for config, health, noop job, runner, mock provider (current + historical)
+- integration tests for `refresh_current_market_data` and `fill_missing_price_history_cache` with real PostgreSQL
 
 What does **not** exist yet:
 
-- provider integrations
+- real provider integrations (external APIs)
 - HTTP ingestion endpoints
-- writes to `asset_market_data`
-- writes to `asset_price_history_cache`
 - asset enrichment workflows
-- health or readiness endpoints
+- FX logic
+- queue consumption
 
 ## Intended responsibility
 
@@ -44,6 +62,51 @@ It must not own:
 - read model generation that belongs to `kushim-worker`
 - frontend logic
 
+## Endpoints
+
+| Method | Path      | Auth | Description                          |
+|--------|-----------|------|--------------------------------------|
+| GET    | `/health` | No   | Liveness — returns `{"status":"ok"}` |
+| GET    | `/ready`  | No   | Readiness — checks PostgreSQL via `SELECT 1` |
+
+## Service modes
+
+| Mode   | Behavior                                                    |
+|--------|-------------------------------------------------------------|
+| `idle` | Starts health server and waits for shutdown. No job runs.   |
+| `once` | Executes the selected job once, then exits.                 |
+| `loop` | Executes the selected job repeatedly at configured interval.|
+
+## Available jobs
+
+| Job                              | Description                                                                      |
+|----------------------------------|----------------------------------------------------------------------------------|
+| `noop`                           | Logs execution, performs no DB writes or calls.                                  |
+| `refresh_current_market_data`    | Reads active assets, fetches quotes from provider, upserts into `asset_market_data`. |
+| `fill_missing_price_history_cache` | Reads active assets, fills missing historical prices in `asset_price_history_cache` for a configured date range. |
+
+## Available providers
+
+| Provider | Description                                                       |
+|----------|-------------------------------------------------------------------|
+| `mock`   | Deterministic current and historical prices for 7 symbols (AAPL, MSFT, NVDA, BTC, ETH, SPY, VTI). No external calls. Historical prices vary deterministically by date. |
+
+## Configuration
+
+| Variable                            | Required | Default       | Description                     |
+|-------------------------------------|----------|---------------|---------------------------------|
+| `DATABASE_URL`                      | Yes      | —             | PostgreSQL connection string    |
+| `MARKET_DATA_HOST`                  | No       | `0.0.0.0`     | Health server bind address      |
+| `MARKET_DATA_PORT`                  | No       | `8082`        | Health server port              |
+| `MARKET_DATA_MODE`                  | No       | `idle`        | Service mode: idle, once, loop  |
+| `MARKET_DATA_JOB`                   | No       | `noop`        | Job to execute                  |
+| `MARKET_DATA_PROVIDER`              | No       | `mock`        | Data provider: mock             |
+| `MARKET_DATA_RUN_INTERVAL_SECONDS`  | No       | `300`         | Loop mode interval (seconds)    |
+| `MARKET_DATA_HISTORY_DATE_FROM`     | Cond.    | —             | Start date (YYYY-MM-DD), required for `fill_missing_price_history_cache` |
+| `MARKET_DATA_HISTORY_DATE_TO`       | Cond.    | —             | End date (YYYY-MM-DD), required for `fill_missing_price_history_cache` |
+| `APP_ENV`                           | No       | `development` | Environment label               |
+| `RUST_LOG`                          | No       | `info`        | Tracing filter                  |
+
 ## Local run
 
 ```powershell
@@ -59,6 +122,23 @@ cd E:\Kushim
 docker compose build kushim-market-data
 docker compose up -d --force-recreate kushim-market-data
 docker compose logs -f kushim-market-data
+```
+
+Smoke tests:
+
+```powershell
+curl http://localhost:8082/health
+curl http://localhost:8082/ready
+```
+
+## Validation
+
+```powershell
+cd E:\Kushim\kushim-market-data
+cargo fmt --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test
+cargo audit
 ```
 
 ## MVP note

@@ -67,6 +67,10 @@ CREATE UNIQUE INDEX uq_users_public_handle_active
     ON users (public_handle)
     WHERE deleted_at IS NULL AND public_handle IS NOT NULL;
 
+CREATE UNIQUE INDEX uq_users_username_active
+    ON users (lower(username))
+    WHERE deleted_at IS NULL;
+
 CREATE INDEX idx_users_role_id_role
     ON users (id_role);
 

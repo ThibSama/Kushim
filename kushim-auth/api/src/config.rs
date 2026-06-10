@@ -16,6 +16,7 @@ pub struct Config {
     pub jwt_issuer: String,
     pub access_token_ttl_seconds: i64,
     pub refresh_token_ttl_seconds: i64,
+    pub cors_allowed_origin: Option<String>,
 }
 
 impl Config {
@@ -45,6 +46,15 @@ impl Config {
             .unwrap_or_else(|_| "2592000".to_string())
             .parse::<i64>()
             .context("REFRESH_TOKEN_TTL_SECONDS must be a valid i64")?;
+
+        let cors_allowed_origin = env::var("CORS_ALLOWED_ORIGIN").ok().and_then(|v| {
+            let trimmed = v.trim().to_string();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            }
+        });
 
         if host.trim().is_empty() {
             bail!("AUTH_SERVICE_HOST must not be blank");
@@ -89,6 +99,7 @@ impl Config {
             jwt_issuer,
             access_token_ttl_seconds,
             refresh_token_ttl_seconds,
+            cors_allowed_origin,
         })
     }
 

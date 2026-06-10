@@ -90,6 +90,27 @@ services:
       context: ./kushim-market-data
     env_file:
       - ./kushim-market-data/.env.example
+    environment:
+      DATABASE_URL: postgresql://kushim:kushim_secret_dev@database:5432/kushim
+      APP_ENV: docker
+      MARKET_DATA_HOST: 0.0.0.0
+      MARKET_DATA_PORT: 8082
+      MARKET_DATA_MODE: idle
+      MARKET_DATA_JOB: noop
+      MARKET_DATA_PROVIDER: mock
+      MARKET_DATA_RUN_INTERVAL_SECONDS: 300
+    depends_on:
+      database:
+        condition: service_healthy
+    expose:
+      - "8082"
+    ports:
+      - "8082:8082"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8082/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     networks:
       - kushim_network
 

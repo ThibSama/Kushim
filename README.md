@@ -27,7 +27,7 @@ Current repository state, at a high level:
 - `kushim-auth/api`: implemented and hardened
 - `kushim-api`: implemented and validated for the current synchronous MVP perimeter
 - `kushim-worker`: implemented for current-state rebuilds, daily snapshots, composite refresh, and first controlled historical backfill
-- `kushim-market-data`: scaffolded only
+- `kushim-market-data`: implemented with mock provider (two controlled write jobs validated, no real provider yet)
 - `kushim-auth/front`: interactive frontend scaffold, not fully wired to the auth API yet
 - `kushim-app`: private frontend with advanced mock UI, not fully wired to `kushim-api` yet
 - `kushim-website`: marketing website present
@@ -35,8 +35,9 @@ Current repository state, at a high level:
 Important:
 
 - the backend is significantly more advanced than the frontends;
+- the backend E2E chain is **demonstrable locally** via an automated smoke test (`scripts/demo/backend-e2e.ps1`, 18/18 assertions passed);
 - the project is **MVP-oriented**, not production-ready;
-- some services are fully usable internally, while others are still scaffolded or partially wired.
+- some services are fully usable internally, while others are still partially wired.
 
 ## Service map
 
@@ -49,7 +50,7 @@ E:/Kushim/
 ├── kushim-app/           # authenticated app (React/Vite)
 ├── kushim-api/           # main synchronous business API (Rust/Axum/SQLx)
 ├── kushim-worker/        # worker jobs, rebuilds, snapshots, backfills (Rust)
-├── kushim-market-data/   # future market-data sync service (Rust, scaffolded)
+├── kushim-market-data/   # market-data service with mock provider (Rust)
 └── infra/
     ├── postgres/
     ├── redis/
@@ -108,6 +109,8 @@ Start here:
 - [Deferred TODOs](documentation/mvp/deferred-todos.md)
 - [Docker local development](documentation/operations/docker-local-dev.md)
 - [Validation commands](documentation/operations/validation-commands.md)
+- [Backend MVP demo runbook](documentation/operations/backend-demo-e2e.md)
+- [Backend E2E smoke test](scripts/demo/README.md)
 
 Current progress reports:
 
@@ -124,11 +127,13 @@ The repository is not production-ready yet.
 
 Main reasons:
 
-- `kushim-market-data` is not implemented yet;
+- `kushim-market-data` uses a mock provider only (no real market-data API);
 - frontends are not fully wired to the backend;
 - there is no complete CI/CD or deployment strategy visible in the repo;
 - observability, production secrets handling, and backup strategy are still incomplete;
 - some V1 business calculations intentionally remain conservative.
+
+Note: the backend E2E chain is validated locally via `scripts/demo/backend-e2e.ps1` (18/18 assertions), but this is a local debug/demo smoke test, not a production validation.
 
 This repository is the private project workspace and should be treated as the real working repository, including its documentation.
 

@@ -6,6 +6,7 @@ pub mod portfolio_operations;
 pub mod portfolio_read_models;
 pub mod portfolio_snapshots;
 pub mod portfolios;
+pub mod reference;
 
 use crate::state::AppState;
 use axum::{
@@ -18,13 +19,25 @@ use axum::{
 };
 use serde_json::{Value, json};
 
-pub const ROUTES_DESCRIPTION: &str = "/health, /ready, /v1/me, /v1/assets, /v1/assets/{id_asset}, /v1/portfolios, /v1/portfolios/{id_portfolio}, /v1/portfolios/{id_portfolio}/summary, /v1/portfolios/{id_portfolio}/holdings, /v1/portfolios/{id_portfolio}/snapshots/daily, /v1/portfolios/{id_portfolio}/snapshots/daily/{snapshot_date}/holdings, /v1/portfolios/{id_portfolio}/operations, /v1/portfolios/{id_portfolio}/operations/audit, /v1/portfolios/{id_portfolio}/operations/{id_portfolio_operation}, /v1/portfolios/{id_portfolio}/operations/{id_portfolio_operation}/cancel, /v1/portfolios/{id_portfolio}/operations/{id_portfolio_operation}/corrections, /v1/portfolios/{id_portfolio}/operations/{id_portfolio_operation}/post, /v1/portfolios/{id_portfolio}/operations/{id_portfolio_operation}/audit";
+pub const ROUTES_DESCRIPTION: &str = "/health, /ready, /v1/me, /v1/reference/operation-types, /v1/reference/operation-statuses, /v1/reference/portfolio-visibilities, /v1/assets, /v1/assets/{id_asset}, /v1/portfolios, /v1/portfolios/{id_portfolio}, /v1/portfolios/{id_portfolio}/summary, /v1/portfolios/{id_portfolio}/holdings, /v1/portfolios/{id_portfolio}/snapshots/daily, /v1/portfolios/{id_portfolio}/snapshots/daily/{snapshot_date}/holdings, /v1/portfolios/{id_portfolio}/operations, /v1/portfolios/{id_portfolio}/operations/audit, /v1/portfolios/{id_portfolio}/operations/{id_portfolio_operation}, /v1/portfolios/{id_portfolio}/operations/{id_portfolio_operation}/cancel, /v1/portfolios/{id_portfolio}/operations/{id_portfolio_operation}/corrections, /v1/portfolios/{id_portfolio}/operations/{id_portfolio_operation}/post, /v1/portfolios/{id_portfolio}/operations/{id_portfolio_operation}/audit";
 
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health::health))
         .route("/ready", get(health::ready))
         .route("/v1/me", get(me::me))
+        .route(
+            "/v1/reference/operation-types",
+            get(reference::list_operation_types),
+        )
+        .route(
+            "/v1/reference/operation-statuses",
+            get(reference::list_operation_statuses),
+        )
+        .route(
+            "/v1/reference/portfolio-visibilities",
+            get(reference::list_portfolio_visibilities),
+        )
         .route("/v1/assets", get(assets::list_assets))
         .route("/v1/assets/{id_asset}", get(assets::get_asset))
         .route(

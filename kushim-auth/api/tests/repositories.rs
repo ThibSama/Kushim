@@ -111,15 +111,10 @@ async fn user_repository_creates_and_reads_user() {
         .await
         .expect("query role")
         .expect("user role exists");
-    let public_handle = unique_handle("repo_user");
+    let username = unique_handle("repo_user");
 
     let created = users
-        .create_user(
-            role.id_role,
-            "Repository Test",
-            &public_handle,
-            "$argon2id$placeholder",
-        )
+        .create_user(role.id_role, &username, &username, "$argon2id$placeholder")
         .await
         .expect("create user");
 
@@ -128,14 +123,14 @@ async fn user_repository_creates_and_reads_user() {
         .await
         .expect("find by id")
         .expect("user exists");
-    let by_handle = users
-        .find_active_by_public_handle(&public_handle)
+    let by_username = users
+        .find_active_by_username(&username)
         .await
-        .expect("find by handle")
+        .expect("find by username")
         .expect("active user exists");
 
     assert_eq!(by_id.id_user, created.id_user);
-    assert_eq!(by_handle.public_handle, public_handle);
+    assert_eq!(by_username.username, username);
 }
 
 #[tokio::test]
@@ -150,15 +145,10 @@ async fn recovery_phrase_repository_upserts_phrase() {
         .await
         .expect("query role")
         .expect("user role exists");
-    let public_handle = unique_handle("repo_recovery");
+    let username = unique_handle("repo_recovery");
 
     let user = users
-        .create_user(
-            role.id_role,
-            "Recovery Test",
-            &public_handle,
-            "$argon2id$placeholder",
-        )
+        .create_user(role.id_role, &username, &username, "$argon2id$placeholder")
         .await
         .expect("create user");
 

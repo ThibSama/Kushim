@@ -19,8 +19,12 @@ use std::sync::OnceLock;
 use tokio::sync::Mutex;
 use tower::util::ServiceExt;
 use uuid::Uuid;
-
 static ROLE_FIXTURE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+fn unique_username(prefix: &str) -> String {
+    let short = &Uuid::new_v4().simple().to_string()[..8];
+    format!("{prefix}_{short}")
+}
 
 async fn test_pool() -> sqlx::PgPool {
     dotenvy::dotenv().ok();
@@ -75,12 +79,6 @@ async fn ensure_user_role(pool: &sqlx::PgPool) {
     .expect("insert user role fixture");
 }
 
-fn unique_handle(prefix: &str) -> String {
-    let short_uuid = Uuid::new_v4().simple().to_string();
-    let short_uuid = &short_uuid[..12];
-    format!("{prefix}_{short_uuid}")
-}
-
 fn build_app_state(pool: sqlx::PgPool) -> AppState {
     let auth_service = AuthService::new(
         RoleRepository::new(pool.clone()),
@@ -121,43 +119,45 @@ async fn invalid_login_returns_generic_401() {
     let pool = test_pool().await;
     ensure_user_role(&pool).await;
     let app = http::router(build_app_state(pool.clone()));
-    let public_handle = unique_handle("httplogin");
-
-    let signup_request = Request::builder()
-        .method("POST")
-        .uri("/auth/signup")
-        .header("content-type", "application/json")
-        .body(Body::from(
-            json!({
-                "username": "HTTP Login User",
-                "public_handle": public_handle,
-                "password": "correct horse battery"
-            })
-            .to_string(),
-        ))
-        .expect("build signup request");
+    let uname = unique_username("http_login");
 
     let signup_response = app
         .clone()
-        .oneshot(signup_request)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/auth/signup")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "username": uname,
+                        "password": "correct horse battery"
+                    })
+                    .to_string(),
+                ))
+                .expect("build signup request"),
+        )
         .await
         .expect("signup response");
     assert_eq!(signup_response.status(), StatusCode::CREATED);
 
-    let login_request = Request::builder()
-        .method("POST")
-        .uri("/auth/login")
-        .header("content-type", "application/json")
-        .body(Body::from(
-            json!({
-                "public_handle": public_handle,
-                "password": "wrong password"
-            })
-            .to_string(),
-        ))
-        .expect("build login request");
-
-    let response = app.oneshot(login_request).await.expect("login response");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/auth/login")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "username": uname,
+                        "password": "wrong password"
+                    })
+                    .to_string(),
+                ))
+                .expect("build login request"),
+        )
+        .await
+        .expect("login response");
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 
     let body = json_response(response).await;
@@ -166,15 +166,14 @@ async fn invalid_login_returns_generic_401() {
 }
 
 #[tokio::test]
-async fn duplicate_signup_returns_409() {
+async fn duplicate_username_signup_returns_409() {
     let pool = test_pool().await;
     ensure_user_role(&pool).await;
     let app = http::router(build_app_state(pool));
-    let public_handle = unique_handle("httpdup");
+    let uname = unique_username("dup_http");
 
     let payload = json!({
-        "username": "Duplicate User",
-        "public_handle": public_handle,
+        "username": uname,
         "password": "correct horse battery"
     })
     .to_string();
@@ -193,7 +192,7 @@ async fn duplicate_signup_returns_409() {
         .expect("first signup response");
     assert_eq!(first_response.status(), StatusCode::CREATED);
 
-    let response = app
+    let second_response = app
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -205,9 +204,9 @@ async fn duplicate_signup_returns_409() {
         .await
         .expect("second signup response");
 
-    assert_eq!(response.status(), StatusCode::CONFLICT);
-    let body = json_response(response).await;
-    assert_eq!(body["error"]["code"], "public_handle_conflict");
+    assert_eq!(second_response.status(), StatusCode::CONFLICT);
+    let body = json_response(second_response).await;
+    assert_eq!(body["error"]["code"], "username_conflict");
 }
 
 #[tokio::test]
@@ -236,7 +235,7 @@ async fn invalid_recovery_phrase_returns_401() {
     let pool = test_pool().await;
     ensure_user_role(&pool).await;
     let app = http::router(build_app_state(pool));
-    let public_handle = unique_handle("httprecovery");
+    let uname = unique_username("http_rec");
 
     let signup_response = app
         .clone()
@@ -247,8 +246,7 @@ async fn invalid_recovery_phrase_returns_401() {
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
-                        "username": "HTTP Recovery User",
-                        "public_handle": public_handle,
+                        "username": uname,
                         "password": "correct horse battery"
                     })
                     .to_string(),
@@ -293,9 +291,10 @@ async fn invalid_recovery_phrase_returns_401() {
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
-                        "public_handle": public_handle,
+                        "username": uname,
                         "recovery_phrase": "this is the wrong recovery phrase",
-                        "new_password": "a brand new secure password"
+                        "new_password": "a brand new secure password",
+                        "new_recovery_phrase": "replacement phrase that is long enough"
                     })
                     .to_string(),
                 ))
@@ -323,7 +322,6 @@ async fn validation_failure_returns_400() {
                 .body(Body::from(
                     json!({
                         "username": " ",
-                        "public_handle": "invalid handle",
                         "password": "short"
                     })
                     .to_string(),
@@ -344,7 +342,7 @@ async fn login_response_includes_no_store_headers() {
     let pool = test_pool().await;
     ensure_user_role(&pool).await;
     let app = http::router(build_app_state(pool));
-    let public_handle = unique_handle("httpheaders");
+    let uname = unique_username("http_hdr");
 
     let signup_response = app
         .oneshot(
@@ -354,8 +352,7 @@ async fn login_response_includes_no_store_headers() {
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
-                        "username": "Headers User",
-                        "public_handle": public_handle,
+                        "username": uname,
                         "password": "correct horse battery"
                     })
                     .to_string(),
@@ -415,30 +412,7 @@ async fn auth_error_response_includes_no_store_headers() {
 #[tokio::test]
 async fn login_rejects_unknown_json_fields() {
     let pool = test_pool().await;
-    ensure_user_role(&pool).await;
     let app = http::router(build_app_state(pool));
-    let public_handle = unique_handle("httpunknownlogin");
-
-    let signup_response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/auth/signup")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    json!({
-                        "username": "Unknown Field Login User",
-                        "public_handle": public_handle,
-                        "password": "correct horse battery"
-                    })
-                    .to_string(),
-                ))
-                .expect("build signup request"),
-        )
-        .await
-        .expect("signup response");
-    assert_eq!(signup_response.status(), StatusCode::CREATED);
 
     let response = app
         .oneshot(
@@ -448,7 +422,7 @@ async fn login_rejects_unknown_json_fields() {
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
-                        "public_handle": "placeholder",
+                        "username": "placeholder",
                         "password": "correct horse battery",
                         "extra_field": "unexpected"
                     })
@@ -475,8 +449,7 @@ async fn signup_rejects_unknown_json_fields() {
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
-                        "username": "Unknown Signup User",
-                        "public_handle": unique_handle("httpunknownsignup"),
+                        "username": "unknown_signup_t7",
                         "password": "correct horse battery",
                         "extra_field": "unexpected"
                     })
@@ -495,7 +468,7 @@ async fn refresh_rejects_unknown_json_fields() {
     let pool = test_pool().await;
     ensure_user_role(&pool).await;
     let app = http::router(build_app_state(pool));
-    let public_handle = unique_handle("httpunknownrefresh");
+    let uname = unique_username("http_rfr");
 
     let signup_response = app
         .clone()
@@ -506,8 +479,7 @@ async fn refresh_rejects_unknown_json_fields() {
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
-                        "username": "Unknown Refresh User",
-                        "public_handle": public_handle,
+                        "username": uname,
                         "password": "correct horse battery"
                     })
                     .to_string(),
@@ -542,4 +514,188 @@ async fn refresh_rejects_unknown_json_fields() {
         .expect("refresh response");
 
     assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn cors_preflight_returns_allowed_origin() {
+    let pool = test_pool().await;
+    let app = http::router_with_cors(build_app_state(pool), Some("http://localhost:3001"));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("OPTIONS")
+                .uri("/auth/login")
+                .header("origin", "http://localhost:3001")
+                .header("access-control-request-method", "POST")
+                .header("access-control-request-headers", "content-type")
+                .body(Body::empty())
+                .expect("build preflight request"),
+        )
+        .await
+        .expect("preflight response");
+
+    assert!(
+        response.status().is_success(),
+        "preflight should succeed, got {}",
+        response.status()
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("access-control-allow-origin")
+            .expect("allow-origin header"),
+        "http://localhost:3001"
+    );
+    let allow_methods = response
+        .headers()
+        .get("access-control-allow-methods")
+        .expect("allow-methods header")
+        .to_str()
+        .expect("header to str");
+    assert!(allow_methods.contains("POST"), "should allow POST");
+    let allow_headers = response
+        .headers()
+        .get("access-control-allow-headers")
+        .expect("allow-headers header")
+        .to_str()
+        .expect("header to str");
+    assert!(
+        allow_headers.to_lowercase().contains("content-type"),
+        "should allow content-type"
+    );
+    assert!(
+        allow_headers.to_lowercase().contains("authorization"),
+        "should allow authorization"
+    );
+}
+
+#[tokio::test]
+async fn cors_normal_response_includes_origin_header() {
+    let pool = test_pool().await;
+    let app = http::router_with_cors(build_app_state(pool), Some("http://localhost:3001"));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/health")
+                .header("origin", "http://localhost:3001")
+                .body(Body::empty())
+                .expect("build health request"),
+        )
+        .await
+        .expect("health response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("access-control-allow-origin")
+            .expect("allow-origin header"),
+        "http://localhost:3001"
+    );
+}
+
+#[tokio::test]
+async fn cors_disallowed_origin_gets_configured_origin_only() {
+    let pool = test_pool().await;
+    let app = http::router_with_cors(build_app_state(pool), Some("http://localhost:3001"));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/health")
+                .header("origin", "http://evil.example.com")
+                .body(Body::empty())
+                .expect("build health request"),
+        )
+        .await
+        .expect("health response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    // tower-http with a fixed origin always returns the configured value;
+    // the browser enforces the mismatch and blocks the response.
+    assert_eq!(
+        response
+            .headers()
+            .get("access-control-allow-origin")
+            .expect("allow-origin header"),
+        "http://localhost:3001"
+    );
+}
+
+#[tokio::test]
+async fn cors_disabled_does_not_add_headers() {
+    let pool = test_pool().await;
+    let app = http::router_with_cors(build_app_state(pool), None);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/health")
+                .header("origin", "http://localhost:3001")
+                .body(Body::empty())
+                .expect("build health request"),
+        )
+        .await
+        .expect("health response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(
+        response
+            .headers()
+            .get("access-control-allow-origin")
+            .is_none(),
+        "no CORS config should produce no allow-origin header"
+    );
+}
+
+#[tokio::test]
+async fn cors_auth_route_preserves_no_store_headers() {
+    let pool = test_pool().await;
+    ensure_user_role(&pool).await;
+    let app = http::router_with_cors(build_app_state(pool), Some("http://localhost:3001"));
+    let uname = unique_username("http_cors");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/auth/signup")
+                .header("content-type", "application/json")
+                .header("origin", "http://localhost:3001")
+                .body(Body::from(
+                    json!({
+                        "username": uname,
+                        "password": "correct horse battery"
+                    })
+                    .to_string(),
+                ))
+                .expect("build signup request"),
+        )
+        .await
+        .expect("signup response");
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    assert_eq!(
+        response
+            .headers()
+            .get("access-control-allow-origin")
+            .expect("allow-origin"),
+        "http://localhost:3001"
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("cache-control")
+            .expect("cache-control"),
+        "no-store"
+    );
+    assert_eq!(
+        response.headers().get("pragma").expect("pragma"),
+        "no-cache"
+    );
 }

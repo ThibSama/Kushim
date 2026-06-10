@@ -4,6 +4,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { BackgroundLayers } from "@/mockup/components/background/BackgroundLayers";
 import { Footer } from "@/mockup/components/Footer";
 import { Navbar } from "@/mockup/components/Navbar";
+import { I18nProvider } from "@/i18n/context";
 
 export function AuthShell({ children }: { children: ReactNode }) {
   const [isDark, setIsDark] = useState(true);
@@ -27,13 +28,15 @@ export function AuthShell({ children }: { children: ReactNode }) {
   };
 
   return (
-    <div className="min-h-screen relative" style={{ backgroundColor: "var(--canvas-bg)" }}>
-      <BackgroundLayers />
-      <div className="relative z-10">
-        <Navbar isAuthenticated={false} onThemeToggle={toggleTheme} isDark={isDark} />
-        <main style={{ paddingTop: "44px" }}>{children}</main>
-        <Footer />
+    <I18nProvider>
+      <div className="min-h-screen relative" style={{ backgroundColor: "var(--canvas-bg)" }}>
+        <BackgroundLayers />
+        <div className="relative z-10">
+          <Navbar isAuthenticated={false} onThemeToggle={toggleTheme} isDark={isDark} />
+          <main style={{ paddingTop: "44px" }}>{children}</main>
+          <Footer />
+        </div>
       </div>
-    </div>
+    </I18nProvider>
   );
 }

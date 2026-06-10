@@ -24,21 +24,20 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-static PUBLIC_HANDLE_REGEX: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"^[a-z0-9_][a-z0-9_-]{2,39}$").expect("valid public_handle regex"));
+static USERNAME_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^[a-z0-9_][a-z0-9_-]{2,39}$").expect("valid username regex"));
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SignupRequest {
     pub username: String,
-    pub public_handle: String,
     pub password: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LoginRequest {
-    pub public_handle: String,
+    pub username: String,
     pub password: String,
 }
 
@@ -64,9 +63,10 @@ pub struct RecoverySetupRequest {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ResetPasswordRequest {
-    pub public_handle: String,
+    pub username: String,
     pub recovery_phrase: String,
     pub new_password: String,
+    pub new_recovery_phrase: String,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -118,7 +118,6 @@ pub struct GenericSuccessResponse {
 impl SignupRequest {
     pub fn validate(&self, password_service: &PasswordService) -> Result<(), ApiError> {
         validate_username(&self.username)?;
-        validate_public_handle(&self.public_handle)?;
         password_service
             .validate_password_policy(&self.password)
             .map_err(map_password_validation_error)?;
@@ -128,7 +127,7 @@ impl SignupRequest {
 
 impl LoginRequest {
     pub fn validate(&self) -> Result<(), ApiError> {
-        validate_public_handle(&self.public_handle)?;
+        validate_username(&self.username)?;
         validate_non_blank(&self.password, "password", "password must not be blank")
     }
 }
@@ -173,13 +172,16 @@ impl ResetPasswordRequest {
         password_service: &PasswordService,
         recovery_service: &RecoveryService,
     ) -> Result<(), ApiError> {
-        validate_public_handle(&self.public_handle)?;
+        validate_username(&self.username)?;
         recovery_service
             .validate_recovery_phrase(&self.recovery_phrase)
             .map_err(map_recovery_validation_error)?;
         password_service
             .validate_password_policy(&self.new_password)
             .map_err(map_password_validation_error)?;
+        recovery_service
+            .validate_recovery_phrase(&self.new_recovery_phrase)
+            .map_err(map_recovery_validation_error)?;
         Ok(())
     }
 }
@@ -265,7 +267,7 @@ pub async fn login(
 ) -> Result<Json<LoginResponse>, ApiError> {
     enforce_global_auth_rate_limit(&state, &headers).await?;
     enforce_ip_rate_limit(&state, login_ip_rule(), &headers).await?;
-    enforce_handle_rate_limit(&state, login_handle_rule(), &request.public_handle).await?;
+    enforce_handle_rate_limit(&state, login_handle_rule(), &request.username).await?;
     request.validate()?;
     let response = state
         .auth_service
@@ -340,7 +342,7 @@ pub async fn reset_password(
 ) -> Result<Json<GenericSuccessResponse>, ApiError> {
     enforce_global_auth_rate_limit(&state, &headers).await?;
     enforce_ip_rate_limit(&state, recovery_reset_ip_rule(), &headers).await?;
-    enforce_handle_rate_limit(&state, recovery_reset_handle_rule(), &request.public_handle).await?;
+    enforce_handle_rate_limit(&state, recovery_reset_handle_rule(), &request.username).await?;
     request.validate(&PasswordService::new(), &RecoveryService::new())?;
     let response = state
         .auth_service
@@ -416,30 +418,17 @@ fn client_identifier(headers: &HeaderMap) -> String {
 }
 
 fn validate_username(username: &str) -> Result<(), ApiError> {
-    validate_non_blank(username, "username", "username must not be blank")?;
-
-    if username.chars().count() > 50 {
+    if username.chars().count() > 40 {
         return Err(ApiError::Validation {
             code: "username_too_long",
-            message: "username must be at most 50 characters long".to_string(),
+            message: "username must be at most 40 characters long".to_string(),
         });
     }
 
-    Ok(())
-}
-
-pub fn validate_public_handle(public_handle: &str) -> Result<(), ApiError> {
-    if public_handle.chars().count() > 40 {
+    if !USERNAME_REGEX.is_match(username) {
         return Err(ApiError::Validation {
-            code: "public_handle_too_long",
-            message: "public_handle must be at most 40 characters long".to_string(),
-        });
-    }
-
-    if !PUBLIC_HANDLE_REGEX.is_match(public_handle) {
-        return Err(ApiError::Validation {
-            code: "invalid_public_handle",
-            message: "public_handle format is invalid".to_string(),
+            code: "invalid_username",
+            message: "username format is invalid: 3-40 lowercase letters, digits, _ or - (must start with a letter, digit, or _)".to_string(),
         });
     }
 
@@ -531,9 +520,9 @@ pub(crate) fn map_auth_service_error(error: AuthServiceError) -> ApiError {
             code: "invalid_credentials",
             message: "invalid credentials",
         },
-        AuthServiceError::PublicHandleAlreadyExists => ApiError::Conflict {
-            code: "public_handle_conflict",
-            message: "public_handle is already in use",
+        AuthServiceError::UsernameAlreadyExists => ApiError::Conflict {
+            code: "username_conflict",
+            message: "username is already in use",
         },
         AuthServiceError::RefreshTokenRevoked => ApiError::Unauthorized {
             code: "refresh_token_revoked",
@@ -564,7 +553,7 @@ pub(crate) fn map_auth_service_error(error: AuthServiceError) -> ApiError {
 mod tests {
     use super::{
         LoginRequest, LogoutRequest, RecoverySetupRequest, RefreshRequest, ResetPasswordRequest,
-        SignupRequest, UserResponse, validate_public_handle,
+        SignupRequest, UserResponse,
     };
     use crate::{
         domain::{role::UserRole, user::User},
@@ -606,8 +595,7 @@ mod tests {
     #[test]
     fn dto_signup_request_validation_accepts_valid_payload() {
         let request = SignupRequest {
-            username: "Alice".to_string(),
-            public_handle: "alice_handle".to_string(),
+            username: "alice_handle".to_string(),
             password: "correct horse battery".to_string(),
         };
 
@@ -617,9 +605,15 @@ mod tests {
     }
 
     #[test]
-    fn validation_rejects_invalid_public_handle() {
-        let error =
-            validate_public_handle("Invalid Handle").expect_err("invalid handle should fail");
+    fn validation_rejects_invalid_username_format() {
+        let request = SignupRequest {
+            username: "Invalid Handle".to_string(),
+            password: "correct horse battery".to_string(),
+        };
+
+        let error = request
+            .validate(&PasswordService::new())
+            .expect_err("invalid username format should fail");
 
         assert!(matches!(error, ApiError::Validation { .. }));
     }
@@ -628,7 +622,6 @@ mod tests {
     fn validation_rejects_blank_username() {
         let request = SignupRequest {
             username: "   ".to_string(),
-            public_handle: "alice_handle".to_string(),
             password: "correct horse battery".to_string(),
         };
 
@@ -655,7 +648,7 @@ mod tests {
     #[test]
     fn validation_login_request_accepts_valid_payload() {
         let request = LoginRequest {
-            public_handle: "alice_handle".to_string(),
+            username: "alice_handle".to_string(),
             password: "correct horse battery".to_string(),
         };
 
@@ -692,9 +685,10 @@ mod tests {
     #[test]
     fn validation_reset_password_request_accepts_valid_payload() {
         let request = ResetPasswordRequest {
-            public_handle: "alice_handle".to_string(),
+            username: "alice_handle".to_string(),
             recovery_phrase: "this is a long recovery phrase".to_string(),
             new_password: "correct horse battery".to_string(),
+            new_recovery_phrase: "brand new recovery phrase words".to_string(),
         };
 
         request

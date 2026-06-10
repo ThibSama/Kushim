@@ -70,7 +70,7 @@ async fn main() -> Result<()> {
         environment: config.environment.clone(),
     };
 
-    let app = http::router(state);
+    let app = http::router_with_cors(state, config.cors_allowed_origin.as_deref());
     let addr = config.socket_addr()?;
 
     tracing::info!(

@@ -31,8 +31,8 @@ pub enum AuthServiceError {
     TokenEncodingFailed,
     #[error("invalid credentials")]
     InvalidCredentials,
-    #[error("public handle already exists")]
-    PublicHandleAlreadyExists,
+    #[error("username already exists")]
+    UsernameAlreadyExists,
     #[error("role not found")]
     RoleNotFound,
     #[error("user not found")]
@@ -102,7 +102,7 @@ impl AuthService {
             .create_user(
                 role.id_role,
                 &request.username,
-                &request.public_handle,
+                &request.username,
                 &password_hash,
             )
             .await
@@ -115,7 +115,7 @@ impl AuthService {
 
         tracing::info!(
             event = "signup_success",
-            public_handle = redact_public_handle(&user.public_handle),
+            username = redact_username(&user.username),
             "user signup succeeded"
         );
 
@@ -129,14 +129,14 @@ impl AuthService {
 
         let mut user = self
             .users
-            .find_active_by_public_handle(&request.public_handle)
+            .find_active_by_username(&request.username)
             .await
             .map_err(map_repository_error)?
             .ok_or_else(|| {
                 tracing::warn!(
                     event = "login_failed",
                     reason = "invalid_credentials",
-                    public_handle = redact_public_handle(&request.public_handle),
+                    username = redact_username(&request.username),
                     "login rejected"
                 );
                 AuthServiceError::InvalidCredentials
@@ -151,7 +151,7 @@ impl AuthService {
             tracing::warn!(
                 event = "login_failed",
                 reason = "invalid_credentials",
-                public_handle = redact_public_handle(&request.public_handle),
+                username = redact_username(&request.username),
                 "login rejected"
             );
             return Err(AuthServiceError::InvalidCredentials);
@@ -165,7 +165,7 @@ impl AuthService {
         tracing::info!(
             event = "login_success",
             user_id = %user.id_user,
-            public_handle = redact_public_handle(&user.public_handle),
+            username = redact_username(&user.username),
             "login succeeded"
         );
 
@@ -370,14 +370,14 @@ impl AuthService {
 
         let user = self
             .users
-            .find_active_by_public_handle(&request.public_handle)
+            .find_active_by_username(&request.username)
             .await
             .map_err(map_repository_error)?
             .ok_or_else(|| {
                 tracing::warn!(
                     event = "reset_password_failed",
                     reason = "invalid_recovery_phrase",
-                    public_handle = redact_public_handle(&request.public_handle),
+                    username = redact_username(&request.username),
                     "password reset rejected"
                 );
                 AuthServiceError::InvalidRecoveryPhrase
@@ -426,10 +426,19 @@ impl AuthService {
             return Err(AuthServiceError::UserNotFound);
         }
 
+        let new_phrase_hash = self
+            .recovery_service
+            .hash_recovery_phrase(&request.new_recovery_phrase)
+            .map_err(|_| AuthServiceError::Repository)?;
+        self.recovery_phrases
+            .upsert_for_user(user.id_user, &new_phrase_hash)
+            .await
+            .map_err(map_repository_error)?;
+
         tracing::info!(
             event = "reset_password_success",
             user_id = %user.id_user,
-            "password reset succeeded"
+            "password reset with phrase rotation succeeded"
         );
 
         Ok(GenericSuccessResponse { success: true })
@@ -467,8 +476,8 @@ impl AuthService {
     }
 }
 
-fn redact_public_handle(public_handle: &str) -> String {
-    let visible: String = public_handle.chars().take(3).collect();
+fn redact_username(username: &str) -> String {
+    let visible: String = username.chars().take(3).collect();
     format!("{visible}***")
 }
 
@@ -480,7 +489,7 @@ fn error_reason(error: &AuthServiceError) -> &'static str {
         AuthServiceError::MissingUserRole => "missing_user_role",
         AuthServiceError::TokenEncodingFailed => "token_encoding_failed",
         AuthServiceError::InvalidCredentials => "invalid_credentials",
-        AuthServiceError::PublicHandleAlreadyExists => "public_handle_conflict",
+        AuthServiceError::UsernameAlreadyExists => "username_conflict",
         AuthServiceError::RoleNotFound => "role_not_found",
         AuthServiceError::UserNotFound => "user_not_found",
         AuthServiceError::RefreshTokenRevoked => "refresh_token_revoked",
@@ -493,8 +502,23 @@ fn error_reason(error: &AuthServiceError) -> &'static str {
 
 fn map_repository_error(error: RepositoryError) -> AuthServiceError {
     match error {
-        RepositoryError::Conflict("public_handle") => AuthServiceError::PublicHandleAlreadyExists,
+        RepositoryError::Conflict("username") => AuthServiceError::UsernameAlreadyExists,
         RepositoryError::Conflict("revoked_token_jti") => AuthServiceError::RefreshTokenRevoked,
         RepositoryError::Conflict(_) | RepositoryError::Database(_) => AuthServiceError::Repository,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::redact_username;
+
+    #[test]
+    fn redact_username_shows_first_three_chars() {
+        assert_eq!(redact_username("camille_durand"), "cam***");
+    }
+
+    #[test]
+    fn redact_username_short_input() {
+        assert_eq!(redact_username("ab"), "ab***");
     }
 }
