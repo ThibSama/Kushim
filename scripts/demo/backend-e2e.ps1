@@ -95,7 +95,7 @@ $script:Warnings  = [System.Collections.Generic.List[string]]::new()
 $script:Passed    = [System.Collections.Generic.List[string]]::new()
 $script:Failed    = [System.Collections.Generic.List[string]]::new()
 $script:DemoState = @{
-    PublicHandle  = ""
+    Username      = ""
     UserId        = ""
     PortfolioId   = ""
     AssetId       = ""
@@ -270,28 +270,25 @@ if ($DryRun) {
 # ---------------------------------------------------------------------------
 Write-Step "B. Signup demo user"
 
-$publicHandle = "${DemoPrefix}_${runSuffix}"
-$username = "Demo E2E User $runSuffix"
+$username = "${DemoPrefix}_${runSuffix}"
 $password = "DemoP@ss2026!"
 
-Write-Info "public_handle: $publicHandle"
-Write-Info "username:      $username"
+Write-Info "username: $username"
 
 $signupBody = @{
-    username      = $username
-    public_handle = $publicHandle
-    password      = $password
+    username = $username
+    password = $password
 }
 
 try {
     $signupResponse = Invoke-ApiPost -Url "$BaseUrlAuth/auth/signup" -Body $signupBody
     $script:DemoState.AccessToken  = $signupResponse.access_token
     $script:DemoState.UserId       = $signupResponse.user.id_user
-    $script:DemoState.PublicHandle  = $publicHandle
+    $script:DemoState.Username     = $username
     Write-Success "User created: id=$($script:DemoState.UserId)"
 } catch {
     Write-Err "Signup failed: $_"
-    Write-Err "If public_handle already exists, re-run the script (new timestamp suffix) or use -DemoPrefix with a different value."
+    Write-Err "If username already exists, re-run the script (new timestamp suffix) or use -DemoPrefix with a different value."
     exit 1
 }
 
@@ -595,8 +592,8 @@ try {
     Write-Warn "Token may have expired. Re-authenticating..."
     try {
         $loginBody = @{
-            public_handle = $script:DemoState.PublicHandle
-            password      = $password
+            username = $script:DemoState.Username
+            password = $password
         }
         $loginResponse = Invoke-ApiPost -Url "$BaseUrlAuth/auth/login" -Body $loginBody
         $script:DemoState.AccessToken = $loginResponse.access_token
@@ -716,7 +713,7 @@ Write-Step "SUMMARY"
 
 Write-Host ""
 Write-Host "  Demo identifiers:" -ForegroundColor White
-Write-Host "    public_handle:     $($script:DemoState.PublicHandle)"
+Write-Host "    username:          $($script:DemoState.Username)"
 Write-Host "    user_id:           $($script:DemoState.UserId)"
 Write-Host "    portfolio_id:      $($script:DemoState.PortfolioId)"
 Write-Host "    asset_id:          $($script:DemoState.AssetId)"
