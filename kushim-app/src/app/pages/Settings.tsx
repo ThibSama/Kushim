@@ -1,4 +1,4 @@
-import React from "react";
+﻿import React from "react";
 import { Shield, User, SlidersHorizontal, TriangleAlert } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Card } from "../components/Card";
@@ -215,9 +215,12 @@ export function Settings() {
                 lineHeight: 1.5,
                 color: "var(--text-tertiary)",
               }}>
-              {user?.created_at
-                ? `Compte créé le ${new Date(user.created_at).toLocaleDateString("fr-FR", { day: "numeric", month: "long", year: "numeric" })}`
-                : " "}
+              {(() => {
+                if (!user?.created_at) return " ";
+                const d = new Date(user.created_at);
+                if (Number.isNaN(d.getTime())) return "Non disponible";
+                return `Compte créé le ${d.toLocaleDateString("fr-FR", { day: "numeric", month: "long", year: "numeric" })}`
+              })()}
             </p>
           </Card>
         </div>

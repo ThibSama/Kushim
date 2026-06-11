@@ -74,6 +74,15 @@ export function minorToMajor(minor: number | null | undefined): number {
   return minor / 100;
 }
 
+function formatQuantity(value: string): string {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return value;
+  return new Intl.NumberFormat("fr-FR", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 10,
+  }).format(num);
+}
+
 export type TransactionRow = {
   id: string;
   date: string;
@@ -98,7 +107,7 @@ export function operationToRow(op: PortfolioOperation): TransactionRow {
     : date.toLocaleDateString("fr-FR", { year: "numeric", month: "2-digit", day: "2-digit" });
 
   const asset = getAssetDisplay(op.id_asset);
-  const qty = op.quantity ?? "—";
+  const qty = op.quantity != null ? formatQuantity(op.quantity) : "—";
   const price = op.price_minor != null ? minorToMajor(op.price_minor) : null;
   const fees = minorToMajor(op.fees_minor) + minorToMajor(op.taxes_minor);
   const total = minorToMajor(op.cash_amount_minor);
