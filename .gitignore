@@ -14,7 +14,7 @@ Thumbs.db
 .codex/*
 .claude/*
 
-documentation/*
+documentation/_*
 
 agents.md
 claude.md

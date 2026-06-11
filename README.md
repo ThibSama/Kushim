@@ -27,7 +27,7 @@ Current repository state, at a high level:
 - `kushim-auth/api`: implemented and hardened
 - `kushim-api`: implemented and validated for the current synchronous MVP perimeter
 - `kushim-worker`: implemented for current-state rebuilds, daily snapshots, composite refresh, and first controlled historical backfill
-- `kushim-market-data`: implemented with mock provider (two controlled write jobs validated, no real provider yet)
+- `kushim-market-data`: implemented with mock provider and guarded Finnhub provider; Finnhub current stock quotes are live-validated for AAPL/MSFT/NVDA only
 - `kushim-auth/front`: interactive auth frontend, wired to `kushim-auth/api` (login, signup, handoff exchange functional)
 - `kushim-app`: private frontend largely wired to `kushim-api` (auth, portfolios, operations, dashboard KPIs/evolution/allocation/top assets, asset catalogue, positions — all real data; benchmark section and settings actions remain mock)
 - `kushim-website`: marketing website present
@@ -38,7 +38,7 @@ Important:
 - the backend E2E chain is **demonstrable locally** via an automated smoke test (`scripts/demo/backend-e2e.ps1`, 18/18 assertions passed);
 - `kushim-app` is largely wired to real backend data; remaining mock elements are isolated and labeled;
 - the project is **MVP-oriented**, not production-ready;
-- market data uses a mock provider (no real provider yet); FX is not implemented.
+- market data uses mock/seeded data for the supervised MVP demo; Finnhub current stock quotes are available for tightly allowlisted dev validation; FX is not implemented.
 
 ## Service map
 
@@ -51,7 +51,7 @@ E:/Kushim/
 ├── kushim-app/           # authenticated app (React/Vite)
 ├── kushim-api/           # main synchronous business API (Rust/Axum/SQLx)
 ├── kushim-worker/        # worker jobs, rebuilds, snapshots, backfills (Rust)
-├── kushim-market-data/   # market-data service with mock provider (Rust)
+├── kushim-market-data/   # market-data service with mock + guarded Finnhub provider (Rust)
 └── infra/
     ├── postgres/
     ├── redis/
@@ -69,7 +69,7 @@ Critical project rules:
 - `kushim-api` writes user-facing source-of-truth actions and exposes read-only derived data.
 - `kushim-api` does **not** generate read models or snapshots.
 - `kushim-worker` generates read models, snapshots, and controlled historical backfills.
-- `kushim-market-data` is the future service responsible for market provider sync and price cache population.
+- `kushim-market-data` owns market provider sync and price cache population.
 - PostgreSQL DDL remains the schema source of truth:
   - `infra/postgres/init/001_init.sql`
 
@@ -129,10 +129,9 @@ The repository is not production-ready yet.
 
 Main reasons:
 
-- `kushim-market-data` uses a mock provider only (no real market-data API);
-- `kushim-auth/front` is not yet natively wired to `kushim-auth/api` (manual handoff works);
+- `kushim-market-data` has a guarded Finnhub provider, but only current stock quotes for AAPL/MSFT/NVDA are live-validated; BTC/crypto and Finnhub historical candles are not validated with the current plan/access;
 - dashboard benchmark section and settings page actions remain mock;
-- FX conversion is not implemented (demo must use USD portfolios with the mock provider);
+- FX conversion is not implemented (demo should use USD portfolios and mock/seeded market data unless a specific Finnhub stock quote validation is being shown);
 - there is no complete CI/CD or deployment strategy visible in the repo;
 - observability, production secrets handling, and backup strategy are still incomplete;
 - some V1 business calculations intentionally remain conservative.
