@@ -4,15 +4,27 @@ use crate::{
     providers::MarketDataProvider,
     repositories::{asset_market_data, assets},
     state::AppState,
+    symbol_filter::{SymbolAllowlist, select_assets_by_allowlist},
 };
 
 pub struct RefreshCurrentMarketDataJob<P: MarketDataProvider> {
     provider: P,
+    symbol_allowlist: Option<SymbolAllowlist>,
 }
 
 impl<P: MarketDataProvider> RefreshCurrentMarketDataJob<P> {
     pub fn new(provider: P) -> Self {
-        Self { provider }
+        Self {
+            provider,
+            symbol_allowlist: None,
+        }
+    }
+
+    pub fn new_with_symbol_allowlist(provider: P, symbol_allowlist: SymbolAllowlist) -> Self {
+        Self {
+            provider,
+            symbol_allowlist: Some(symbol_allowlist),
+        }
     }
 }
 
@@ -27,12 +39,22 @@ impl<P: MarketDataProvider> Job for RefreshCurrentMarketDataJob<P> {
             .map_err(MarketDataError::Database)?;
 
         let total = active_assets.len();
+        let selection = select_assets_by_allowlist(&active_assets, self.symbol_allowlist.as_ref());
+        let selected = selection.selected.len();
         let mut updated = 0_usize;
         let mut skipped = 0_usize;
+        let mut provider_errors = 0_usize;
 
-        for asset in &active_assets {
-            match self.provider.get_quote(asset) {
-                Some(quote) => {
+        for symbol in selection.missing_symbols {
+            tracing::warn!(
+                symbol,
+                "allowlisted symbol is not present in active assets, skipping"
+            );
+        }
+
+        for asset in &selection.selected {
+            match self.provider.get_quote(asset).await {
+                Ok(Some(quote)) => {
                     match asset_market_data::upsert_current(&state.pg_pool, asset.id_asset, &quote)
                         .await
                     {
@@ -51,8 +73,16 @@ impl<P: MarketDataProvider> Job for RefreshCurrentMarketDataJob<P> {
                         Err(e) => return Err(MarketDataError::Database(e)),
                     }
                 }
-                None => {
+                Ok(None) => {
                     skipped += 1;
+                }
+                Err(e) => {
+                    provider_errors += 1;
+                    tracing::warn!(
+                        id_asset = %asset.id_asset,
+                        error = %e,
+                        "provider quote lookup failed, skipping asset"
+                    );
                 }
             }
         }
@@ -61,8 +91,10 @@ impl<P: MarketDataProvider> Job for RefreshCurrentMarketDataJob<P> {
             job = self.name(),
             provider = self.provider.name(),
             total,
+            selected,
             updated,
             skipped,
+            provider_errors,
             "refresh_current_market_data completed"
         );
 

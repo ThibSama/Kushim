@@ -4,6 +4,7 @@ use crate::{
     providers::MarketDataProvider,
     repositories::{assets, price_history_cache},
     state::AppState,
+    symbol_filter::{SymbolAllowlist, select_assets_by_allowlist},
 };
 use time::Date;
 
@@ -11,6 +12,7 @@ pub struct FillMissingPriceHistoryCacheJob<P: MarketDataProvider> {
     provider: P,
     date_from: Date,
     date_to: Date,
+    symbol_allowlist: Option<SymbolAllowlist>,
 }
 
 impl<P: MarketDataProvider> FillMissingPriceHistoryCacheJob<P> {
@@ -19,6 +21,21 @@ impl<P: MarketDataProvider> FillMissingPriceHistoryCacheJob<P> {
             provider,
             date_from,
             date_to,
+            symbol_allowlist: None,
+        }
+    }
+
+    pub fn new_with_symbol_allowlist(
+        provider: P,
+        date_from: Date,
+        date_to: Date,
+        symbol_allowlist: SymbolAllowlist,
+    ) -> Self {
+        Self {
+            provider,
+            date_from,
+            date_to,
+            symbol_allowlist: Some(symbol_allowlist),
         }
     }
 }
@@ -34,15 +51,25 @@ impl<P: MarketDataProvider> Job for FillMissingPriceHistoryCacheJob<P> {
             .map_err(MarketDataError::Database)?;
 
         let total_assets = active_assets.len();
+        let selection = select_assets_by_allowlist(&active_assets, self.symbol_allowlist.as_ref());
+        let selected_assets = selection.selected.len();
         let mut inserted = 0_usize;
         let mut already_present = 0_usize;
         let mut skipped = 0_usize;
+        let mut provider_errors = 0_usize;
 
-        for asset in &active_assets {
+        for symbol in selection.missing_symbols {
+            tracing::warn!(
+                symbol,
+                "allowlisted symbol is not present in active assets, skipping"
+            );
+        }
+
+        for asset in &selection.selected {
             let mut current = self.date_from;
             loop {
-                match self.provider.get_historical_quote(asset, current) {
-                    Some(quote) => {
+                match self.provider.get_historical_quote(asset, current).await {
+                    Ok(Some(quote)) => {
                         match price_history_cache::insert_if_missing(
                             &state.pg_pool,
                             asset.id_asset,
@@ -65,8 +92,18 @@ impl<P: MarketDataProvider> Job for FillMissingPriceHistoryCacheJob<P> {
                             Err(e) => return Err(MarketDataError::Database(e)),
                         }
                     }
-                    None => {
+                    Ok(None) => {
                         skipped += 1;
+                        break;
+                    }
+                    Err(e) => {
+                        provider_errors += 1;
+                        tracing::warn!(
+                            id_asset = %asset.id_asset,
+                            price_date = %current,
+                            error = %e,
+                            "provider historical lookup failed, skipping asset"
+                        );
                         break;
                     }
                 }
@@ -84,10 +121,12 @@ impl<P: MarketDataProvider> Job for FillMissingPriceHistoryCacheJob<P> {
             job = self.name(),
             provider = self.provider.name(),
             total_assets,
+            selected_assets,
             date_count,
             inserted,
             already_present,
             skipped,
+            provider_errors,
             "fill_missing_price_history_cache completed"
         );
 

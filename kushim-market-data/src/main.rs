@@ -5,7 +5,7 @@ use kushim_market_data::{
         fill_missing_price_history_cache::FillMissingPriceHistoryCacheJob, noop::NoopJob,
         refresh_current_market_data::RefreshCurrentMarketDataJob,
     },
-    providers::mock::MockProvider,
+    providers::{finnhub::FinnhubProvider, mock::MockProvider},
     runner::JobRunner,
     state::AppState,
 };
@@ -94,12 +94,52 @@ async fn run_job(
                 let runner = JobRunner::new(config.mode, config.run_interval, job);
                 runner.run(state, cancel).await
             }
+            MarketDataProviderKind::Finnhub => {
+                let provider = FinnhubProvider::new(
+                    config.finnhub_base_url.clone(),
+                    config.finnhub_api_key.clone().expect("validated in config"),
+                    config.http_timeout,
+                    config.provider_delay,
+                    config.provider_symbol_map.clone(),
+                )?;
+                let job = RefreshCurrentMarketDataJob::new_with_symbol_allowlist(
+                    provider,
+                    config
+                        .symbol_allowlist
+                        .clone()
+                        .expect("validated in config"),
+                );
+                let runner = JobRunner::new(config.mode, config.run_interval, job);
+                runner.run(state, cancel).await
+            }
         },
         MarketDataJob::FillMissingPriceHistoryCache => match config.provider {
             MarketDataProviderKind::Mock => {
                 let date_from = config.history_date_from.expect("validated in config");
                 let date_to = config.history_date_to.expect("validated in config");
                 let job = FillMissingPriceHistoryCacheJob::new(MockProvider, date_from, date_to);
+                let runner = JobRunner::new(config.mode, config.run_interval, job);
+                runner.run(state, cancel).await
+            }
+            MarketDataProviderKind::Finnhub => {
+                let date_from = config.history_date_from.expect("validated in config");
+                let date_to = config.history_date_to.expect("validated in config");
+                let provider = FinnhubProvider::new(
+                    config.finnhub_base_url.clone(),
+                    config.finnhub_api_key.clone().expect("validated in config"),
+                    config.http_timeout,
+                    config.provider_delay,
+                    config.provider_symbol_map.clone(),
+                )?;
+                let job = FillMissingPriceHistoryCacheJob::new_with_symbol_allowlist(
+                    provider,
+                    date_from,
+                    date_to,
+                    config
+                        .symbol_allowlist
+                        .clone()
+                        .expect("validated in config"),
+                );
                 let runner = JobRunner::new(config.mode, config.run_interval, job);
                 runner.run(state, cancel).await
             }

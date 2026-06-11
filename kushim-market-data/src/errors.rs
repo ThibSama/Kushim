@@ -18,6 +18,8 @@ pub enum MarketDataError {
     HealthServer(String),
     #[error("job error: {0}")]
     Job(String),
+    #[error("provider error: {0}")]
+    Provider(String),
 }
 
 impl IntoResponse for MarketDataError {
@@ -33,7 +35,7 @@ impl IntoResponse for MarketDataError {
                 "database_unavailable",
                 "market-data database dependency is unavailable",
             ),
-            Self::Job(_) => (
+            Self::Job(_) | Self::Provider(_) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "job_error",
                 "market-data job failed",

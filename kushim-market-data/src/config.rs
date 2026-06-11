@@ -1,5 +1,5 @@
-use crate::errors::MarketDataError;
-use std::{env, net::IpAddr, str::FromStr, time::Duration};
+use crate::{errors::MarketDataError, symbol_filter::SymbolAllowlist};
+use std::{collections::HashMap, env, net::IpAddr, str::FromStr, time::Duration};
 use time::{Date, Month};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,12 +69,14 @@ impl FromStr for MarketDataJob {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MarketDataProviderKind {
     Mock,
+    Finnhub,
 }
 
 impl MarketDataProviderKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Mock => "mock",
+            Self::Finnhub => "finnhub",
         }
     }
 }
@@ -85,8 +87,9 @@ impl FromStr for MarketDataProviderKind {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
             "mock" => Ok(Self::Mock),
+            "finnhub" => Ok(Self::Finnhub),
             _ => Err(MarketDataError::Config(format!(
-                "MARKET_DATA_PROVIDER must be one of mock; got `{value}`"
+                "MARKET_DATA_PROVIDER must be one of mock, finnhub; got `{value}`"
             ))),
         }
     }
@@ -105,6 +108,12 @@ pub struct Config {
     pub run_interval: Duration,
     pub history_date_from: Option<Date>,
     pub history_date_to: Option<Date>,
+    pub finnhub_api_key: Option<String>,
+    pub finnhub_base_url: String,
+    pub symbol_allowlist: Option<SymbolAllowlist>,
+    pub provider_symbol_map: HashMap<String, String>,
+    pub http_timeout: Duration,
+    pub provider_delay: Duration,
 }
 
 impl Config {
@@ -144,6 +153,20 @@ impl Config {
 
         let history_date_from = optional_date_env("MARKET_DATA_HISTORY_DATE_FROM")?;
         let history_date_to = optional_date_env("MARKET_DATA_HISTORY_DATE_TO")?;
+        let finnhub_api_key = optional_nonblank_env("FINNHUB_API_KEY");
+        let finnhub_base_url = env::var("FINNHUB_BASE_URL")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "https://finnhub.io/api/v1".to_string());
+        let symbol_allowlist = env::var("MARKET_DATA_SYMBOL_ALLOWLIST")
+            .ok()
+            .and_then(|value| SymbolAllowlist::parse(&value));
+        let provider_symbol_map =
+            optional_provider_symbol_map_env("MARKET_DATA_PROVIDER_SYMBOL_MAP")?;
+        let http_timeout =
+            Duration::from_secs(parse_positive_u64("MARKET_DATA_HTTP_TIMEOUT_SECONDS", 10)?);
+        let provider_delay =
+            Duration::from_millis(parse_u64("MARKET_DATA_PROVIDER_DELAY_MS", 1_100)?);
 
         if job == MarketDataJob::FillMissingPriceHistoryCache {
             let from = history_date_from.ok_or_else(|| {
@@ -171,6 +194,26 @@ impl Config {
             }
         }
 
+        if provider == MarketDataProviderKind::Finnhub {
+            let api_key = finnhub_api_key.as_deref().ok_or_else(|| {
+                MarketDataError::Config(
+                    "FINNHUB_API_KEY is required when MARKET_DATA_PROVIDER=finnhub".to_string(),
+                )
+            })?;
+            if api_key.eq_ignore_ascii_case("change_me") {
+                return Err(MarketDataError::Config(
+                    "FINNHUB_API_KEY must be set to a real API key when MARKET_DATA_PROVIDER=finnhub"
+                        .to_string(),
+                ));
+            }
+            if symbol_allowlist.is_none() {
+                return Err(MarketDataError::Config(
+                    "MARKET_DATA_SYMBOL_ALLOWLIST is required when MARKET_DATA_PROVIDER=finnhub"
+                        .to_string(),
+                ));
+            }
+        }
+
         Ok(Self {
             database_url,
             app_env,
@@ -183,6 +226,12 @@ impl Config {
             run_interval,
             history_date_from,
             history_date_to,
+            finnhub_api_key,
+            finnhub_base_url,
+            symbol_allowlist,
+            provider_symbol_map,
+            http_timeout,
+            provider_delay,
         })
     }
 }
@@ -206,6 +255,45 @@ fn optional_date_env(key: &str) -> Result<Option<Date>, MarketDataError> {
         Ok(value) if !value.trim().is_empty() => parse_date(key, &value).map(Some),
         _ => Ok(None),
     }
+}
+
+fn optional_nonblank_env(key: &str) -> Option<String> {
+    env::var(key)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn optional_provider_symbol_map_env(key: &str) -> Result<HashMap<String, String>, MarketDataError> {
+    let Some(value) = optional_nonblank_env(key) else {
+        return Ok(HashMap::new());
+    };
+
+    let mut map = HashMap::new();
+    for entry in value.split(',') {
+        let entry = entry.trim();
+        if entry.is_empty() {
+            continue;
+        }
+
+        let Some((canonical, provider_symbol)) = entry.split_once('=') else {
+            return Err(MarketDataError::Config(format!(
+                "{key} entries must use CANONICAL=PROVIDER_SYMBOL format; got `{entry}`"
+            )));
+        };
+
+        let canonical = canonical.trim().to_ascii_uppercase();
+        let provider_symbol = provider_symbol.trim();
+        if canonical.is_empty() || provider_symbol.is_empty() {
+            return Err(MarketDataError::Config(format!(
+                "{key} entries must not contain blank symbols; got `{entry}`"
+            )));
+        }
+
+        map.insert(canonical, provider_symbol.to_string());
+    }
+
+    Ok(map)
 }
 
 fn parse_date(key: &str, value: &str) -> Result<Date, MarketDataError> {
@@ -243,6 +331,15 @@ fn parse_positive_u64(key: &str, default: u64) -> Result<u64, MarketDataError> {
     }
 
     Ok(parsed)
+}
+
+fn parse_u64(key: &str, default: u64) -> Result<u64, MarketDataError> {
+    let value = env::var(key).unwrap_or_else(|_| default.to_string());
+    value.parse::<u64>().map_err(|_| {
+        MarketDataError::Config(format!(
+            "{key} must be a non-negative integer; got `{value}`"
+        ))
+    })
 }
 
 #[cfg(test)]
@@ -290,6 +387,12 @@ mod tests {
         "MARKET_DATA_PROVIDER",
         "MARKET_DATA_HISTORY_DATE_FROM",
         "MARKET_DATA_HISTORY_DATE_TO",
+        "FINNHUB_API_KEY",
+        "FINNHUB_BASE_URL",
+        "MARKET_DATA_SYMBOL_ALLOWLIST",
+        "MARKET_DATA_PROVIDER_SYMBOL_MAP",
+        "MARKET_DATA_HTTP_TIMEOUT_SECONDS",
+        "MARKET_DATA_PROVIDER_DELAY_MS",
     ];
 
     fn set_minimal_env() {
@@ -308,6 +411,12 @@ mod tests {
             std::env::remove_var("MARKET_DATA_PROVIDER");
             std::env::remove_var("MARKET_DATA_HISTORY_DATE_FROM");
             std::env::remove_var("MARKET_DATA_HISTORY_DATE_TO");
+            std::env::remove_var("FINNHUB_API_KEY");
+            std::env::remove_var("FINNHUB_BASE_URL");
+            std::env::remove_var("MARKET_DATA_SYMBOL_ALLOWLIST");
+            std::env::remove_var("MARKET_DATA_PROVIDER_SYMBOL_MAP");
+            std::env::remove_var("MARKET_DATA_HTTP_TIMEOUT_SECONDS");
+            std::env::remove_var("MARKET_DATA_PROVIDER_DELAY_MS");
         }
     }
 
@@ -339,6 +448,12 @@ mod tests {
         assert_eq!(config.job, MarketDataJob::Noop);
         assert_eq!(config.provider, MarketDataProviderKind::Mock);
         assert_eq!(config.run_interval.as_secs(), 60);
+        assert_eq!(config.finnhub_base_url, "https://finnhub.io/api/v1");
+        assert_eq!(config.http_timeout.as_secs(), 10);
+        assert_eq!(config.provider_delay.as_millis(), 1_100);
+        assert!(config.finnhub_api_key.is_none());
+        assert!(config.symbol_allowlist.is_none());
+        assert!(config.provider_symbol_map.is_empty());
         assert!(config.history_date_from.is_none());
         assert!(config.history_date_to.is_none());
     }
@@ -359,6 +474,12 @@ mod tests {
         assert_eq!(config.job, MarketDataJob::Noop);
         assert_eq!(config.provider, MarketDataProviderKind::Mock);
         assert_eq!(config.run_interval.as_secs(), 300);
+        assert_eq!(config.finnhub_base_url, "https://finnhub.io/api/v1");
+        assert_eq!(config.http_timeout.as_secs(), 10);
+        assert_eq!(config.provider_delay.as_millis(), 1_100);
+        assert!(config.finnhub_api_key.is_none());
+        assert!(config.symbol_allowlist.is_none());
+        assert!(config.provider_symbol_map.is_empty());
         assert!(config.history_date_from.is_none());
         assert!(config.history_date_to.is_none());
     }
@@ -482,6 +603,111 @@ mod tests {
 
         let error = Config::from_env().expect_err("invalid provider should fail");
         assert!(error.to_string().contains("MARKET_DATA_PROVIDER"));
+    }
+
+    #[test]
+    fn finnhub_requires_api_key() {
+        let _guard = lock_env();
+        let _restore = EnvRestore::capture(ENV_KEYS);
+        set_minimal_env();
+        unsafe {
+            std::env::set_var("MARKET_DATA_PROVIDER", "finnhub");
+            std::env::set_var("MARKET_DATA_SYMBOL_ALLOWLIST", "AAPL");
+        }
+
+        let error = Config::from_env().expect_err("missing Finnhub key should fail");
+        assert!(error.to_string().contains("FINNHUB_API_KEY"));
+    }
+
+    #[test]
+    fn finnhub_rejects_placeholder_api_key() {
+        let _guard = lock_env();
+        let _restore = EnvRestore::capture(ENV_KEYS);
+        set_minimal_env();
+        unsafe {
+            std::env::set_var("MARKET_DATA_PROVIDER", "finnhub");
+            std::env::set_var("FINNHUB_API_KEY", "change_me");
+            std::env::set_var("MARKET_DATA_SYMBOL_ALLOWLIST", "AAPL");
+        }
+
+        let error = Config::from_env().expect_err("placeholder Finnhub key should fail");
+        assert!(error.to_string().contains("FINNHUB_API_KEY"));
+    }
+
+    #[test]
+    fn finnhub_requires_symbol_allowlist() {
+        let _guard = lock_env();
+        let _restore = EnvRestore::capture(ENV_KEYS);
+        set_minimal_env();
+        unsafe {
+            std::env::set_var("MARKET_DATA_PROVIDER", "finnhub");
+            std::env::set_var("FINNHUB_API_KEY", "test_key");
+        }
+
+        let error = Config::from_env().expect_err("missing allowlist should fail");
+        assert!(error.to_string().contains("MARKET_DATA_SYMBOL_ALLOWLIST"));
+    }
+
+    #[test]
+    fn finnhub_accepts_required_provider_env() {
+        let _guard = lock_env();
+        let _restore = EnvRestore::capture(ENV_KEYS);
+        set_minimal_env();
+        unsafe {
+            std::env::set_var("MARKET_DATA_PROVIDER", "finnhub");
+            std::env::set_var("FINNHUB_API_KEY", "test_key");
+            std::env::set_var("FINNHUB_BASE_URL", "http://127.0.0.1:9999");
+            std::env::set_var("MARKET_DATA_SYMBOL_ALLOWLIST", "aapl,MSFT");
+            std::env::set_var("MARKET_DATA_PROVIDER_SYMBOL_MAP", "btc=BINANCE:BTCUSDT");
+            std::env::set_var("MARKET_DATA_HTTP_TIMEOUT_SECONDS", "3");
+            std::env::set_var("MARKET_DATA_PROVIDER_DELAY_MS", "0");
+        }
+
+        let config = Config::from_env().expect("Finnhub config should parse");
+        assert_eq!(config.provider, MarketDataProviderKind::Finnhub);
+        assert_eq!(config.finnhub_api_key.as_deref(), Some("test_key"));
+        assert_eq!(config.finnhub_base_url, "http://127.0.0.1:9999");
+        assert_eq!(config.http_timeout.as_secs(), 3);
+        assert_eq!(config.provider_delay.as_millis(), 0);
+        assert_eq!(
+            config.symbol_allowlist.unwrap().symbols(),
+            &["AAPL".to_string(), "MSFT".to_string()]
+        );
+        assert_eq!(
+            config.provider_symbol_map.get("BTC").map(String::as_str),
+            Some("BINANCE:BTCUSDT")
+        );
+    }
+
+    #[test]
+    fn mock_works_without_finnhub_vars() {
+        let _guard = lock_env();
+        let _restore = EnvRestore::capture(ENV_KEYS);
+        set_minimal_env();
+
+        let config = Config::from_env().expect("mock config should parse");
+
+        assert_eq!(config.provider, MarketDataProviderKind::Mock);
+        assert!(config.finnhub_api_key.is_none());
+        assert!(config.symbol_allowlist.is_none());
+        assert!(config.provider_symbol_map.is_empty());
+    }
+
+    #[test]
+    fn provider_symbol_map_rejects_invalid_entries() {
+        let _guard = lock_env();
+        let _restore = EnvRestore::capture(ENV_KEYS);
+        set_minimal_env();
+        unsafe {
+            std::env::set_var("MARKET_DATA_PROVIDER_SYMBOL_MAP", "BTC");
+        }
+
+        let error = Config::from_env().expect_err("invalid symbol map should fail");
+        assert!(
+            error
+                .to_string()
+                .contains("MARKET_DATA_PROVIDER_SYMBOL_MAP")
+        );
     }
 
     #[test]

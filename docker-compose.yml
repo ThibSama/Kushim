@@ -90,6 +90,8 @@ services:
       context: ./kushim-market-data
     env_file:
       - ./kushim-market-data/.env.example
+      - path: ./kushim-market-data/.env
+        required: false
     environment:
       DATABASE_URL: postgresql://kushim:kushim_secret_dev@database:5432/kushim
       APP_ENV: docker

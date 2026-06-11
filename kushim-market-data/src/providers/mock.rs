@@ -60,34 +60,51 @@ impl MarketDataProvider for MockProvider {
         "mock"
     }
 
-    fn get_quote(&self, asset: &ActiveAsset) -> Option<CurrentQuote> {
-        let lookup_key = asset.symbol.as_deref().or(asset.ticker.as_deref())?;
+    async fn get_quote(
+        &self,
+        asset: &ActiveAsset,
+    ) -> Result<Option<CurrentQuote>, crate::errors::MarketDataError> {
+        let Some(lookup_key) = asset.symbol.as_deref().or(asset.ticker.as_deref()) else {
+            return Ok(None);
+        };
 
-        let mock = MOCK_QUOTES
+        let Some(mock) = MOCK_QUOTES
             .iter()
-            .find(|q| q.key.eq_ignore_ascii_case(lookup_key))?;
+            .find(|q| q.key.eq_ignore_ascii_case(lookup_key))
+        else {
+            return Ok(None);
+        };
 
-        Some(CurrentQuote {
+        Ok(Some(CurrentQuote {
             price_minor: mock.price_minor,
             currency: mock.currency.to_string(),
             data_source: "mock".to_string(),
             as_of: OffsetDateTime::now_utc(),
-        })
+        }))
     }
 
-    fn get_historical_quote(&self, asset: &ActiveAsset, date: Date) -> Option<HistoricalQuote> {
-        let lookup_key = asset.symbol.as_deref().or(asset.ticker.as_deref())?;
+    async fn get_historical_quote(
+        &self,
+        asset: &ActiveAsset,
+        date: Date,
+    ) -> Result<Option<HistoricalQuote>, crate::errors::MarketDataError> {
+        let Some(lookup_key) = asset.symbol.as_deref().or(asset.ticker.as_deref()) else {
+            return Ok(None);
+        };
 
-        let mock = MOCK_QUOTES
+        let Some(mock) = MOCK_QUOTES
             .iter()
-            .find(|q| q.key.eq_ignore_ascii_case(lookup_key))?;
+            .find(|q| q.key.eq_ignore_ascii_case(lookup_key))
+        else {
+            return Ok(None);
+        };
 
-        Some(HistoricalQuote {
+        Ok(Some(HistoricalQuote {
             close_minor: deterministic_historical_price(mock.price_minor, date),
             currency: mock.currency.to_string(),
             data_source: "mock".to_string(),
             price_date: date,
-        })
+        }))
     }
 }
 
@@ -116,11 +133,13 @@ mod tests {
         }
     }
 
-    #[test]
-    fn returns_quote_for_supported_symbol() {
+    #[tokio::test]
+    async fn returns_quote_for_supported_symbol() {
         let provider = MockProvider;
         let quote = provider
             .get_quote(&asset_with_symbol("AAPL"))
+            .await
+            .expect("mock provider should not error")
             .expect("AAPL should be supported");
 
         assert_eq!(quote.price_minor, 19_523);
@@ -128,24 +147,32 @@ mod tests {
         assert_eq!(quote.data_source, "mock");
     }
 
-    #[test]
-    fn returns_quote_via_ticker_fallback() {
+    #[tokio::test]
+    async fn returns_quote_via_ticker_fallback() {
         let provider = MockProvider;
         let quote = provider
             .get_quote(&asset_with_ticker("MSFT"))
+            .await
+            .expect("mock provider should not error")
             .expect("MSFT ticker should be supported");
 
         assert_eq!(quote.price_minor, 42_150);
     }
 
-    #[test]
-    fn returns_none_for_unsupported_symbol() {
+    #[tokio::test]
+    async fn returns_none_for_unsupported_symbol() {
         let provider = MockProvider;
-        assert!(provider.get_quote(&asset_with_symbol("UNKNOWN")).is_none());
+        assert!(
+            provider
+                .get_quote(&asset_with_symbol("UNKNOWN"))
+                .await
+                .expect("mock provider should not error")
+                .is_none()
+        );
     }
 
-    #[test]
-    fn returns_none_for_asset_without_identifiers() {
+    #[tokio::test]
+    async fn returns_none_for_asset_without_identifiers() {
         let provider = MockProvider;
         let asset = ActiveAsset {
             id_asset: Uuid::new_v4(),
@@ -153,34 +180,46 @@ mod tests {
             ticker: None,
             native_currency: None,
         };
-        assert!(provider.get_quote(&asset).is_none());
+        assert!(
+            provider
+                .get_quote(&asset)
+                .await
+                .expect("mock provider should not error")
+                .is_none()
+        );
     }
 
-    #[test]
-    fn case_insensitive_matching() {
+    #[tokio::test]
+    async fn case_insensitive_matching() {
         let provider = MockProvider;
         let quote = provider
             .get_quote(&asset_with_symbol("aapl"))
+            .await
+            .expect("mock provider should not error")
             .expect("lowercase aapl should match");
         assert_eq!(quote.price_minor, 19_523);
     }
 
-    #[test]
-    fn crypto_quote_is_deterministic() {
+    #[tokio::test]
+    async fn crypto_quote_is_deterministic() {
         let provider = MockProvider;
         let quote = provider
             .get_quote(&asset_with_symbol("BTC"))
+            .await
+            .expect("mock provider should not error")
             .expect("BTC should be supported");
         assert_eq!(quote.price_minor, 670_000_000);
         assert_eq!(quote.currency, "USD");
     }
 
-    #[test]
-    fn historical_quote_for_supported_asset() {
+    #[tokio::test]
+    async fn historical_quote_for_supported_asset() {
         let provider = MockProvider;
         let date = time::Date::from_calendar_date(2026, time::Month::January, 15).unwrap();
         let quote = provider
             .get_historical_quote(&asset_with_symbol("AAPL"), date)
+            .await
+            .expect("mock provider should not error")
             .expect("AAPL should be supported");
 
         assert!(quote.close_minor > 0);
@@ -189,42 +228,52 @@ mod tests {
         assert_eq!(quote.price_date, date);
     }
 
-    #[test]
-    fn historical_quote_is_deterministic() {
+    #[tokio::test]
+    async fn historical_quote_is_deterministic() {
         let provider = MockProvider;
         let date = time::Date::from_calendar_date(2026, time::Month::March, 10).unwrap();
         let q1 = provider
             .get_historical_quote(&asset_with_symbol("MSFT"), date)
+            .await
+            .expect("mock provider should not error")
             .unwrap();
         let q2 = provider
             .get_historical_quote(&asset_with_symbol("MSFT"), date)
+            .await
+            .expect("mock provider should not error")
             .unwrap();
 
         assert_eq!(q1.close_minor, q2.close_minor);
     }
 
-    #[test]
-    fn historical_quote_varies_by_date() {
+    #[tokio::test]
+    async fn historical_quote_varies_by_date() {
         let provider = MockProvider;
         let d1 = time::Date::from_calendar_date(2026, time::Month::January, 1).unwrap();
         let d2 = time::Date::from_calendar_date(2026, time::Month::June, 15).unwrap();
         let q1 = provider
             .get_historical_quote(&asset_with_symbol("AAPL"), d1)
+            .await
+            .expect("mock provider should not error")
             .unwrap();
         let q2 = provider
             .get_historical_quote(&asset_with_symbol("AAPL"), d2)
+            .await
+            .expect("mock provider should not error")
             .unwrap();
 
         assert_ne!(q1.close_minor, q2.close_minor);
     }
 
-    #[test]
-    fn historical_quote_none_for_unsupported() {
+    #[tokio::test]
+    async fn historical_quote_none_for_unsupported() {
         let provider = MockProvider;
         let date = time::Date::from_calendar_date(2026, time::Month::January, 1).unwrap();
         assert!(
             provider
                 .get_historical_quote(&asset_with_symbol("UNKNOWN"), date)
+                .await
+                .expect("mock provider should not error")
                 .is_none()
         );
     }
