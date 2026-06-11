@@ -1,0 +1,200 @@
+name: MVP Smoke Checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # ─── Frontend ──────────────────────────────────────────────────────
+  kushim-app:
+    name: "kushim-app (lint + build)"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: kushim-app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: kushim-app/package-lock.json
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+
+  # ─── Rust services ─────────────────────────────────────────────────
+  # Each Rust service is an independent Cargo project (no root workspace).
+  # Integration tests in job modules require PostgreSQL with the full DDL.
+
+  kushim-market-data:
+    name: "kushim-market-data (fmt + clippy + test)"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: kushim-market-data
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: kushim
+          POSTGRES_PASSWORD: kushim_secret_dev
+          POSTGRES_DB: kushim
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U kushim"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://kushim:kushim_secret_dev@localhost:5432/kushim
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Init database schema
+        run: psql "$DATABASE_URL" -f ../infra/postgres/init/001_init.sql
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: kushim-market-data
+
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets --all-features -- -D warnings
+      - run: cargo test
+
+  kushim-api:
+    name: "kushim-api (fmt + clippy + test)"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: kushim-api
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: kushim
+          POSTGRES_PASSWORD: kushim_secret_dev
+          POSTGRES_DB: kushim
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U kushim"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://kushim:kushim_secret_dev@localhost:5432/kushim
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Init database schema
+        run: psql "$DATABASE_URL" -f ../infra/postgres/init/001_init.sql
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: kushim-api
+
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets --all-features -- -D warnings
+      - run: cargo test
+
+  kushim-worker:
+    name: "kushim-worker (fmt + clippy + test)"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: kushim-worker
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: kushim
+          POSTGRES_PASSWORD: kushim_secret_dev
+          POSTGRES_DB: kushim
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U kushim"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://kushim:kushim_secret_dev@localhost:5432/kushim
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Init database schema
+        run: psql "$DATABASE_URL" -f ../infra/postgres/init/001_init.sql
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: kushim-worker
+
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets --all-features -- -D warnings
+      - run: cargo test
+
+  kushim-auth-api:
+    name: "kushim-auth-api (fmt + clippy + test)"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: kushim-auth/api
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: kushim
+          POSTGRES_PASSWORD: kushim_secret_dev
+          POSTGRES_DB: kushim
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U kushim"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://kushim:kushim_secret_dev@localhost:5432/kushim
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Init database schema
+        run: psql "$DATABASE_URL" -f ../../infra/postgres/init/001_init.sql
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: kushim-auth/api
+
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets --all-features -- -D warnings
+      - run: cargo test
