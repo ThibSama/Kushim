@@ -1,30 +1,76 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import {
-  Search,
-  Download,
-  Plus,
-  ArrowLeftRight,
-  ChevronDown,
-  ChevronUp,
-  MoreHorizontal,
-  PencilLine,
-  Trash2,
-} from "lucide-react";
+import { Search, Loader2, ChevronDown, AlertCircle } from "lucide-react";
 import { Card } from "../components/Card";
-import { SwapModal } from "../components/SwapModal";
-import {
-  calculateAssetMetrics,
-  calculateSectorMetrics,
-  formatCurrency,
-  formatQuantity,
-  formatSignedCurrency,
-  formatSignedPercent,
-  getPerformanceTone,
-} from "../../utils/portfolio";
-import { assetGroups as groups } from "../../mocks/demoPortfolio";
+import { type AssetFilters } from "../../lib/api/businessApi";
+import { useAssetsStore } from "../../stores/assets";
 
-const groupByOptions = ["Secteur", "Compte", "Devise", "Classe d'actifs"];
+const ASSET_CLASS_LABELS: Record<string, string> = {
+  equity: "Action",
+  etf: "ETF",
+  fund: "Fonds",
+  bond: "Obligation",
+  crypto: "Crypto",
+  commodity: "Matière première",
+  cash: "Cash",
+  forex: "Forex",
+  index: "Indice",
+  real_estate: "Immobilier",
+  private_equity: "Private Equity",
+  derivative: "Dérivé",
+  other: "Autre",
+};
+
+const ASSET_CLASS_OPTIONS = [
+  { value: "", label: "Toutes les classes" },
+  { value: "equity", label: "Actions" },
+  { value: "etf", label: "ETF" },
+  { value: "fund", label: "Fonds" },
+  { value: "bond", label: "Obligations" },
+  { value: "crypto", label: "Crypto" },
+  { value: "commodity", label: "Matières premières" },
+  { value: "real_estate", label: "Immobilier" },
+  { value: "other", label: "Autre" },
+];
+
+const STATUS_OPTIONS = [
+  { value: "", label: "Tous les statuts" },
+  { value: "active", label: "Actif" },
+  { value: "inactive", label: "Inactif" },
+  { value: "delisted", label: "Délisté" },
+];
+
+const PAGE_SIZE = 25;
+
+function assetClassLabel(cls: string): string {
+  return ASSET_CLASS_LABELS[cls] ?? cls;
+}
+
+function formatPrice(minor: number, currency: string): string {
+  const value = minor / 100;
+  try {
+    return new Intl.NumberFormat("fr-FR", {
+      style: "currency",
+      currency,
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(value);
+  } catch {
+    return `${value.toFixed(2)} ${currency}`;
+  }
+}
+
+function buildFilters(
+  search: string,
+  assetClass: string,
+  statusVal: string,
+): AssetFilters {
+  const f: AssetFilters = { limit: PAGE_SIZE };
+  if (search) f.search = search;
+  if (assetClass) f.asset_class = assetClass;
+  if (statusVal) f.status = statusVal;
+  return f;
+}
 
 const thStyle: React.CSSProperties = {
   fontSize: "11px",
@@ -36,80 +82,28 @@ const thStyle: React.CSSProperties = {
   whiteSpace: "nowrap",
 };
 
-const monoCell: React.CSSProperties = {
-  fontFamily: "'JetBrains Mono', monospace",
-  fontSize: "14px",
-  fontVariantNumeric: "tabular-nums",
-  color: "var(--text-primary)",
-  padding: "14px 12px",
-  whiteSpace: "nowrap",
-};
-
-const quickInputStyle: React.CSSProperties = {
-  width: "100%",
-  background: "var(--surface-2-bg)",
-  border: "1px solid var(--surface-2-border)",
-  borderRadius: "var(--radius-md)",
-  padding: "10px 12px",
-  fontSize: "13px",
-  color: "var(--text-primary)",
-};
-
-const quickActionStyle: React.CSSProperties = {
-  height: "36px",
-  padding: "0 14px",
-  borderRadius: "var(--radius-md)",
-  border: "1px solid var(--surface-1-border)",
-  background: "transparent",
-  fontSize: "13px",
-  fontWeight: 600,
-  cursor: "pointer",
-};
-
 export function Assets() {
+  const { assets, pagination, status, error, loadAssets, loadMoreAssets } =
+    useAssetsStore();
   const [search, setSearch] = useState("");
-  const [groupBy, setGroupBy] = useState("Secteur");
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>(() => {
-    const init: Record<string, boolean> = {};
-    groups.forEach((g) => {
-      if (g.defaultCollapsed) init[g.name] = true;
-    });
-    return init;
-  });
-  const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
-  const [editValues, setEditValues] = useState<{
-    id: string;
-    quantity: string;
-    purchasePrice: string;
-  } | null>(null);
-  const [showSwap, setShowSwap] = useState(false);
+  const [assetClass, setAssetClass] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [searchDebounced, setSearchDebounced] = useState("");
   const navigate = useNavigate();
 
   useEffect(() => {
-    if (!menuOpenId) return;
-    const handle = () => setMenuOpenId(null);
-    document.addEventListener("click", handle);
-    return () => document.removeEventListener("click", handle);
-  }, [menuOpenId]);
+    const timer = setTimeout(() => setSearchDebounced(search), 300);
+    return () => clearTimeout(timer);
+  }, [search]);
 
-  const toggle = (name: string) =>
-    setCollapsed((p) => ({ ...p, [name]: !p[name] }));
+  useEffect(() => {
+    loadAssets(buildFilters(searchDebounced, assetClass, statusFilter));
+  }, [searchDebounced, assetClass, statusFilter, loadAssets]);
 
-  const filtered = groups
-    .map((g) => ({
-      ...g,
-      sectorMetrics: calculateSectorMetrics(g.assets),
-      assets: g.assets.filter(
-        (a) =>
-          a.name.toLowerCase().includes(search.toLowerCase()) ||
-          a.ticker.toLowerCase().includes(search.toLowerCase()),
-      ),
-    }))
-    .filter((g) => g.assets.length > 0);
+  const loading = status === "loading";
 
   return (
     <div className="app-page-container max-w-[1200px] mx-auto px-4 sm:px-6 py-12">
-      {/* Header */}
       <div className="mb-6">
         <h1
           style={{
@@ -117,7 +111,7 @@ export function Assets() {
             fontWeight: 700,
             color: "var(--text-primary)",
           }}>
-          Actifs
+          Catalogue d'actifs
         </h1>
         <p
           style={{
@@ -125,649 +119,393 @@ export function Assets() {
             color: "var(--text-secondary)",
             marginTop: "4px",
           }}>
-          Vue consolidée de toutes les positions sur l'ensemble des comptes
+          Instruments disponibles dans Kushim
         </p>
       </div>
 
       {/* Toolbar */}
-      <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center sm:justify-between gap-3 mt-6 mb-8">
-        {/* Mobile: Stack filters vertically */}
-        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full sm:w-auto">
-          {/* Group by dropdown */}
-          <div className="relative w-full sm:w-auto">
-            <select
-              value={groupBy}
-              onChange={(e) => setGroupBy(e.target.value)}
-              className="appearance-none pr-8 cursor-pointer w-full sm:w-auto"
-              style={{
-                background: "var(--surface-2-bg)",
-                border: "1px solid var(--surface-2-border)",
-                borderRadius: "var(--radius-md)",
-                height: "44px",
-                paddingLeft: "16px",
-                paddingRight: "36px",
-                fontSize: "14px",
-                color: "var(--text-primary)",
-                fontWeight: 500,
-              }}>
-              {groupByOptions.map((o) => (
-                <option key={o} value={o}>{`Grouper par : ${o}`}</option>
-              ))}
-            </select>
-            <ChevronDown
-              size={16}
-              className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none"
-              style={{ color: "var(--text-tertiary)" }}
-            />
-          </div>
-
-          {/* Search */}
-          <div className="relative w-full sm:w-auto">
-            <Search
-              size={16}
-              className="absolute left-3 top-1/2 -translate-y-1/2"
-              style={{ color: "var(--text-tertiary)" }}
-            />
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Rechercher un actif…"
-              className="w-full sm:w-[280px]"
-              style={{
-                background: "var(--surface-2-bg)",
-                border: "1px solid var(--surface-2-border)",
-                borderRadius: "var(--radius-md)",
-                height: "44px",
-                paddingLeft: "36px",
-                paddingRight: "16px",
-                fontSize: "14px",
-                color: "var(--text-primary)",
-              }}
-            />
-          </div>
+      <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-3 mt-6 mb-8">
+        <div className="relative w-full sm:w-auto sm:flex-1 sm:max-w-[320px]">
+          <Search
+            size={16}
+            className="absolute left-3 top-1/2 -translate-y-1/2"
+            style={{ color: "var(--text-tertiary)" }}
+          />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Rechercher (nom, ticker, ISIN)…"
+            className="w-full"
+            style={{
+              background: "var(--surface-2-bg)",
+              border: "1px solid var(--surface-2-border)",
+              borderRadius: "var(--radius-md)",
+              height: "44px",
+              paddingLeft: "36px",
+              paddingRight: "16px",
+              fontSize: "14px",
+              color: "var(--text-primary)",
+            }}
+          />
         </div>
 
-        {/* Action buttons */}
-        <div className="flex items-center gap-3 w-full sm:w-auto">
-          <button
+        <div className="relative w-full sm:w-auto">
+          <select
+            value={assetClass}
+            onChange={(e) => setAssetClass(e.target.value)}
+            className="appearance-none pr-8 cursor-pointer w-full sm:w-auto"
             style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: "6px",
-              height: "44px",
-              padding: "0 16px",
+              background: "var(--surface-2-bg)",
+              border: "1px solid var(--surface-2-border)",
               borderRadius: "var(--radius-md)",
-              border: "1px solid var(--surface-1-border)",
-              background: "transparent",
+              height: "44px",
+              paddingLeft: "16px",
+              paddingRight: "36px",
               fontSize: "14px",
-              fontWeight: 500,
               color: "var(--text-primary)",
-              cursor: "pointer",
-              flex: "1",
-            }}>
-            <Download size={16} />
-            <span className="hidden sm:inline">Exporter</span>
-          </button>
-          <button
-            onClick={() => setShowSwap(true)}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: "6px",
-              height: "44px",
-              padding: "0 16px",
-              borderRadius: "var(--radius-md)",
-              border: "1px solid var(--surface-1-border)",
-              background: "transparent",
-              fontSize: "14px",
               fontWeight: 500,
-              color: "var(--text-primary)",
-              cursor: "pointer",
-              flex: "1",
             }}>
-            <ArrowLeftRight size={16} />
-            <span className="hidden sm:inline">Échanger des actifs</span>
-          </button>
-          <button
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: "6px",
-              height: "44px",
-              padding: "0 16px",
-              borderRadius: "var(--radius-md)",
-              border: "none",
-              background: "var(--color-cta-bg)",
-              fontSize: "14px",
-              fontWeight: 600,
-              color: "var(--color-cta-text)",
-              cursor: "pointer",
-              flex: "1",
-            }}>
-            <Plus size={16} />
-            <span className="hidden sm:inline">Ajouter un actif</span>
-          </button>
+            {ASSET_CLASS_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+          <ChevronDown
+            size={16}
+            className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none"
+            style={{ color: "var(--text-tertiary)" }}
+          />
         </div>
+
+        <div className="relative w-full sm:w-auto">
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            className="appearance-none pr-8 cursor-pointer w-full sm:w-auto"
+            style={{
+              background: "var(--surface-2-bg)",
+              border: "1px solid var(--surface-2-border)",
+              borderRadius: "var(--radius-md)",
+              height: "44px",
+              paddingLeft: "16px",
+              paddingRight: "36px",
+              fontSize: "14px",
+              color: "var(--text-primary)",
+              fontWeight: 500,
+            }}>
+            {STATUS_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+          <ChevronDown
+            size={16}
+            className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none"
+            style={{ color: "var(--text-tertiary)" }}
+          />
+        </div>
+
+        {status === "success" && pagination && (
+          <span
+            style={{
+              fontSize: "13px",
+              color: "var(--text-tertiary)",
+              whiteSpace: "nowrap",
+            }}>
+            {assets.length} actif{assets.length !== 1 ? "s" : ""} affiché
+            {assets.length !== 1 ? "s" : ""}
+            {pagination.has_more ? " (d'autres disponibles)" : ""}
+          </span>
+        )}
       </div>
 
-      <SwapModal isOpen={showSwap} onClose={() => setShowSwap(false)} />
+      {/* Error state */}
+      {error && (
+        <Card level={1} className="mb-6">
+          <div
+            className="flex items-center gap-3"
+            style={{ color: "var(--color-loss)" }}>
+            <AlertCircle size={20} />
+            <div>
+              <div style={{ fontWeight: 600, fontSize: "14px" }}>
+                Impossible de charger les actifs
+              </div>
+              <div
+                style={{
+                  fontSize: "13px",
+                  color: "var(--text-secondary)",
+                  marginTop: "2px",
+                }}>
+                {error}
+              </div>
+            </div>
+          </div>
+        </Card>
+      )}
 
-      {/* Grouped sections */}
-      {filtered.map((group) => {
-        const isCollapsed = !!collapsed[group.name];
-        const tone = getPerformanceTone(group.sectorMetrics.performance);
-        const toneColor =
-          tone === "positive"
-            ? "var(--color-gain)"
-            : tone === "negative"
-              ? "var(--color-loss)"
-              : "var(--color-neutral)";
+      {/* Loading state (initial) */}
+      {loading && assets.length === 0 && !error && (
+        <div
+          className="flex items-center justify-center gap-3"
+          style={{
+            minHeight: "200px",
+            color: "var(--text-tertiary)",
+            fontSize: "14px",
+          }}>
+          <Loader2 size={20} className="animate-spin" />
+          Chargement des actifs…
+        </div>
+      )}
 
-        return (
-          <Card level={1} className="mb-4" key={group.name}>
-            {/* Group header */}
-            <button
-              onClick={() => toggle(group.name)}
-              className="w-full flex items-start justify-between cursor-pointer"
+      {/* Empty state */}
+      {!loading && !error && assets.length === 0 && (
+        <Card level={1}>
+          <div
+            className="text-center"
+            style={{
+              padding: "40px 20px",
+              color: "var(--text-tertiary)",
+            }}>
+            <div
               style={{
-                background: "none",
-                border: "none",
-                padding: 0,
-                color: "inherit",
-                gap: "8px",
-                minHeight: "44px",
+                fontSize: "16px",
+                fontWeight: 600,
+                marginBottom: "8px",
+                color: "var(--text-secondary)",
               }}>
-              {/* Left: Chevron + Group name */}
-              <div className="flex items-center gap-2 flex-shrink-0">
-                {isCollapsed ? (
-                  <ChevronDown
-                    size={16}
-                    style={{ color: "var(--text-secondary)" }}
-                  />
-                ) : (
-                  <ChevronUp
-                    size={16}
-                    style={{ color: "var(--text-secondary)" }}
-                  />
-                )}
-                <span
-                  style={{
-                    fontSize: "16px",
-                    fontWeight: 700,
-                    color: "var(--text-primary)",
-                  }}
-                  className="md:text-lg">
-                  {group.name}
-                </span>
-                {/* Asset count - hidden on mobile */}
-                <span
-                  className="hidden sm:inline"
-                  style={{
-                    fontSize: "14px",
-                    color: "var(--text-tertiary)",
-                    marginLeft: "4px",
-                  }}>
-                  ({group.assets.length} actif
-                  {group.assets.length > 1 ? "s" : ""})
-                </span>
-              </div>
+              Aucun actif trouvé
+            </div>
+            <div style={{ fontSize: "14px" }}>
+              {searchDebounced || assetClass || statusFilter
+                ? "Essayez de modifier vos critères de recherche ou filtres."
+                : "Aucun actif disponible dans le catalogue."}
+            </div>
+          </div>
+        </Card>
+      )}
 
-              {/* Right: Metrics stack */}
-              <div className="flex flex-col items-end gap-1.5 text-right flex-shrink-0 max-w-[150px] sm:max-w-none">
-                <div
-                  style={{ fontSize: "12px", color: "var(--text-secondary)" }}
-                  aria-label={`Invested capital ${formatCurrency(group.sectorMetrics.investedValue)}`}>
-                  <span className="sm:hidden">Invested: </span>
-                  <span className="hidden sm:inline">Invested capital: </span>
-                  <span
+      {/* Asset table */}
+      {assets.length > 0 && (
+        <Card level={1} noPadding>
+          <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+            <table
+              style={{
+                width: "100%",
+                borderCollapse: "collapse",
+                minWidth: "700px",
+              }}>
+              <thead>
+                <tr>
+                  <th style={{ ...thStyle, textAlign: "left", minWidth: "180px" }}>
+                    Actif
+                  </th>
+                  <th style={{ ...thStyle, textAlign: "center", minWidth: "90px" }}>
+                    Classe
+                  </th>
+                  <th
+                    style={{ ...thStyle, textAlign: "center", minWidth: "90px" }}
+                    className="hidden sm:table-cell">
+                    Bourse
+                  </th>
+                  <th style={{ ...thStyle, textAlign: "center", minWidth: "70px" }}>
+                    Devise
+                  </th>
+                  <th
+                    style={{ ...thStyle, textAlign: "right", minWidth: "120px" }}
+                    className="hidden sm:table-cell">
+                    Prix
+                  </th>
+                  <th style={{ ...thStyle, textAlign: "center", minWidth: "70px" }}>
+                    Statut
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {assets.map((asset, i) => (
+                  <tr
+                    key={asset.id_asset}
+                    onClick={() => navigate(`/assets/${asset.id_asset}`)}
+                    className="transition-colors cursor-pointer"
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = "var(--surface-2-bg)";
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = "transparent";
+                    }}
                     style={{
-                      fontFamily: "'JetBrains Mono', monospace",
-                      fontVariantNumeric: "tabular-nums",
-                      fontSize: "14px",
-                      fontWeight: 600,
-                      color: "var(--text-primary)",
+                      borderBottom:
+                        i < assets.length - 1
+                          ? "1px solid var(--surface-1-border)"
+                          : "none",
                     }}>
-                    {formatCurrency(group.sectorMetrics.investedValue)}
-                  </span>
-                </div>
-                <div
-                  style={{ fontSize: "12px", color: "var(--text-secondary)" }}
-                  aria-label={`Current value ${formatCurrency(group.sectorMetrics.currentValue)}`}>
-                  <span className="sm:hidden">Current: </span>
-                  <span className="hidden sm:inline">Current value: </span>
-                  <span
-                    style={{
-                      fontFamily: "'JetBrains Mono', monospace",
-                      fontVariantNumeric: "tabular-nums",
-                      fontSize: "14px",
-                      fontWeight: 600,
-                      color: "var(--text-primary)",
-                    }}>
-                    {formatCurrency(group.sectorMetrics.currentValue)}
-                  </span>
-                </div>
-                <div
-                  className="whitespace-nowrap"
-                  style={{
-                    fontFamily: "'JetBrains Mono', monospace",
-                    fontVariantNumeric: "tabular-nums",
-                    fontSize: "clamp(11px, 2.6vw, 12px)",
-                    fontWeight: 600,
-                    color: toneColor,
-                  }}
-                  aria-label={`Sector performance ${formatSignedCurrency(group.sectorMetrics.performance)} ${formatSignedPercent(group.sectorMetrics.performancePct)}`}>
-                  {formatSignedCurrency(group.sectorMetrics.performance)} (
-                  {formatSignedPercent(group.sectorMetrics.performancePct)})
-                </div>
-              </div>
-            </button>
+                    <td style={{ padding: "14px 12px", minWidth: "180px" }}>
+                      <div
+                        style={{
+                          fontSize: "14px",
+                          fontWeight: 500,
+                          color: "var(--text-primary)",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                          maxWidth: "280px",
+                        }}>
+                        {asset.name}
+                      </div>
+                      <div className="flex items-center gap-2 mt-0.5">
+                        {(asset.ticker ?? asset.symbol) && (
+                          <span
+                            style={{
+                              fontSize: "12px",
+                              fontWeight: 600,
+                              color: "var(--text-secondary)",
+                              fontFamily: "'JetBrains Mono', monospace",
+                            }}>
+                            {asset.ticker ?? asset.symbol}
+                          </span>
+                        )}
+                        {asset.isin && (
+                          <span
+                            style={{
+                              fontSize: "11px",
+                              color: "var(--text-tertiary)",
+                            }}>
+                            {asset.isin}
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                    <td
+                      style={{
+                        padding: "14px 12px",
+                        textAlign: "center",
+                        minWidth: "90px",
+                      }}>
+                      <span
+                        className="rounded-full px-2 py-0.5"
+                        style={{
+                          fontSize: "11px",
+                          fontWeight: 600,
+                          background: "var(--surface-2-bg)",
+                          color: "var(--text-secondary)",
+                          whiteSpace: "nowrap",
+                        }}>
+                        {assetClassLabel(asset.asset_class)}
+                      </span>
+                    </td>
+                    <td
+                      style={{
+                        padding: "14px 12px",
+                        textAlign: "center",
+                        fontSize: "13px",
+                        color: "var(--text-secondary)",
+                        minWidth: "90px",
+                      }}
+                      className="hidden sm:table-cell">
+                      {asset.exchange ?? "—"}
+                    </td>
+                    <td
+                      style={{
+                        padding: "14px 12px",
+                        textAlign: "center",
+                        fontSize: "13px",
+                        color: "var(--text-secondary)",
+                        minWidth: "70px",
+                      }}>
+                      {asset.native_currency ?? "—"}
+                    </td>
+                    <td
+                      style={{
+                        padding: "14px 12px",
+                        textAlign: "right",
+                        fontFamily: "'JetBrains Mono', monospace",
+                        fontSize: "13px",
+                        fontVariantNumeric: "tabular-nums",
+                        color: "var(--text-primary)",
+                        minWidth: "120px",
+                      }}
+                      className="hidden sm:table-cell">
+                      {asset.market_data
+                        ? formatPrice(
+                            asset.market_data.price_minor,
+                            asset.market_data.currency,
+                          )
+                        : "—"}
+                    </td>
+                    <td
+                      style={{
+                        padding: "14px 12px",
+                        textAlign: "center",
+                        minWidth: "70px",
+                      }}>
+                      <span
+                        className="rounded-full px-2 py-0.5"
+                        style={{
+                          fontSize: "11px",
+                          fontWeight: 600,
+                          background:
+                            asset.status === "active"
+                              ? "color-mix(in srgb, var(--color-gain) 12%, transparent)"
+                              : "var(--surface-2-bg)",
+                          color:
+                            asset.status === "active"
+                              ? "var(--color-gain)"
+                              : "var(--text-tertiary)",
+                        }}>
+                        {asset.status === "active"
+                          ? "Actif"
+                          : asset.status === "inactive"
+                            ? "Inactif"
+                            : asset.status === "delisted"
+                              ? "Délisté"
+                              : asset.status}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
 
-            {!isCollapsed && (
-              <>
-                <div
-                  style={{
-                    borderBottom: "1px solid var(--surface-1-border)",
-                    margin: "12px 0 0 0",
-                  }}
-                />
-                <div
-                  style={{
-                    overflowX: "auto",
-                    WebkitOverflowScrolling: "touch",
-                  }}>
-                  <table
-                    style={{
-                      width: "100%",
-                      borderCollapse: "collapse",
-                      minWidth: "800px",
-                    }}>
-                    <thead>
-                      <tr>
-                        <th
-                          style={{
-                            ...thStyle,
-                            textAlign: "left",
-                            minWidth: "140px",
-                          }}>
-                          Nom de l'actif
-                        </th>
-                        <th
-                          style={{
-                            ...thStyle,
-                            textAlign: "center",
-                            minWidth: "90px",
-                          }}>
-                          Quantité
-                        </th>
-                        <th
-                          style={{
-                            ...thStyle,
-                            textAlign: "center",
-                            minWidth: "120px",
-                          }}
-                          className="hidden sm:table-cell">
-                          Prix moy. d'achat
-                        </th>
-                        <th
-                          style={{
-                            ...thStyle,
-                            textAlign: "center",
-                            minWidth: "110px",
-                          }}
-                          className="hidden sm:table-cell">
-                          Total investi
-                        </th>
-                        <th
-                          style={{
-                            ...thStyle,
-                            textAlign: "center",
-                            minWidth: "110px",
-                          }}>
-                          Valeur actuelle
-                        </th>
-                        <th
-                          style={{
-                            ...thStyle,
-                            textAlign: "center",
-                            minWidth: "110px",
-                          }}>
-                          Gains / Pertes
-                        </th>
-                        <th
-                          style={{
-                            ...thStyle,
-                            textAlign: "center",
-                            minWidth: "70px",
-                          }}
-                          className="hidden sm:table-cell">
-                          Devise
-                        </th>
-                        <th
-                          style={{
-                            ...thStyle,
-                            textAlign: "right",
-                            minWidth: "70px",
-                          }}>
-                          Actions
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {group.assets.map((a, i) => {
-                        const assetMetrics = calculateAssetMetrics(a);
-                        const assetTone = getPerformanceTone(
-                          assetMetrics.performance,
-                        );
-                        const assetColor =
-                          assetTone === "positive"
-                            ? "var(--color-gain)"
-                            : assetTone === "negative"
-                              ? "var(--color-loss)"
-                              : "var(--color-neutral)";
-                        const isEditing = editValues?.id === a.id;
-
-                        return (
-                          <React.Fragment key={a.id}>
-                            <tr
-                              onClick={() => navigate(`/actifs/${a.id}`)}
-                              className="transition-colors cursor-pointer"
-                              onMouseEnter={(e) => {
-                                e.currentTarget.style.background =
-                                  "var(--surface-2-bg)";
-                              }}
-                              onMouseLeave={(e) => {
-                                e.currentTarget.style.background =
-                                  "transparent";
-                              }}
-                              style={{
-                                borderBottom:
-                                  i < group.assets.length - 1
-                                    ? "1px solid var(--surface-1-border)"
-                                    : "none",
-                              }}>
-                              <td
-                                style={{
-                                  padding: "14px 12px",
-                                  minWidth: "140px",
-                                }}>
-                                <div
-                                  style={{
-                                    fontSize: "14px",
-                                    fontWeight: 500,
-                                    color: "var(--text-primary)",
-                                  }}>
-                                  {a.name}
-                                </div>
-                                <div
-                                  style={{
-                                    fontSize: "12px",
-                                    color: "var(--text-tertiary)",
-                                  }}>
-                                  {a.ticker}
-                                </div>
-                              </td>
-                              <td
-                                style={{
-                                  ...monoCell,
-                                  textAlign: "center",
-                                  minWidth: "90px",
-                                }}>
-                                {formatQuantity(a.quantity)}
-                              </td>
-                              <td
-                                style={{
-                                  ...monoCell,
-                                  textAlign: "center",
-                                  minWidth: "120px",
-                                }}
-                                className="hidden sm:table-cell">
-                                {formatCurrency(a.purchasePrice)}
-                              </td>
-                              <td
-                                style={{
-                                  ...monoCell,
-                                  textAlign: "center",
-                                  minWidth: "110px",
-                                }}
-                                className="hidden sm:table-cell">
-                                {formatCurrency(assetMetrics.investedValue)}
-                              </td>
-                              <td
-                                style={{
-                                  ...monoCell,
-                                  textAlign: "center",
-                                  minWidth: "110px",
-                                }}>
-                                {formatCurrency(assetMetrics.currentValue)}
-                              </td>
-                              <td
-                                style={{
-                                  ...monoCell,
-                                  textAlign: "center",
-                                  fontWeight: 600,
-                                  color: assetColor,
-                                  minWidth: "110px",
-                                }}>
-                                {formatSignedCurrency(assetMetrics.performance)}
-                              </td>
-                              <td
-                                style={{
-                                  ...monoCell,
-                                  textAlign: "center",
-                                  fontFamily: "Inter, sans-serif",
-                                  fontSize: "14px",
-                                  minWidth: "70px",
-                                }}
-                                className="hidden sm:table-cell">
-                                {a.currency}
-                              </td>
-                              <td
-                                style={{
-                                  padding: "14px 12px",
-                                  textAlign: "right",
-                                  minWidth: "70px",
-                                  position: "relative",
-                                }}>
-                                <button
-                                  onClick={(event) => {
-                                    event.stopPropagation();
-                                    setMenuOpenId((prev) =>
-                                      prev === a.id ? null : a.id,
-                                    );
-                                  }}
-                                  className="rounded-full"
-                                  style={{
-                                    width: "32px",
-                                    height: "32px",
-                                    border: "1px solid var(--surface-1-border)",
-                                    background: "transparent",
-                                    color: "var(--text-secondary)",
-                                    cursor: "pointer",
-                                  }}
-                                  aria-label="Actions">
-                                  <MoreHorizontal size={16} />
-                                </button>
-                                {menuOpenId === a.id && (
-                                  <div
-                                    onClick={(event) => event.stopPropagation()}
-                                    className="flex flex-col"
-                                    style={{
-                                      position: "absolute",
-                                      right: "10px",
-                                      top: "46px",
-                                      background: "var(--surface-3-bg)",
-                                      border:
-                                        "1px solid var(--surface-3-border)",
-                                      borderRadius: "var(--radius-md)",
-                                      padding: "8px",
-                                      minWidth: "140px",
-                                      gap: "6px",
-                                      zIndex: 10,
-                                      boxShadow:
-                                        "0 12px 30px rgba(0, 0, 0, 0.15)",
-                                      backdropFilter: "blur(16px)",
-                                    }}>
-                                    <button
-                                      onClick={() => {
-                                        setEditValues({
-                                          id: a.id,
-                                          quantity: String(a.quantity),
-                                          purchasePrice: String(
-                                            a.purchasePrice,
-                                          ),
-                                        });
-                                        setMenuOpenId(null);
-                                      }}
-                                      className="flex items-center gap-2"
-                                      style={{
-                                        background: "transparent",
-                                        border: "none",
-                                        color: "var(--text-primary)",
-                                        fontSize: "13px",
-                                        cursor: "pointer",
-                                      }}>
-                                      <PencilLine size={14} />
-                                      Editer
-                                    </button>
-                                    <button
-                                      onClick={() => setMenuOpenId(null)}
-                                      className="flex items-center gap-2"
-                                      style={{
-                                        background: "transparent",
-                                        border: "none",
-                                        color: "var(--color-loss)",
-                                        fontSize: "13px",
-                                        cursor: "pointer",
-                                      }}>
-                                      <Trash2 size={14} />
-                                      Supprimer
-                                    </button>
-                                  </div>
-                                )}
-                              </td>
-                            </tr>
-                            {isEditing && (
-                              <tr>
-                                <td
-                                  colSpan={8}
-                                  style={{
-                                    padding: "16px 12px",
-                                    background: "var(--surface-2-bg)",
-                                    borderBottom:
-                                      i < group.assets.length - 1
-                                        ? "1px solid var(--surface-1-border)"
-                                        : "none",
-                                  }}>
-                                  <div className="flex flex-col lg:flex-row gap-4 lg:items-end">
-                                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 flex-1">
-                                      <div>
-                                        <div
-                                          style={{
-                                            fontSize: "12px",
-                                            color: "var(--text-tertiary)",
-                                            marginBottom: "6px",
-                                          }}>
-                                          Quantite
-                                        </div>
-                                        <input
-                                          value={editValues.quantity}
-                                          onChange={(event) =>
-                                            setEditValues((prev) =>
-                                              prev
-                                                ? {
-                                                    ...prev,
-                                                    quantity:
-                                                      event.target.value,
-                                                  }
-                                                : prev,
-                                            )
-                                          }
-                                          style={quickInputStyle}
-                                        />
-                                      </div>
-                                      <div>
-                                        <div
-                                          style={{
-                                            fontSize: "12px",
-                                            color: "var(--text-tertiary)",
-                                            marginBottom: "6px",
-                                          }}>
-                                          Prix d'achat
-                                        </div>
-                                        <input
-                                          value={editValues.purchasePrice}
-                                          onChange={(event) =>
-                                            setEditValues((prev) =>
-                                              prev
-                                                ? {
-                                                    ...prev,
-                                                    purchasePrice:
-                                                      event.target.value,
-                                                  }
-                                                : prev,
-                                            )
-                                          }
-                                          style={quickInputStyle}
-                                        />
-                                      </div>
-                                      <div>
-                                        <div
-                                          style={{
-                                            fontSize: "12px",
-                                            color: "var(--text-tertiary)",
-                                            marginBottom: "6px",
-                                          }}>
-                                          Devise
-                                        </div>
-                                        <input
-                                          value={a.currency}
-                                          readOnly
-                                          style={{
-                                            ...quickInputStyle,
-                                            opacity: 0.7,
-                                          }}
-                                        />
-                                      </div>
-                                    </div>
-                                    <div className="flex gap-2">
-                                      <button
-                                        style={{
-                                          ...quickActionStyle,
-                                          color: "var(--text-secondary)",
-                                        }}
-                                        onClick={() => setEditValues(null)}>
-                                        Annuler
-                                      </button>
-                                      <button
-                                        style={{
-                                          ...quickActionStyle,
-                                          background: "var(--color-cta-bg)",
-                                          color: "var(--color-cta-text)",
-                                          border: "none",
-                                        }}
-                                        onClick={() => setEditValues(null)}>
-                                        Enregistrer
-                                      </button>
-                                    </div>
-                                  </div>
-                                </td>
-                              </tr>
-                            )}
-                          </React.Fragment>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </>
-            )}
-          </Card>
-        );
-      })}
+          {/* Load more */}
+          {pagination?.has_more && (
+            <div
+              style={{
+                borderTop: "1px solid var(--surface-1-border)",
+                padding: "16px",
+                textAlign: "center",
+              }}>
+              <button
+                onClick={() =>
+                  loadMoreAssets(
+                    buildFilters(searchDebounced, assetClass, statusFilter),
+                  )
+                }
+                disabled={loading}
+                style={{
+                  height: "40px",
+                  padding: "0 24px",
+                  borderRadius: "var(--radius-md)",
+                  border: "1px solid var(--surface-1-border)",
+                  background: "transparent",
+                  fontSize: "14px",
+                  fontWeight: 500,
+                  color: "var(--text-primary)",
+                  cursor: loading ? "default" : "pointer",
+                  opacity: loading ? 0.6 : 1,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "8px",
+                }}>
+                {loading && <Loader2 size={14} className="animate-spin" />}
+                Charger plus d'actifs
+              </button>
+            </div>
+          )}
+        </Card>
+      )}
     </div>
   );
 }

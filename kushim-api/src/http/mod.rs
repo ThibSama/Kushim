@@ -12,16 +12,23 @@ use crate::state::AppState;
 use axum::{
     Router,
     body::to_bytes,
-    http::{HeaderValue, StatusCode},
+    http::{HeaderValue, Method, StatusCode},
     middleware,
     response::Response,
     routing::{get, post},
 };
 use serde_json::{Value, json};
+use tower_http::cors::CorsLayer;
 
 pub const ROUTES_DESCRIPTION: &str = "/health, /ready, /v1/me, /v1/reference/operation-types, /v1/reference/operation-statuses, /v1/reference/portfolio-visibilities, /v1/assets, /v1/assets/{id_asset}, /v1/portfolios, /v1/portfolios/{id_portfolio}, /v1/portfolios/{id_portfolio}/summary, /v1/portfolios/{id_portfolio}/holdings, /v1/portfolios/{id_portfolio}/snapshots/daily, /v1/portfolios/{id_portfolio}/snapshots/daily/{snapshot_date}/holdings, /v1/portfolios/{id_portfolio}/operations, /v1/portfolios/{id_portfolio}/operations/audit, /v1/portfolios/{id_portfolio}/operations/{id_portfolio_operation}, /v1/portfolios/{id_portfolio}/operations/{id_portfolio_operation}/cancel, /v1/portfolios/{id_portfolio}/operations/{id_portfolio_operation}/corrections, /v1/portfolios/{id_portfolio}/operations/{id_portfolio_operation}/post, /v1/portfolios/{id_portfolio}/operations/{id_portfolio_operation}/audit";
 
 pub fn router(state: AppState) -> Router {
+    router_with_cors(state, None)
+}
+
+pub fn router_with_cors(state: AppState, cors_allowed_origins: Option<&str>) -> Router {
+    let cors_layer = build_cors_layer(cors_allowed_origins);
+
     Router::new()
         .route("/health", get(health::health))
         .route("/ready", get(health::ready))
@@ -98,7 +105,36 @@ pub fn router(state: AppState) -> Router {
         .layer(middleware::map_response(
             normalize_plaintext_error_responses,
         ))
+        .layer(cors_layer)
         .with_state(state)
+}
+
+fn build_cors_layer(allowed_origins: Option<&str>) -> CorsLayer {
+    let Some(origins_str) = allowed_origins else {
+        return CorsLayer::new();
+    };
+
+    let origins: Vec<HeaderValue> = origins_str
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|o| {
+            o.parse()
+                .expect("each CORS_ALLOWED_ORIGINS value must be a valid header value")
+        })
+        .collect();
+
+    if origins.is_empty() {
+        return CorsLayer::new();
+    }
+
+    CorsLayer::new()
+        .allow_origin(origins)
+        .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::OPTIONS])
+        .allow_headers([
+            axum::http::header::CONTENT_TYPE,
+            axum::http::header::AUTHORIZATION,
+        ])
 }
 
 async fn normalize_plaintext_error_responses(response: Response) -> Response {

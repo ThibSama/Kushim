@@ -3,6 +3,7 @@
 API metier principale de Kushim, en Rust + Axum + SQLx.
 
 Cette premiere passe prepare la fondation technique du service :
+
 - bootstrap propre
 - configuration centralisee
 - pool PostgreSQL + startup check
@@ -17,6 +18,7 @@ Cette premiere passe prepare la fondation technique du service :
 - premier endpoint historical holdings strictement read-only par snapshot daily
 
 Cette passe n'implemente pas encore :
+
 - la reconstruction historique
 - la generation des read models
 - la logique worker
@@ -25,10 +27,12 @@ Cette passe n'implemente pas encore :
 ## Perimetre metier
 
 Tables possedees par `kushim-api` :
+
 - `portfolios`
 - `portfolio_operations`
 
 Tables lues en lecture seule :
+
 - `assets`
 - `asset_aliases`
 - `asset_metadata`
@@ -40,12 +44,14 @@ Tables lues en lecture seule :
 - `asset_price_history_cache`
 
 Tables non possedees :
+
 - `users`
 - `user_recovery_phrases`
 - `revoked_tokens`
 - `roles` en ecriture
 
 Important :
+
 - `portfolio_operations` est la source de verite
 - les read models et snapshots sont hors scope d'ecriture de ce service
 - les refresh tokens ne doivent jamais autoriser les endpoints de `kushim-api`
@@ -65,6 +71,7 @@ Les erreurs HTTP metier et de validation suivent la forme normalisee :
 ```
 
 Notes :
+
 - les erreurs de path/query/body invalides sont normalisees
 - JSON mal forme -> `400 invalid_json_body`
 - body JSON schema-incompatible (champ requis manquant, type invalide, champ inconnu sur DTO strict) -> `400 invalid_request_body`
@@ -76,6 +83,7 @@ Notes :
 ## Variables d'environnement
 
 Variables supportees :
+
 - `DATABASE_URL`
 - `REDIS_URL` (optionnelle, reservee pour de futurs besoins de cache/coordination, non utilisee fonctionnellement dans cette passe)
 - `KUSHIM_API_HOST`
@@ -84,6 +92,7 @@ Variables supportees :
 - `RUST_LOG`
 - `AUTH_JWT_SECRET`
 - `JWT_ISSUER`
+- `CORS_ALLOWED_ORIGINS` (optionnelle, origines separees par virgule, ex: `http://localhost:5173`)
 
 Exemple hote :
 
@@ -96,6 +105,7 @@ APP_ENV=development
 RUST_LOG=info
 AUTH_JWT_SECRET=dev_only_change_me_minimum_32_chars
 JWT_ISSUER=kushim-auth
+CORS_ALLOWED_ORIGINS=http://localhost:5173
 ```
 
 Exemple Docker :
@@ -108,9 +118,11 @@ APP_ENV=docker
 RUST_LOG=info
 AUTH_JWT_SECRET=dev_only_change_me_minimum_32_chars
 JWT_ISSUER=kushim-auth
+CORS_ALLOWED_ORIGINS=http://localhost:5173
 ```
 
 Regles :
+
 - depuis l'hote, PostgreSQL est atteint via `localhost:5432`
 - depuis Docker, PostgreSQL est atteint via `database:5432`
 - `AUTH_JWT_SECRET` doit faire au moins 32 caracteres
@@ -121,10 +133,12 @@ Regles :
 ### `GET /health`
 
 But :
+
 - verifier que le process HTTP repond
 - exposer le binaire et l'environnement charges
 
 Auth :
+
 - aucune
 
 Reponse type :
@@ -142,24 +156,30 @@ Reponse type :
 ### `GET /ready`
 
 But :
+
 - verifier la connectivite PostgreSQL
 
 Auth :
+
 - aucune
 
 Succes :
+
 - `200`
 
 Erreurs communes :
+
 - `503 service_unavailable`
 
 ### `GET /v1/me`
 
 But :
+
 - verifier le cablage JWT de `kushim-api`
 - exposer l'identite derivee du token access
 
 Auth :
+
 - `Authorization: Bearer <access_token>`
 
 Reponse :
@@ -173,6 +193,7 @@ Reponse :
 ```
 
 Erreurs communes :
+
 - `401 missing_bearer_token`
 - `401 invalid_bearer_token`
 - `401 token_expired`
@@ -180,10 +201,12 @@ Erreurs communes :
 ### `GET /v1/reference/operation-types`
 
 But :
+
 - exposer la liste statique des types d'operations supportes
 - permettre au frontend de construire des formulaires sans hardcoder les valeurs
 
 Auth :
+
 - `Authorization: Bearer <access_token>`
 
 Reponse :
@@ -212,9 +235,11 @@ Reponse :
 ### `GET /v1/reference/operation-statuses`
 
 But :
+
 - exposer la liste statique des statuts d'operations supportes
 
 Auth :
+
 - `Authorization: Bearer <access_token>`
 
 Reponse :
@@ -232,9 +257,11 @@ Reponse :
 ### `GET /v1/reference/portfolio-visibilities`
 
 But :
+
 - exposer la liste statique des visibilites de portefeuille supportees
 
 Auth :
+
 - `Authorization: Bearer <access_token>`
 
 Reponse :
@@ -252,18 +279,22 @@ Reponse :
 ### `GET /v1/assets`
 
 But :
+
 - rechercher et lister les assets existants en lecture seule
 - exposer des donnees stables pour la selection d'assets lors des `portfolio_operations`
 
 Auth :
+
 - `Authorization: Bearer <access_token>`
 
 Important :
+
 - endpoint strictement read-only
 - aucun enrichissement, refresh fournisseur ou appel API externe
 - `kushim-api` ne cree, ne modifie et ne supprime jamais d'asset
 
 Query params :
+
 - `search` optionnel
 - `asset_class` optionnel
 - `ticker` optionnel
@@ -274,11 +305,13 @@ Query params :
 - `offset` optionnel, defaut `0`
 
 Recherche :
+
 - `search` correspond a `name`, `ticker`, `isin` et aux `asset_aliases`
 - les filtres supplementaires utilisent uniquement des bind parameters SQLx
 - les query params inconnus sont ignores
 
 Tri :
+
 - `name ASC`
 - `ticker ASC`
 - `exchange ASC`
@@ -337,6 +370,7 @@ Exemple de reponse :
 ```
 
 Erreurs communes :
+
 - `400 invalid_asset_class`
 - `400 invalid_asset_status`
 - `400 invalid_limit`
@@ -347,13 +381,16 @@ Erreurs communes :
 ### `GET /v1/assets/{id_asset}`
 
 But :
+
 - lire un asset existant par identifiant
 - inclure ses metadonnees, sa market data courante et ses aliases quand disponibles
 
 Auth :
+
 - `Authorization: Bearer <access_token>`
 
 Comportement :
+
 - `200` si l'asset existe
 - `400` si `id_asset` n'est pas un UUID valide
 - `404` si l'asset n'existe pas
@@ -414,12 +451,15 @@ Exemple de reponse :
 ### `POST /v1/portfolios`
 
 But :
+
 - creer un portefeuille pour l'utilisateur authentifie
 
 Auth :
+
 - `Authorization: Bearer <access_token>`
 
 Regles :
+
 - `id_user` provient uniquement du token
 - `base_currency` doit etre composee de `3` lettres majuscules
 - `visibility` accepte `private`, `public`, `unlisted`
@@ -443,39 +483,48 @@ Reponse type :
 ### `GET /v1/portfolios`
 
 But :
+
 - lister uniquement les portefeuilles non supprimes de l'utilisateur authentifie
 
 Auth :
+
 - `Authorization: Bearer <access_token>`
 
 ### `GET /v1/portfolios/{id_portfolio}`
 
 But :
+
 - lire un portefeuille uniquement s'il appartient a l'utilisateur authentifie
 
 Auth :
+
 - `Authorization: Bearer <access_token>`
 
 Comportement :
+
 - `200` si le portefeuille appartient a l'utilisateur
 - `404` s'il n'existe pas, est soft-delete, ou appartient a un autre utilisateur
 
 ### `GET /v1/portfolios/{id_portfolio}/summary`
 
 But :
+
 - lire le read model courant `rm_portfolio_summary` d'un portefeuille
 - exposer un resume dashboard sans recalculer l'etat du portefeuille
 
 Auth :
+
 - `Authorization: Bearer <access_token>`
 
 Important :
+
 - endpoint strictement read-only
 - `kushim-api` lit seulement `rm_portfolio_summary`
 - si le read model n'existe pas encore, l'API renvoie `data_available=false`
 - aucun recalcul, aucun refresh, aucun appel worker
 
 Comportement :
+
 - `200` + `data_available=true` si le read model existe
 - `200` + `data_available=false` si le portefeuille existe mais que le read model n'a pas encore ete genere
 - `404` si le portefeuille n'existe pas, est soft-delete, ou appartient a un autre utilisateur
@@ -515,19 +564,23 @@ Exemple si le read model est absent :
 ### `GET /v1/portfolios/{id_portfolio}/holdings`
 
 But :
+
 - lire les lignes courantes de `rm_portfolio_holdings`
 - exposer les holdings dashboard sans recalculer depuis `portfolio_operations`
 
 Auth :
+
 - `Authorization: Bearer <access_token>`
 
 Important :
+
 - endpoint strictement read-only
 - `kushim-api` ne genere ni holdings ni resume
 - si `rm_portfolio_summary` n'existe pas encore, l'API renvoie `data_available=false`
 - si le summary existe mais qu'aucune ligne holding n'existe, l'API renvoie `data_available=true` avec `holdings=[]`
 
 Query params :
+
 - `limit` optionnel, defaut `50`, max `100`
 - `offset` optionnel, defaut `0`
 - `sort` optionnel : `weight_desc` par defaut, `value_desc`, `name_asc`
@@ -535,6 +588,7 @@ Query params :
 - `search` optionnel, correspond a `asset.name`, `asset.ticker`, `asset.isin`
 
 Tri :
+
 - `weight_desc` -> `weight_pct DESC, market_value_minor DESC, asset.name ASC`
 - `value_desc` -> `market_value_minor DESC, weight_pct DESC, asset.name ASC`
 - `name_asc` -> `asset.name ASC, asset.ticker ASC, asset.exchange ASC`
@@ -582,6 +636,7 @@ Exemple de reponse :
 ```
 
 Erreurs communes :
+
 - `400 invalid_limit`
 - `400 invalid_offset`
 - `400 invalid_sort`
@@ -593,19 +648,23 @@ Erreurs communes :
 ### `GET /v1/portfolios/{id_portfolio}/snapshots/daily`
 
 But :
+
 - lire les snapshots journaliers deja generes dans `portfolio_snapshots_daily`
 - exposer une base simple pour les vues d'historique et de courbe
 
 Auth :
+
 - `Authorization: Bearer <access_token>`
 
 Important :
+
 - endpoint strictement read-only
 - `kushim-api` ne genere aucun snapshot
 - `kushim-api` ne reconstruit jamais l'historique depuis `portfolio_operations`
 - aucun appel worker ou market-data
 
 Query params :
+
 - `date_from` optionnel, format ISO `YYYY-MM-DD`
 - `date_to` optionnel, format ISO `YYYY-MM-DD`
 - `limit` optionnel, defaut `100`, max `366`
@@ -613,11 +672,13 @@ Query params :
 - `sort` optionnel : `asc` par defaut, `desc`
 
 Comportement :
+
 - snapshots presents -> `200`, `data_available=true`
 - aucun snapshot pour le portefeuille / la plage demandee -> `200`, `data_available=false`, `snapshots=[]`
 - `404` uniquement si le portefeuille n'existe pas, est soft-delete, ou appartient a un autre utilisateur
 
 Tri :
+
 - `sort=asc` -> `snapshot_date ASC, created_at ASC`
 - `sort=desc` -> `snapshot_date DESC, created_at DESC`
 
@@ -652,6 +713,7 @@ Exemple de reponse :
 ```
 
 Erreurs communes :
+
 - `400 invalid_date_from`
 - `400 invalid_date_to`
 - `400 invalid_date_range`
@@ -665,22 +727,27 @@ Erreurs communes :
 ### `GET /v1/portfolios/{id_portfolio}/snapshots/daily/{snapshot_date}/holdings`
 
 But :
+
 - lire les holdings historiques deja stockees pour un snapshot journalier donne
 - exposer une base simple pour les vues holdings historiques sans reconstruction
 
 Auth :
+
 - `Authorization: Bearer <access_token>`
 
 Important :
+
 - endpoint strictement read-only
 - `kushim-api` ne cree jamais de snapshot ni de snapshot holding
 - `kushim-api` ne reconstruit jamais les holdings depuis `portfolio_operations`
 - aucun appel worker, market-data ou fournisseur externe
 
 Path params :
+
 - `snapshot_date` au format ISO `YYYY-MM-DD`
 
 Query params :
+
 - `limit` optionnel, defaut `50`, max `100`
 - `offset` optionnel, defaut `0`
 - `sort` optionnel : `weight_desc` par defaut, `value_desc`, `name_asc`
@@ -688,12 +755,14 @@ Query params :
 - `search` optionnel sur `name`, `ticker`, `isin`
 
 Comportement :
+
 - snapshot present avec holdings -> `200`, `data_available=true`
 - snapshot present sans holdings -> `200`, `data_available=true`, `holdings=[]`
 - snapshot absent pour `snapshot_date` -> `200`, `data_available=false`, `snapshot=null`, `holdings=[]`, `reason="snapshot_missing"`
 - `404` uniquement si le portefeuille n'existe pas, est soft-delete, ou appartient a un autre utilisateur
 
 Tri :
+
 - `weight_desc` -> `weight_pct DESC`, puis `market_value_minor DESC`
 - `value_desc` -> `market_value_minor DESC`
 - `name_asc` -> `asset.name ASC`
@@ -755,6 +824,7 @@ Exemple de reponse :
 ```
 
 Erreurs communes :
+
 - `400 invalid_snapshot_date`
 - `400 invalid_limit`
 - `400 invalid_offset`
@@ -767,16 +837,20 @@ Erreurs communes :
 ### `POST /v1/portfolios/{id_portfolio}/operations`
 
 But :
+
 - creer une `portfolio_operation`
 - ecrire dans la source de verite sans recalcul synchrone
 
 Auth :
+
 - `Authorization: Bearer <access_token>`
 
 Statut :
+
 - si `operation_status` est omis, la valeur appliquee est `pending`
 
 Important :
+
 - `currency` est requise par le DDL pour toutes les operations
 - pour `buy` et `sell`, le DDL impose `price_minor`, `gross_amount_minor` et `cash_amount_minor`
 - `id_asset` et `id_related_asset` sont maintenant validates au niveau service avant ecriture
@@ -817,30 +891,37 @@ Exemple buy :
 ### `GET /v1/portfolios/{id_portfolio}/operations`
 
 But :
+
 - lister les operations d'un portefeuille possede par l'utilisateur
 
 Filtres supportes :
+
 - `operation_status`
 - `operation_type`
 - `id_asset`
 
 Tri :
+
 - `executed_at DESC, created_at DESC`
 
 ### `GET /v1/portfolios/{id_portfolio}/operations/{id_portfolio_operation}`
 
 But :
+
 - lire une operation unique
 
 Comportement :
+
 - `404` si l'operation n'existe pas, n'appartient pas au portefeuille, ou si le portefeuille n'appartient pas a l'utilisateur
 
 ### `PATCH /v1/portfolios/{id_portfolio}/operations/{id_portfolio_operation}`
 
 But :
+
 - modifier uniquement une operation `pending`
 
 Regles :
+
 - `posted` -> rejet `409`
 - `cancelled` -> rejet `409`
 - aucune correction de `posted` ici
@@ -850,9 +931,11 @@ Regles :
 ### `POST /v1/portfolios/{id_portfolio}/operations/{id_portfolio_operation}/cancel`
 
 But :
+
 - annuler une operation `pending`
 
 Regles :
+
 - `pending` -> `cancelled`
 - `posted` -> rejet `409`
 - `cancelled` -> succes idempotent
@@ -860,10 +943,12 @@ Regles :
 ### `POST /v1/portfolios/{id_portfolio}/operations/{id_portfolio_operation}/corrections`
 
 But :
+
 - corriger explicitement une operation `posted` sans la modifier
 - creer une nouvelle operation `adjustment` liee via `id_corrected_operation`
 
 Regles :
+
 - l'operation d'origine doit etre `posted`
 - `pending` et `cancelled` sont rejetes
 - `operation_type` est force a `adjustment`
@@ -913,10 +998,12 @@ Exemple de reponse :
 ### `POST /v1/portfolios/{id_portfolio}/operations/{id_portfolio_operation}/post`
 
 But :
+
 - rendre explicite la transition `pending -> posted`
 - figer ensuite l'operation comme source de verite immuable
 
 Regles :
+
 - seule une operation `pending` peut etre postee
 - une operation deja `posted` est rejetee en `409`
 - une operation `cancelled` est rejetee en `409`
@@ -948,10 +1035,12 @@ Exemple de reponse :
 ### `GET /v1/portfolios/{id_portfolio}/operations/{id_portfolio_operation}/corrections`
 
 But :
+
 - lire toutes les operations `adjustment` qui corrigent une operation donnee
 - exposer la relation `id_corrected_operation` sans recalcul
 
 Regles :
+
 - l'operation cible doit appartenir au portefeuille de l'utilisateur
 - seules les corrections du meme portefeuille sont retournees
 - tri : `executed_at ASC, created_at ASC`
@@ -986,10 +1075,12 @@ Exemple de reponse :
 ### `GET /v1/portfolios/{id_portfolio}/operations/{id_portfolio_operation}/audit`
 
 But :
+
 - fournir une vue d'audit simple autour d'une operation
 - exposer l'operation, son eventuelle operation corrigee, et ses corrections
 
 Regles :
+
 - pour une operation normale : renvoie l'operation et ses corrections
 - pour une `adjustment` : renvoie aussi `corrected_operation`
 - `correction_count` est derive de la liste renvoyee
@@ -1034,11 +1125,13 @@ Exemple de reponse :
 ### `GET /v1/portfolios/{id_portfolio}/operations/audit`
 
 But :
+
 - fournir une timeline d'audit paginee au niveau portefeuille
 - exposer uniquement les operations primaires en top-level
 - imbriquer les corrections `adjustment` sous l'operation corrigee
 
 Regles :
+
 - endpoint read-only, sans recalcul de portefeuille
 - seules les operations avec `id_corrected_operation IS NULL` apparaissent en top-level
 - les corrections sont retournees dans `corrections`
@@ -1048,12 +1141,14 @@ Regles :
 - aucune ecriture read-model, snapshot ou worker
 
 Query params :
+
 - `limit` optionnel, defaut `50`, max `100`
 - `offset` optionnel, defaut `0`
 - `operation_status` optionnel : `pending`, `posted`, `cancelled`
 - `operation_type` optionnel : type d'operation supporte (`deposit`, `buy`, `sell`, etc.)
 
 Les filtres :
+
 - s'appliquent uniquement aux operations top-level
 - ne filtrent pas les corrections imbriquees d'une operation top-level retenue
 
@@ -1108,12 +1203,14 @@ Format d'erreur normalise :
 ## Contrat Auth/JWT
 
 `kushim-api` valide les access tokens emis par `kushim-auth/api` avec :
+
 - signature `HS256`
 - `iss = JWT_ISSUER`
 - `exp` valide
 - `token_type = access`
 
 Claims attendus :
+
 - `sub`
 - `public_handle`
 - `role`
@@ -1124,6 +1221,7 @@ Claims attendus :
 - `iss`
 
 Regles :
+
 - un refresh token est explicitement rejete
 - l'identite utilisateur provient du claim `sub`
 - aucun `user_id` de requete ne doit primer sur le token
@@ -1228,6 +1326,7 @@ curl http://127.0.0.1:8080/v1/portfolios/<id_portfolio>/snapshots/daily/2026-06-
 ```
 
 Note Docker :
+
 - apres un rebuild, utiliser `--force-recreate` evite de tester un ancien conteneur encore en cours d'execution
 
 ## Limitations actuelles
@@ -1247,7 +1346,29 @@ Note Docker :
 - l'advisory transitive `RUSTSEC-2023-0071` via `jsonwebtoken`/`rsa` reste connue et suivie ; `kushim-api` utilise uniquement `HS256`
 - `REDIS_URL` est seulement reservee pour les evolutions futures
 - aucune logique worker, read-model, snapshot ou market-data n'est embarquee dans `kushim-api`
-Redis :
+  Redis :
 - la dependance et la variable `REDIS_URL` sont conservees intentionnellement
 - `kushim-api` ne demarre pas Redis ni n'en depend au bootstrap aujourd'hui
 - cette reserve technique est destinee a de futurs usages limites: cache court, coordination, rate limiting eventuel, ou interop avec worker/job systems
+
+## CORS
+
+`kushim-api` supporte CORS configurable via `CORS_ALLOWED_ORIGINS`.
+
+Comportement :
+
+- si non definie, aucun header CORS n'est ajoute (comportement par defaut)
+- si definie, seules les origines listees sont autorisees (pas de wildcard `*`)
+- supporte des origines multiples separees par virgule : `http://localhost:5173,https://app.kushim.io`
+- fallback sur `CORS_ALLOWED_ORIGIN` (singulier) si `CORS_ALLOWED_ORIGINS` n'est pas definie
+- methodes autorisees : `GET`, `POST`, `PATCH`, `OPTIONS`
+- headers autorises : `Content-Type`, `Authorization`
+- le frontend utilise `Authorization: Bearer <access_token>`, pas de cookies
+
+Exemple dev local :
+
+```dotenv
+CORS_ALLOWED_ORIGINS=http://localhost:5173
+```
+
+L’authentification GitHub CLI a expiré. Exécutez gh auth login pour actualiser le statut de la pull request.

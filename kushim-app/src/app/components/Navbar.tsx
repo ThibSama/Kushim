@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard,
   BarChart2,
+  TrendingUp,
   List,
   Compass,
   Settings,
@@ -15,6 +16,7 @@ import {
   CreditCard,
 } from "lucide-react";
 import { ENABLE_DISCOVER } from "../config/features";
+import { useAuthStore } from "../../stores/auth";
 
 interface NavbarProps {
   isAuthenticated?: boolean;
@@ -27,6 +29,7 @@ export function Navbar({
   onThemeToggle,
   isDark = false,
 }: NavbarProps) {
+  const user = useAuthStore((state) => state.user);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
@@ -61,7 +64,8 @@ export function Navbar({
 
   const appLinks = [
     { label: "Tableau de bord", href: "/dashboard", icon: LayoutDashboard },
-    { label: "Actifs", href: "/actifs", icon: BarChart2 },
+    { label: "Actifs", href: "/assets", icon: BarChart2 },
+    { label: "Positions", href: "/positions", icon: TrendingUp },
     { label: "Transactions", href: "/transactions", icon: List },
     ...(ENABLE_DISCOVER
       ? [{ label: "Découvrir", href: "/discover", icon: Compass }]
@@ -284,7 +288,7 @@ export function Navbar({
                       width: "clamp(28px, 5vw, 32px)",
                       height: "clamp(28px, 5vw, 32px)",
                     }}>
-                    U
+                    {(user?.username ?? "U").charAt(0).toUpperCase()}
                   </div>
                   <span
                     style={{
@@ -293,7 +297,7 @@ export function Navbar({
                       color: "var(--text-primary)",
                       whiteSpace: "nowrap",
                     }}>
-                    Utilisateur
+                    {user?.username ?? "…"}
                   </span>
                 </div>
               )}

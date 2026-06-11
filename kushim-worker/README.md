@@ -10,8 +10,8 @@ Ce qu'il possede ou possedera :
 - reconstruction/replay
 - backfills et traitements planifies
 
-Ce qui n'est **pas** implemente dans cette pass :
-- aucune reconstruction historique
+Ce qui reste **hors perimetre V1** :
+- aucune reconstruction historique plus avancee que le backfill quotidien controle
 - aucune generation de snapshots pour des dates passees arbitraires
 - aucune integration market data externe
 - aucun appel API externe
@@ -142,6 +142,16 @@ Limitations V1 de `backfill_daily_snapshots` :
 - pas de fallback vers `asset_market_data`
 - pas de reconstruction historique plus avancee que le replay V1 actuel
 - `split`, `spin_off`, `symbol_change` gardent les limites conservatives du replay V1
+
+Travaux differes qui demandent une decision produit/architecture :
+- orchestration multi-portefeuille, queue Redis, verrous distribues et scheduler production
+- politique FX et restatement historique quand les devises ou prix changent
+- regles metier detaillees pour delisting, merges, splits complexes, spin-offs et symbol changes
+
+Petites passes sures possibles :
+- garder cette README alignee avec `documentation/mvp/deferred-todos.md`
+- documenter les limites V1 quand un nouveau job worker est ajoute
+- ajouter ou mettre a jour des validations ciblees sans changer les contrats API ni le schema
 
 `WORKER_MODE` supporte :
 - `idle` : verifie les dependances puis attend un shutdown propre
@@ -322,3 +332,65 @@ Cette pass:
 Prochaine pass recommandee :
 - durcir ensuite la reconstruction historique explicite a partir des snapshots + deltas
 - ou etendre prudemment le backfill a davantage de cas selon la priorite produit
+
+## Demo historical backfill (Pass 6)
+
+Procedure validee pour generer un historique multi-jours visible dans le Dashboard :
+
+### Pre-requis
+
+1. Un portefeuille USD avec des operations etalees sur plusieurs jours
+2. Des prix historiques USD dans `asset_price_history_cache` couvrant la plage
+3. Les services `database`, `kushim-worker`, `kushim-market-data` demarres
+
+### Etape 1 : Remplir le cache de prix historiques
+
+```powershell
+docker exec kushim-kushim-market-data-1 /usr/local/bin/kushim-market-data
+# ou via docker compose run :
+docker compose run --rm `
+  -e MARKET_DATA_MODE=once `
+  -e MARKET_DATA_JOB=fill_missing_price_history_cache `
+  -e MARKET_DATA_PROVIDER=mock `
+  -e MARKET_DATA_HISTORY_DATE_FROM=2026-05-10 `
+  -e MARKET_DATA_HISTORY_DATE_TO=2026-06-10 `
+  kushim-market-data
+```
+
+### Etape 2 : Lancer le backfill worker
+
+```powershell
+docker exec -e WORKER_MODE=once `
+  -e WORKER_JOB=backfill_daily_snapshots `
+  -e WORKER_TARGET_PORTFOLIO_ID=<uuid> `
+  -e WORKER_BACKFILL_DATE_FROM=2026-05-10 `
+  -e WORKER_BACKFILL_DATE_TO=2026-06-10 `
+  -e WORKER_HEALTH_HOST=0.0.0.0 `
+  -e WORKER_HEALTH_PORT=8091 `
+  kushim-kushim-worker-1 /usr/local/bin/kushim-worker
+```
+
+### Etape 3 : Generer le snapshot courant
+
+```powershell
+docker exec -e WORKER_MODE=once `
+  -e WORKER_JOB=refresh_current_portfolio_state `
+  -e WORKER_TARGET_PORTFOLIO_ID=<uuid> `
+  -e WORKER_HEALTH_HOST=0.0.0.0 `
+  -e WORKER_HEALTH_PORT=8092 `
+  kushim-kushim-worker-1 /usr/local/bin/kushim-worker
+```
+
+### Verification
+
+- API : `GET /v1/portfolios/<uuid>/snapshots/daily?sort=asc` doit retourner `data_available: true` avec les snapshots
+- Dashboard : le graphique "Evolution du portefeuille" affiche l'historique multi-jours
+- Les selecteurs de periode (1M, 3M, 6M, 1Y, MAX) filtrent correctement
+
+### Points cles
+
+- Le mock provider genere des prix USD uniquement
+- Le portefeuille doit avoir `base_currency = 'USD'` pour que les prix correspondent
+- Le backfill filtre `asset_price_history_cache` par `currency = base_currency`
+- Les snapshots sont idempotents (rerun = meme resultat)
+- `WORKER_HEALTH_PORT` doit etre different du port 8081 deja utilise par le worker en service

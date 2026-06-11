@@ -141,6 +141,24 @@ cargo test
 cargo audit
 ```
 
+## Demo historical backfill (Pass 6)
+
+To populate `asset_price_history_cache` with mock USD prices for a date range:
+
+```powershell
+docker compose run --rm `
+  -e MARKET_DATA_MODE=once `
+  -e MARKET_DATA_JOB=fill_missing_price_history_cache `
+  -e MARKET_DATA_PROVIDER=mock `
+  -e MARKET_DATA_HISTORY_DATE_FROM=2026-05-10 `
+  -e MARKET_DATA_HISTORY_DATE_TO=2026-06-10 `
+  kushim-market-data
+```
+
+This inserts one row per active asset per day in the range. The mock provider generates deterministic USD prices only. Existing rows are not overwritten (ON CONFLICT DO NOTHING).
+
+After populating the cache, run `kushim-worker` with `backfill_daily_snapshots` to generate historical portfolio snapshots from the cached prices. See `kushim-worker/README.md` for the full procedure.
+
 ## MVP note
 
 This service is not part of the currently validated backend MVP core yet.

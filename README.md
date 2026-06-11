@@ -28,16 +28,17 @@ Current repository state, at a high level:
 - `kushim-api`: implemented and validated for the current synchronous MVP perimeter
 - `kushim-worker`: implemented for current-state rebuilds, daily snapshots, composite refresh, and first controlled historical backfill
 - `kushim-market-data`: implemented with mock provider (two controlled write jobs validated, no real provider yet)
-- `kushim-auth/front`: interactive frontend scaffold, not fully wired to the auth API yet
-- `kushim-app`: private frontend with advanced mock UI, not fully wired to `kushim-api` yet
+- `kushim-auth/front`: interactive auth frontend, wired to `kushim-auth/api` (login, signup, handoff exchange functional)
+- `kushim-app`: private frontend largely wired to `kushim-api` (auth, portfolios, operations, dashboard KPIs/evolution/allocation/top assets, asset catalogue, positions — all real data; benchmark section and settings actions remain mock)
 - `kushim-website`: marketing website present
 
 Important:
 
-- the backend is significantly more advanced than the frontends;
+- the project is now **suitable for a supervised internal MVP demo**;
 - the backend E2E chain is **demonstrable locally** via an automated smoke test (`scripts/demo/backend-e2e.ps1`, 18/18 assertions passed);
+- `kushim-app` is largely wired to real backend data; remaining mock elements are isolated and labeled;
 - the project is **MVP-oriented**, not production-ready;
-- some services are fully usable internally, while others are still partially wired.
+- market data uses a mock provider (no real provider yet); FX is not implemented.
 
 ## Service map
 
@@ -109,7 +110,8 @@ Start here:
 - [Deferred TODOs](documentation/mvp/deferred-todos.md)
 - [Docker local development](documentation/operations/docker-local-dev.md)
 - [Validation commands](documentation/operations/validation-commands.md)
-- [Backend MVP demo runbook](documentation/operations/backend-demo-e2e.md)
+- [MVP demo runbook (frontend + backend)](documentation/operations/mvp-demo-runbook.md)
+- [Backend E2E demo runbook](documentation/operations/backend-demo-e2e.md)
 - [Backend E2E smoke test](scripts/demo/README.md)
 
 Current progress reports:
@@ -128,7 +130,9 @@ The repository is not production-ready yet.
 Main reasons:
 
 - `kushim-market-data` uses a mock provider only (no real market-data API);
-- frontends are not fully wired to the backend;
+- `kushim-auth/front` is not yet natively wired to `kushim-auth/api` (manual handoff works);
+- dashboard benchmark section and settings page actions remain mock;
+- FX conversion is not implemented (demo must use USD portfolios with the mock provider);
 - there is no complete CI/CD or deployment strategy visible in the repo;
 - observability, production secrets handling, and backup strategy are still incomplete;
 - some V1 business calculations intentionally remain conservative.

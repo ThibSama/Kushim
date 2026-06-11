@@ -1,111 +1,174 @@
-import React, { useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { ArrowLeft } from "lucide-react";
+import { useEffect } from "react";
+import { useNavigate, useParams } from "react-router-dom";
+import { ArrowLeft, Loader2, AlertCircle, ExternalLink } from "lucide-react";
 import { Card } from "../components/Card";
-import {
-  XAxis,
-  YAxis,
-  Tooltip,
-  ResponsiveContainer,
-  Area,
-  ComposedChart,
-} from "recharts";
+import { useAssetsStore } from "../../stores/assets";
 
-const priceData = [
-  { month: "Jan", price: 145 },
-  { month: "Fév", price: 152 },
-  { month: "Mar", price: 168 },
-  { month: "Avr", price: 190 },
-  { month: "Mai", price: 201 },
-  { month: "Juin", price: 208 },
-];
-
-const detailsLeft = [
-  { label: "Type", value: "Action" },
-  { label: "Secteur", value: "Technologie" },
-  { label: "Bourse", value: "NASDAQ" },
-  { label: "Devise native", value: "USD" },
-  { label: "ISIN", value: "US0378331005" },
-];
-
-const detailsRight = [
-  { label: "Quantité détenue", value: "40" },
-  { label: "Poids dans le portefeuille", value: "17%" },
-  { label: "Plus haut (1Y)", value: "€210.00" },
-  { label: "Plus bas (1Y)", value: "€142.00" },
-  { label: "Dividende perçu (total)", value: "€45.80" },
-];
-
-const transactions = [
-  {
-    date: "08/06/2026",
-    type: "Dividende",
-    qty: "—",
-    price: "—",
-    fees: "€0.00",
-    total: "€45.80",
-  },
-  {
-    date: "05/03/2026",
-    type: "Achat",
-    qty: "30",
-    price: "€208.00",
-    fees: "€10.00",
-    total: "€6,240.00",
-  },
-  {
-    date: "05/01/2026",
-    type: "Achat",
-    qty: "10",
-    price: "€145.00",
-    fees: "€5.00",
-    total: "€1,450.00",
-  },
-];
-
-const typeBadgeColor: Record<string, string> = {
-  Achat: "var(--color-gain)",
-  Vente: "var(--color-loss)",
-  Dividende: "#6366F1",
+const ASSET_CLASS_LABELS: Record<string, string> = {
+  equity: "Action",
+  etf: "ETF",
+  fund: "Fonds",
+  bond: "Obligation",
+  crypto: "Crypto",
+  commodity: "Matière première",
+  cash: "Cash",
+  forex: "Forex",
+  index: "Indice",
+  real_estate: "Immobilier",
+  private_equity: "Private Equity",
+  derivative: "Dérivé",
+  other: "Autre",
 };
 
-const kpis = [
-  { label: "Total investi", value: "€5,800.00" },
-  { label: "Valeur actuelle", value: "€8,320.00" },
-  { label: "Prix moyen d'achat", value: "€145.00" },
-  {
-    label: "Gains / Pertes",
-    value: "+€2,520.00",
-    sub: "(+43.45%)",
-    isGain: true,
-  },
-];
+function assetClassLabel(cls: string): string {
+  return ASSET_CLASS_LABELS[cls] ?? cls;
+}
 
-const periods = ["1M", "3M", "6M", "1Y", "MAX"];
+function formatPrice(minor: number, currency: string): string {
+  const value = minor / 100;
+  try {
+    return new Intl.NumberFormat("fr-FR", {
+      style: "currency",
+      currency,
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(value);
+  } catch {
+    return `${value.toFixed(2)} ${currency}`;
+  }
+}
 
-const monoCell: React.CSSProperties = {
-  fontFamily: "'JetBrains Mono', monospace",
-  fontSize: "14px",
-  fontVariantNumeric: "tabular-nums",
-  color: "var(--text-primary)",
-  padding: "14px 12px",
-  textAlign: "right",
-  whiteSpace: "nowrap",
-};
+function formatDateTime(iso: string): string {
+  try {
+    return new Intl.DateTimeFormat("fr-FR", {
+      dateStyle: "medium",
+      timeStyle: "short",
+    }).format(new Date(iso));
+  } catch {
+    return iso;
+  }
+}
 
-const thStyle: React.CSSProperties = {
-  fontSize: "11px",
-  fontWeight: 500,
-  textTransform: "uppercase",
-  letterSpacing: "0.05em",
-  color: "var(--text-tertiary)",
-  padding: "10px 12px",
-  whiteSpace: "nowrap",
-};
+function InfoRow({
+  label,
+  value,
+  mono,
+}: {
+  label: string;
+  value: string | null | undefined;
+  mono?: boolean;
+}) {
+  if (!value) return null;
+  return (
+    <div
+      className="flex items-center justify-between"
+      style={{
+        padding: "10px 0",
+        borderBottom: "1px solid var(--surface-1-border)",
+      }}>
+      <span style={{ fontSize: "14px", color: "var(--text-tertiary)" }}>
+        {label}
+      </span>
+      <span
+        style={{
+          fontSize: "14px",
+          fontWeight: 500,
+          fontFamily: mono ? "'JetBrains Mono', monospace" : "inherit",
+          color: "var(--text-primary)",
+          textAlign: "right",
+          maxWidth: "60%",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        }}>
+        {value}
+      </span>
+    </div>
+  );
+}
 
 export function AssetDetail() {
+  const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const [period, setPeriod] = useState("1Y");
+  const {
+    detailAsset: asset,
+    detailStatus,
+    detailError: error,
+    loadAssetDetail,
+  } = useAssetsStore();
+
+  useEffect(() => {
+    if (id) loadAssetDetail(id);
+  }, [id, loadAssetDetail]);
+
+  const loading = detailStatus === "loading" || detailStatus === "idle";
+
+  if (loading) {
+    return (
+      <div
+        className="max-w-[1200px] mx-auto px-4 sm:px-6 py-12"
+        style={{ paddingTop: "clamp(100px, 15vw, 120px)" }}>
+        <div
+          className="flex items-center justify-center gap-3"
+          style={{
+            minHeight: "300px",
+            color: "var(--text-tertiary)",
+            fontSize: "14px",
+          }}>
+          <Loader2 size={20} className="animate-spin" />
+          Chargement de l'actif…
+        </div>
+      </div>
+    );
+  }
+
+  if (error || !asset) {
+    return (
+      <div
+        className="max-w-[1200px] mx-auto px-4 sm:px-6 py-12"
+        style={{ paddingTop: "clamp(100px, 15vw, 120px)" }}>
+        <button
+          onClick={() => navigate("/assets")}
+          className="flex items-center gap-2 mb-6"
+          style={{
+            background: "none",
+            border: "none",
+            cursor: "pointer",
+            color: "var(--text-secondary)",
+            fontSize: "14px",
+            padding: 0,
+          }}>
+          <ArrowLeft size={18} />
+          Retour au catalogue
+        </button>
+        <Card level={1}>
+          <div
+            className="flex items-center gap-3"
+            style={{ color: "var(--color-loss)" }}>
+            <AlertCircle size={20} />
+            <div>
+              <div style={{ fontWeight: 600, fontSize: "14px" }}>
+                Cet actif est introuvable ou inaccessible
+              </div>
+              {error && (
+                <div
+                  style={{
+                    fontSize: "13px",
+                    color: "var(--text-secondary)",
+                    marginTop: "2px",
+                  }}>
+                  {error}
+                </div>
+              )}
+            </div>
+          </div>
+        </Card>
+      </div>
+    );
+  }
+
+  const md = asset.market_data;
+  const meta = asset.metadata;
 
   return (
     <div
@@ -116,7 +179,7 @@ export function AssetDetail() {
         <div>
           <div className="flex items-center gap-3 mb-2">
             <button
-              onClick={() => navigate("/actifs")}
+              onClick={() => navigate("/assets")}
               className="p-1 transition-colors"
               style={{
                 background: "none",
@@ -140,345 +203,361 @@ export function AssetDetail() {
                 fontWeight: 700,
                 color: "var(--text-primary)",
               }}>
-              Apple Inc.
+              {asset.name}
             </h1>
-            <span
-              style={{
-                fontSize: "12px",
-                fontWeight: 500,
-                color: "var(--text-secondary)",
-                background: "var(--surface-2-bg)",
-                border: "1px solid var(--surface-2-border)",
-                borderRadius: "var(--radius-md)",
-                padding: "4px 8px",
-              }}>
-              AAPL
-            </span>
-          </div>
-          <div className="flex items-center gap-3 ml-9">
-            <span
-              style={{
-                fontSize: "18px",
-                fontWeight: 600,
-                color: "var(--text-primary)",
-                fontFamily: "'JetBrains Mono', monospace",
-              }}>
-              €208.00
-            </span>
-            <span
-              style={{
-                fontSize: "14px",
-                color: "var(--color-gain)",
-                fontWeight: 500,
-              }}>
-              +€7.00 (+3.48%)
-            </span>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-3">
-          <button
-            style={{
-              height: "36px",
-              padding: "0 16px",
-              borderRadius: "var(--radius-md)",
-              border: "none",
-              background: "var(--color-cta-bg)",
-              color: "var(--color-cta-text)",
-              fontSize: "14px",
-              fontWeight: 600,
-              cursor: "pointer",
-            }}>
-            Acheter
-          </button>
-          <button
-            style={{
-              height: "36px",
-              padding: "0 16px",
-              borderRadius: "var(--radius-md)",
-              border: "1px solid var(--surface-1-border)",
-              background: "transparent",
-              color: "var(--text-primary)",
-              fontSize: "14px",
-              fontWeight: 500,
-              cursor: "pointer",
-            }}>
-            Vendre
-          </button>
-        </div>
-      </div>
-
-      {/* KPI Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-        {kpis.map((kpi) => (
-          <div
-            key={kpi.label}
-            className="glass glass-hover"
-            style={{
-              borderRadius: "var(--radius-xl)",
-              padding: "20px",
-            }}>
-            <div
-              className="uppercase mb-2"
-              style={{
-                fontSize: "11px",
-                color: "var(--text-tertiary)",
-                letterSpacing: "0.05em",
-              }}>
-              {kpi.label}
-            </div>
-            <div
-              style={{
-                fontFamily: "'JetBrains Mono', monospace",
-                fontSize: "20px",
-                fontWeight: 700,
-                fontVariantNumeric: "tabular-nums",
-                color: kpi.isGain ? "var(--color-gain)" : "var(--text-primary)",
-              }}>
-              {kpi.value}
-            </div>
-            {kpi.sub && (
-              <span style={{ fontSize: "12px", color: "var(--color-gain)" }}>
-                {kpi.sub}
-              </span>
-            )}
-          </div>
-        ))}
-      </div>
-
-      {/* Price chart */}
-      <Card level={1} className="mb-8">
-        <div className="flex items-center justify-between mb-6">
-          <h2
-            style={{
-              fontSize: "18px",
-              fontWeight: 600,
-              color: "var(--text-primary)",
-            }}>
-            Évolution du prix
-          </h2>
-          <div className="flex gap-1">
-            {periods.map((p) => (
-              <button
-                key={p}
-                onClick={() => setPeriod(p)}
-                className="px-3 py-1 rounded-[9999px] transition-all"
+            {(asset.ticker ?? asset.symbol) && (
+              <span
                 style={{
                   fontSize: "12px",
-                  fontWeight: 600,
-                  background:
-                    period === p ? "var(--color-cta-bg)" : "transparent",
-                  color:
-                    period === p
-                      ? "var(--color-cta-text)"
-                      : "var(--text-secondary)",
+                  fontWeight: 500,
+                  color: "var(--text-secondary)",
+                  background: "var(--surface-2-bg)",
+                  border: "1px solid var(--surface-2-border)",
+                  borderRadius: "var(--radius-md)",
+                  padding: "4px 8px",
                 }}>
-                {p}
-              </button>
-            ))}
+                {asset.ticker ?? asset.symbol}
+              </span>
+            )}
+            <span
+              className="rounded-full px-2 py-0.5"
+              style={{
+                fontSize: "11px",
+                fontWeight: 600,
+                background:
+                  asset.status === "active"
+                    ? "color-mix(in srgb, var(--color-gain) 12%, transparent)"
+                    : "var(--surface-2-bg)",
+                color:
+                  asset.status === "active"
+                    ? "var(--color-gain)"
+                    : "var(--text-tertiary)",
+              }}>
+              {asset.status === "active"
+                ? "Actif"
+                : asset.status === "inactive"
+                  ? "Inactif"
+                  : asset.status === "delisted"
+                    ? "Délisté"
+                    : asset.status}
+            </span>
           </div>
-        </div>
-        <ResponsiveContainer width="100%" height={280}>
-          <ComposedChart data={priceData}>
-            <defs>
-              <linearGradient id="aaplFill" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="#6366F1" stopOpacity={0.12} />
-                <stop offset="100%" stopColor="#6366F1" stopOpacity={0} />
-              </linearGradient>
-            </defs>
-            <XAxis
-              dataKey="month"
-              stroke="var(--text-tertiary)"
-              style={{ fontSize: "12px" }}
-              tick={{ fill: "var(--text-tertiary)" }}
-            />
-            <YAxis
-              stroke="var(--text-tertiary)"
-              style={{ fontSize: "12px" }}
-              tick={{ fill: "var(--text-tertiary)" }}
-              tickFormatter={(v) => `€${v}`}
-              domain={["auto", "auto"]}
-            />
-            <Tooltip
-              contentStyle={{
-                background: "var(--surface-3-bg)",
-                backdropFilter: "blur(16px)",
-                border: "1px solid var(--surface-3-border)",
-                borderRadius: "var(--radius-md)",
-                fontSize: "12px",
-              }}
-              formatter={(value) => {
-                const amount = typeof value === "number" ? value : Number(value ?? 0);
-                return [`€${amount.toFixed(2)}`];
-              }}
-            />
-            <Area
-              type="monotone"
-              dataKey="price"
-              fill="url(#aaplFill)"
-              stroke="#6366F1"
-              strokeWidth={2}
-              dot={false}
-            />
-          </ComposedChart>
-        </ResponsiveContainer>
-      </Card>
 
-      {/* Asset info */}
-      <Card level={1} className="mb-8">
+          {/* Current price */}
+          {md && (
+            <div className="flex items-center gap-3 ml-9">
+              <span
+                style={{
+                  fontSize: "18px",
+                  fontWeight: 600,
+                  color: "var(--text-primary)",
+                  fontFamily: "'JetBrains Mono', monospace",
+                }}>
+                {formatPrice(md.price_minor, md.currency)}
+              </span>
+              {md.change_24h_pct != null && (
+                <span
+                  style={{
+                    fontSize: "14px",
+                    fontWeight: 500,
+                    color: md.change_24h_pct.startsWith("-")
+                      ? "var(--color-loss)"
+                      : "var(--color-gain)",
+                  }}>
+                  {md.change_24h_pct.startsWith("-") ? "" : "+"}
+                  {md.change_24h_pct}% (24h)
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Market data card */}
+      {md ? (
+        <Card level={1} className="mb-6">
+          <h2
+            className="mb-4"
+            style={{
+              fontSize: "16px",
+              fontWeight: 600,
+              color: "var(--text-primary)",
+            }}>
+            Données de marché
+          </h2>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            <div>
+              <div
+                className="uppercase mb-1"
+                style={{
+                  fontSize: "11px",
+                  color: "var(--text-tertiary)",
+                  letterSpacing: "0.05em",
+                }}>
+                Prix
+              </div>
+              <div
+                style={{
+                  fontFamily: "'JetBrains Mono', monospace",
+                  fontSize: "16px",
+                  fontWeight: 700,
+                  color: "var(--text-primary)",
+                }}>
+                {formatPrice(md.price_minor, md.currency)}
+              </div>
+            </div>
+            {md.change_24h_pct != null && (
+              <div>
+                <div
+                  className="uppercase mb-1"
+                  style={{
+                    fontSize: "11px",
+                    color: "var(--text-tertiary)",
+                    letterSpacing: "0.05em",
+                  }}>
+                  Variation 24h
+                </div>
+                <div
+                  style={{
+                    fontFamily: "'JetBrains Mono', monospace",
+                    fontSize: "16px",
+                    fontWeight: 700,
+                    color: md.change_24h_pct.startsWith("-")
+                      ? "var(--color-loss)"
+                      : "var(--color-gain)",
+                  }}>
+                  {md.change_24h_pct.startsWith("-") ? "" : "+"}
+                  {md.change_24h_pct}%
+                </div>
+              </div>
+            )}
+            {md.change_7d_pct != null && (
+              <div>
+                <div
+                  className="uppercase mb-1"
+                  style={{
+                    fontSize: "11px",
+                    color: "var(--text-tertiary)",
+                    letterSpacing: "0.05em",
+                  }}>
+                  Variation 7j
+                </div>
+                <div
+                  style={{
+                    fontFamily: "'JetBrains Mono', monospace",
+                    fontSize: "16px",
+                    fontWeight: 700,
+                    color: md.change_7d_pct.startsWith("-")
+                      ? "var(--color-loss)"
+                      : "var(--color-gain)",
+                  }}>
+                  {md.change_7d_pct.startsWith("-") ? "" : "+"}
+                  {md.change_7d_pct}%
+                </div>
+              </div>
+            )}
+            {md.change_30d_pct != null && (
+              <div>
+                <div
+                  className="uppercase mb-1"
+                  style={{
+                    fontSize: "11px",
+                    color: "var(--text-tertiary)",
+                    letterSpacing: "0.05em",
+                  }}>
+                  Variation 30j
+                </div>
+                <div
+                  style={{
+                    fontFamily: "'JetBrains Mono', monospace",
+                    fontSize: "16px",
+                    fontWeight: 700,
+                    color: md.change_30d_pct.startsWith("-")
+                      ? "var(--color-loss)"
+                      : "var(--color-gain)",
+                  }}>
+                  {md.change_30d_pct.startsWith("-") ? "" : "+"}
+                  {md.change_30d_pct}%
+                </div>
+              </div>
+            )}
+          </div>
+          <div
+            style={{
+              fontSize: "12px",
+              color: "var(--text-tertiary)",
+              marginTop: "12px",
+            }}>
+            Source : {md.data_source ?? "—"} • Dernière mise à jour :{" "}
+            {formatDateTime(md.as_of)}
+          </div>
+        </Card>
+      ) : (
+        <Card level={1} className="mb-6">
+          <div
+            className="text-center"
+            style={{
+              padding: "24px 16px",
+              color: "var(--text-tertiary)",
+              fontSize: "14px",
+            }}>
+            Données de marché indisponibles
+          </div>
+        </Card>
+      )}
+
+      {/* Identity section */}
+      <Card level={1} className="mb-6">
         <h2
-          className="mb-6"
+          className="mb-4"
           style={{
-            fontSize: "18px",
+            fontSize: "16px",
             fontWeight: 600,
             color: "var(--text-primary)",
           }}>
-          Informations sur l'actif
+          Identité de l'actif
         </h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-          {[detailsLeft, detailsRight].map((col, ci) => (
-            <div key={ci}>
-              {ci === 0 && (
-                <div
-                  className="mb-3"
-                  style={{
-                    fontSize: "13px",
-                    fontWeight: 600,
-                    color: "var(--text-secondary)",
-                  }}>
-                  Détails de l'actif
-                </div>
-              )}
-              {ci === 1 && (
-                <div
-                  className="mb-3"
-                  style={{
-                    fontSize: "13px",
-                    fontWeight: 600,
-                    color: "var(--text-secondary)",
-                  }}>
-                  Métriques
-                </div>
-              )}
-              {col.map((row, ri) => (
-                <div
-                  key={row.label}
-                  className="flex items-center justify-between"
-                  style={{
-                    padding: "10px 0",
-                    borderBottom:
-                      ri < col.length - 1
-                        ? "1px solid var(--surface-1-border)"
-                        : "none",
-                  }}>
-                  <span
-                    style={{ fontSize: "14px", color: "var(--text-tertiary)" }}>
-                    {row.label}
-                  </span>
-                  <span
-                    style={{
-                      fontSize: "14px",
-                      fontWeight: 500,
-                      fontFamily: "'JetBrains Mono', monospace",
-                      color: "var(--text-primary)",
-                    }}>
-                    {row.value}
-                  </span>
-                </div>
-              ))}
-            </div>
-          ))}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8">
+          <div>
+            <InfoRow label="Nom" value={asset.name} />
+            <InfoRow label="Ticker" value={asset.ticker} mono />
+            <InfoRow label="Symbole" value={asset.symbol} mono />
+            <InfoRow label="ISIN" value={asset.isin} mono />
+            <InfoRow
+              label="Classe d'actif"
+              value={assetClassLabel(asset.asset_class)}
+            />
+          </div>
+          <div>
+            <InfoRow label="Bourse" value={asset.exchange} />
+            <InfoRow label="Réseau" value={asset.network} />
+            <InfoRow label="Devise native" value={asset.native_currency} mono />
+            <InfoRow
+              label="Statut"
+              value={
+                asset.status === "active"
+                  ? "Actif"
+                  : asset.status === "inactive"
+                    ? "Inactif"
+                    : asset.status === "delisted"
+                      ? "Délisté"
+                      : asset.status
+              }
+            />
+          </div>
         </div>
       </Card>
 
-      {/* Transaction history */}
-      <Card level={1} className="mb-8">
-        <div className="flex items-center justify-between mb-6">
+      {/* Metadata section */}
+      {meta &&
+        (meta.sector ||
+          meta.industry ||
+          meta.country ||
+          meta.description ||
+          meta.website_url) && (
+          <Card level={1} className="mb-6">
+            <h2
+              className="mb-4"
+              style={{
+                fontSize: "16px",
+                fontWeight: 600,
+                color: "var(--text-primary)",
+              }}>
+              Informations complémentaires
+            </h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8">
+              <div>
+                <InfoRow label="Secteur" value={meta.sector} />
+                <InfoRow label="Industrie" value={meta.industry} />
+                <InfoRow label="Pays" value={meta.country} />
+              </div>
+              <div>
+                {meta.website_url && (
+                  <div
+                    className="flex items-center justify-between"
+                    style={{
+                      padding: "10px 0",
+                      borderBottom: "1px solid var(--surface-1-border)",
+                    }}>
+                    <span
+                      style={{
+                        fontSize: "14px",
+                        color: "var(--text-tertiary)",
+                      }}>
+                      Site web
+                    </span>
+                    <a
+                      href={meta.website_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center gap-1"
+                      style={{
+                        fontSize: "14px",
+                        fontWeight: 500,
+                        color: "var(--color-accent)",
+                      }}>
+                      Voir
+                      <ExternalLink size={12} />
+                    </a>
+                  </div>
+                )}
+                <InfoRow label="Provider" value={meta.provider} />
+              </div>
+            </div>
+            {meta.description && (
+              <div style={{ marginTop: "16px" }}>
+                <div
+                  style={{
+                    fontSize: "12px",
+                    fontWeight: 500,
+                    color: "var(--text-tertiary)",
+                    marginBottom: "6px",
+                  }}>
+                  Description
+                </div>
+                <p
+                  style={{
+                    fontSize: "14px",
+                    color: "var(--text-secondary)",
+                    lineHeight: "1.6",
+                  }}>
+                  {meta.description}
+                </p>
+              </div>
+            )}
+          </Card>
+        )}
+
+      {/* Aliases section */}
+      {asset.aliases && asset.aliases.length > 0 && (
+        <Card level={1} className="mb-6">
           <h2
+            className="mb-4"
             style={{
-              fontSize: "18px",
+              fontSize: "16px",
               fontWeight: 600,
               color: "var(--text-primary)",
             }}>
-            Historique des transactions
+            Identifiants alternatifs
           </h2>
-          <button
-            style={{
-              background: "none",
-              border: "none",
-              fontSize: "14px",
-              fontWeight: 500,
-              color: "var(--color-accent)",
-              cursor: "pointer",
-            }}>
-            Voir tout →
-          </button>
-        </div>
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead>
-              <tr>
-                <th style={{ ...thStyle, textAlign: "left" }}>Date</th>
-                <th style={{ ...thStyle, textAlign: "left" }}>Type</th>
-                <th style={{ ...thStyle, textAlign: "right" }}>Quantité</th>
-                <th style={{ ...thStyle, textAlign: "right" }}>
-                  Prix unitaire
-                </th>
-                <th style={{ ...thStyle, textAlign: "right" }}>Frais</th>
-                <th style={{ ...thStyle, textAlign: "right" }}>Total</th>
-              </tr>
-            </thead>
-            <tbody>
-              {transactions.map((tx, i) => (
-                <tr
-                  key={i}
-                  className="transition-colors"
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.background = "var(--surface-2-bg)";
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.background = "transparent";
-                  }}
-                  style={{
-                    borderBottom:
-                      i < transactions.length - 1
-                        ? "1px solid var(--surface-1-border)"
-                        : "none",
-                  }}>
-                  <td
-                    style={{
-                      padding: "14px 12px",
-                      fontSize: "13px",
-                      fontFamily: "'JetBrains Mono', monospace",
-                      color: "var(--text-secondary)",
-                      whiteSpace: "nowrap",
-                    }}>
-                    {tx.date}
-                  </td>
-                  <td style={{ padding: "14px 12px" }}>
-                    <span
-                      style={{
-                        display: "inline-block",
-                        padding: "3px 10px",
-                        borderRadius: "9999px",
-                        fontSize: "12px",
-                        fontWeight: 600,
-                        color: typeBadgeColor[tx.type],
-                        background: `color-mix(in srgb, ${typeBadgeColor[tx.type]} 12%, transparent)`,
-                      }}>
-                      {tx.type}
-                    </span>
-                  </td>
-                  <td style={monoCell}>{tx.qty}</td>
-                  <td style={monoCell}>{tx.price}</td>
-                  <td style={monoCell}>{tx.fees}</td>
-                  <td style={{ ...monoCell, fontWeight: 600 }}>{tx.total}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </Card>
+          <div className="flex flex-wrap gap-2">
+            {asset.aliases.map((alias, i) => (
+              <span
+                key={i}
+                className="rounded-full px-3 py-1"
+                style={{
+                  fontSize: "12px",
+                  background: "var(--surface-2-bg)",
+                  border: "1px solid var(--surface-2-border)",
+                  color: "var(--text-secondary)",
+                }}>
+                <span style={{ fontWeight: 600 }}>{alias.alias_type}:</span>{" "}
+                {alias.alias_value}
+              </span>
+            ))}
+          </div>
+        </Card>
+      )}
     </div>
   );
 }

@@ -13,6 +13,7 @@ pub struct Config {
     pub environment: String,
     pub auth_jwt_secret: String,
     pub jwt_issuer: String,
+    pub cors_allowed_origins: Option<String>,
 }
 
 impl Config {
@@ -30,6 +31,9 @@ impl Config {
         let auth_jwt_secret =
             env::var("AUTH_JWT_SECRET").context("AUTH_JWT_SECRET must be set for kushim-api")?;
         let jwt_issuer = env::var("JWT_ISSUER").unwrap_or_else(|_| "kushim-auth".to_string());
+        let cors_allowed_origins = env::var("CORS_ALLOWED_ORIGINS")
+            .or_else(|_| env::var("CORS_ALLOWED_ORIGIN"))
+            .ok();
 
         if host.trim().is_empty() {
             bail!("KUSHIM_API_HOST must not be blank");
@@ -60,6 +64,7 @@ impl Config {
             environment,
             auth_jwt_secret,
             jwt_issuer,
+            cors_allowed_origins,
         })
     }
 

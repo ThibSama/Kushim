@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef } from "react";
 import {
   createBrowserRouter,
   Navigate,
@@ -8,44 +8,28 @@ import {
   useParams,
 } from "react-router-dom";
 import { getWebsiteLoginUrl, useAuthStore } from "../stores/auth";
+import { exchangeHandoffCode } from "../lib/api/authApi";
+import { getBusinessMe } from "../lib/api/businessApi";
 import { Root } from "./Root";
 import { Dashboard } from "./pages/Dashboard";
 import { Assets } from "./pages/Assets";
 import { AssetDetail } from "./pages/AssetDetail";
+import { Positions } from "./pages/Positions";
 import { Transactions } from "./pages/Transactions";
 import { Settings } from "./pages/Settings";
-
-const AUTH_API_URL =
-  import.meta.env.VITE_AUTH_API_URL || "http://localhost:3002";
-
-async function exchangeHandoffCode(
-  code: string,
-): Promise<{ access_token: string; refresh_token: string } | null> {
-  try {
-    const response = await fetch(`${AUTH_API_URL}/auth/handoff/exchange`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ handoff_code: code }),
-    });
-    if (!response.ok) return null;
-    return await response.json();
-  } catch {
-    return null;
-  }
-}
 
 function Handoff() {
   const location = useLocation();
   const navigate = useNavigate();
   const { token, setTokens } = useAuthStore();
-  const [exchanging, setExchanging] = useState(false);
+  const exchangingRef = useRef(false);
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);
     const handoffCode = params.get("handoff_code");
 
-    if (handoffCode && !exchanging) {
-      setExchanging(true);
+    if (handoffCode && !exchangingRef.current) {
+      exchangingRef.current = true;
       exchangeHandoffCode(handoffCode).then((result) => {
         if (result) {
           setTokens(result.access_token, result.refresh_token);
@@ -63,30 +47,80 @@ function Handoff() {
     }
 
     window.location.href = getWebsiteLoginUrl();
-  }, [location.search, navigate, setTokens, token, exchanging]);
+  }, [location.search, navigate, setTokens, token]);
 
   return null;
 }
 
 function RequireAuth() {
-  const token = useAuthStore((state) => state.token);
+  const { token, sessionStatus, validateSession } = useAuthStore();
+  const validationStarted = useRef(false);
 
   useEffect(() => {
     if (!token) {
       window.location.href = getWebsiteLoginUrl();
+      return;
     }
-  }, [token]);
+
+    if (
+      sessionStatus === "idle" &&
+      !validationStarted.current
+    ) {
+      validationStarted.current = true;
+      validateSession().then((valid) => {
+        if (!valid) {
+          window.location.href = getWebsiteLoginUrl();
+        } else {
+          smokeTestBusinessApi();
+        }
+      });
+    }
+  }, [token, sessionStatus, validateSession]);
 
   if (!token) {
+    return null;
+  }
+
+  if (sessionStatus === "idle" || sessionStatus === "validating") {
+    return (
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          minHeight: "60vh",
+          color: "var(--text-secondary)",
+          fontSize: "15px",
+        }}>
+        Vérification de la session…
+      </div>
+    );
+  }
+
+  if (sessionStatus === "unauthenticated") {
     return null;
   }
 
   return <Outlet />;
 }
 
-function LegacyAssetRedirect() {
+function smokeTestBusinessApi() {
+  const token = useAuthStore.getState().token;
+  if (!token) return;
+
+  getBusinessMe(token).then(
+    (data) => {
+      console.info("[kushim-app] GET /v1/me success:", data);
+    },
+    (err) => {
+      console.warn("[kushim-app] GET /v1/me failed:", err);
+    },
+  );
+}
+
+function FrenchAssetRedirect() {
   const { id } = useParams();
-  return <Navigate to={id ? `/actifs/${id}` : "/actifs"} replace />;
+  return <Navigate to={id ? `/assets/${id}` : "/assets"} replace />;
 }
 
 export const router = createBrowserRouter([
@@ -99,12 +133,13 @@ export const router = createBrowserRouter([
         Component: RequireAuth,
         children: [
           { path: "dashboard", Component: Dashboard },
-          { path: "actifs", Component: Assets },
-          { path: "actifs/:id", Component: AssetDetail },
+          { path: "assets", Component: Assets },
+          { path: "assets/:id", Component: AssetDetail },
+          { path: "positions", Component: Positions },
           { path: "transactions", Component: Transactions },
           { path: "parametres", Component: Settings },
-          { path: "assets", Component: LegacyAssetRedirect },
-          { path: "assets/:id", Component: LegacyAssetRedirect },
+          { path: "actifs", Component: FrenchAssetRedirect },
+          { path: "actifs/:id", Component: FrenchAssetRedirect },
           { path: "settings", element: <Navigate to="/parametres" replace /> },
         ],
       },

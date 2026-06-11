@@ -90,9 +90,14 @@ function SelectField({
 export function Settings() {
   const navigate = useNavigate();
   const logout = useAuthStore((state) => state.logout);
+  const user = useAuthStore((state) => state.user);
 
-  const handleLogout = () => {
-    logout();
+  const displayName = user?.username ?? "Utilisateur";
+  const displayHandle = user?.public_handle ?? user?.username ?? "—";
+  const displayInitial = displayName.charAt(0).toUpperCase();
+
+  const handleLogout = async () => {
+    await logout();
     window.location.href = getWebsiteLoginUrl();
   };
 
@@ -136,7 +141,7 @@ export function Settings() {
                   fontWeight: 800,
                   boxShadow: "0 18px 45px rgba(16, 185, 129, 0.22)",
                 }}>
-                U
+                {displayInitial}
               </div>
               <div
                 style={{
@@ -145,7 +150,7 @@ export function Settings() {
                   fontWeight: 700,
                   color: "var(--text-primary)",
                 }}>
-                Utilisateur
+                {displayName}
               </div>
               <div
                 style={{
@@ -154,7 +159,7 @@ export function Settings() {
                   fontSize: "13px",
                   color: "var(--text-tertiary)",
                 }}>
-                user_demo
+                {displayHandle}
               </div>
               <div
                 className="mt-4 rounded-full"
@@ -166,7 +171,7 @@ export function Settings() {
                   fontSize: "12px",
                   fontWeight: 700,
                 }}>
-                Compte démo
+                {user?.role ?? "user"}
               </div>
             </div>
 
@@ -210,7 +215,9 @@ export function Settings() {
                 lineHeight: 1.5,
                 color: "var(--text-tertiary)",
               }}>
-              Compte créé le 1er janvier 2026
+              {user?.created_at
+                ? `Compte créé le ${new Date(user.created_at).toLocaleDateString("fr-FR", { day: "numeric", month: "long", year: "numeric" })}`
+                : " "}
             </p>
           </Card>
         </div>
@@ -223,8 +230,8 @@ export function Settings() {
               helper="Les informations de base de votre espace Kushim."
             />
             <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <Input label="Nom d'utilisateur" value="Utilisateur" readOnly />
-              <Input label="Identifiant" value="user_demo" readOnly />
+              <Input label="Nom d'utilisateur" value={displayName} readOnly />
+              <Input label="Identifiant" value={displayHandle} readOnly />
             </div>
           </Card>
 
