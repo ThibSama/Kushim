@@ -58,7 +58,7 @@ async fn ensure_user_role(pool: &sqlx::PgPool) {
 
     let next_role_id = sqlx::query_scalar::<_, i16>(
         r#"
-        SELECT COALESCE(MAX(id_role), 0) + 1
+        SELECT (COALESCE(MAX(id_role), 0) + 1)::smallint
         FROM roles
         "#,
     )
