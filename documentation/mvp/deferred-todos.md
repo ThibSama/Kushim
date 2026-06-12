@@ -169,6 +169,8 @@ Use these labels:
 
 - backend E2E smoke test script: `scripts/demo/backend-e2e.ps1` — validated locally, 18/18 assertions
 - backend demo runbook: `documentation/operations/backend-demo-e2e.md`
+- MVP smoke GitHub Actions workflow for frontend lint/build, Rust fmt/clippy/test with PostgreSQL, and `cargo audit --ignore RUSTSEC-2023-0071`
+- local backend prerequisite preflight: `scripts/validation/check-local-services.ps1`
 
 ### Still deferred
 

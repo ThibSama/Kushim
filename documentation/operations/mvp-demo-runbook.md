@@ -300,7 +300,8 @@ Points à montrer :
 
 Points à montrer :
 - Profil utilisateur réel (nom, handle, rôle, date de création)
-- **Ne pas cliquer** les boutons d'action (voir section 9)
+- Actions non incluses dans le MVP clairement desactivees ou etiquetees
+- Logout disponible et valide
 
 ### Étape 10 — Logout
 
@@ -313,11 +314,10 @@ Points à montrer :
 
 | Élément | Raison | Conséquence si cliqué |
 |---|---|---|
-| Dashboard → "Ajouter un actif" (en bas de la section top actifs) | Modal placeholder non fonctionnel | Formulaire s'ouvre mais ne fait rien |
-| Dashboard → section Benchmark | Données de démonstration (pas réelles) | Affiché mais trompeur si présenté comme réel |
-| Paramètres → "Enregistrer les préférences" | Pas de handler backend | Pas de feedback |
-| Paramètres → "Mettre à jour le mot de passe" | Pas de handler backend | Pas de feedback |
-| Paramètres → "Supprimer mon compte" | Pas de handler backend | Pas de feedback |
+| Dashboard -> section Benchmark | Donnees de demonstration, pas reelles | Correct si presente comme donnees simulees |
+| Parametres -> preferences | Non inclus dans le MVP demo | Bouton desactive ou clairement etiquete, pas de faux succes |
+| Parametres -> mot de passe | Non inclus dans le MVP demo | Bouton desactive ou clairement etiquete, pas de faux succes |
+| Parametres -> suppression compte | Non inclus dans le MVP demo | Bouton desactive ou clairement etiquete, pas de faux succes |
 | Création de portefeuille EUR | Mock provider = prix USD uniquement | Holdings `is_estimated=true`, valeurs à 0 |
 | Données de marché présentées comme réelles | Mock provider avec prix déterministes | Prix ne reflètent pas le marché réel |
 
@@ -335,7 +335,7 @@ Points à montrer :
 | KPI "Meilleur actif" = "—" | Donnée non branchée sur le KPI card | Cosmétique |
 | Quantité brute en Transactions | Affiche `3.0000000000` au lieu de `3` | Cosmétique (Positions est corrigé) |
 | Token access TTL = 15 min | Si la démo dure plus de 15 min, le refresh peut être nécessaire | Automatique via le store auth |
-| Boutons Paramètres non fonctionnels | UI only, pas de backend | Ne pas cliquer en démo |
+| Actions Parametres non incluses dans le MVP | UI only, pas de backend | Boutons desactives ou etiquetes, pas de faux succes |
 
 ---
 

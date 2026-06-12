@@ -6,6 +6,123 @@ This file centralizes the main validation commands used across Kushim services.
 
 If a task changes only documentation, these commands do not need to be rerun automatically.
 
+## Validation ladder
+
+Use these levels to avoid mixing fast static checks with Docker/PostgreSQL-dependent checks.
+
+### Level 0 - Static fast checks
+
+Run before committing small changes:
+
+```powershell
+cd E:\Kushim
+git diff --check
+```
+
+For changed frontends:
+
+```powershell
+npm run lint
+npm run build
+```
+
+For changed Rust services:
+
+```powershell
+cargo fmt --check
+cargo clippy --all-targets --all-features -- -D warnings
+```
+
+### Level 1 - Service test and dependency checks
+
+Run for changed services before a PR:
+
+- Rust `cargo test` for changed Rust services;
+- Node `npm run lint` and `npm run build` for changed frontend projects;
+- `cargo audit --ignore RUSTSEC-2023-0071` for Rust dependency review.
+
+### Level 2 - Local DB-backed checks
+
+Requires Docker Desktop, PostgreSQL, and Redis:
+
+```powershell
+cd E:\Kushim
+.\scripts\validation\check-local-services.ps1 -Start
+```
+
+Then run DB-backed Rust tests with:
+
+```powershell
+$env:DATABASE_URL='postgresql://kushim:kushim_secret_dev@localhost:5432/kushim'
+```
+
+If this prerequisite is skipped, DB-backed Rust tests may fail with connection timeouts such as `PoolTimedOut`. Treat that as an environment/preflight failure, not proof that the service logic is broken.
+
+### Level 3 - MVP smoke
+
+Run before an internal demo:
+
+```powershell
+cd E:\Kushim
+.\scripts\validation\check-local-services.ps1 -Start
+.\scripts\demo\backend-e2e.ps1
+```
+
+Then start `kushim-app` and do the manual frontend smoke described in `mvp-demo-runbook.md`.
+
+### Level 4 - Manual demo smoke
+
+Manual browser validation remains required for:
+
+- auth/login/handoff;
+- dashboard;
+- benchmark demo label;
+- `Catalogue d'actifs` -> `/assets`;
+- asset catalogue and detail;
+- positions;
+- settings disabled/UI-only actions;
+- logout;
+- browser console check.
+
+This level is mandatory before a supervised MVP demo. It is not a production-readiness gate.
+
+## Recommended command sets
+
+Before a normal frontend-only commit:
+
+```powershell
+cd E:\Kushim
+git diff --check
+cd E:\Kushim\kushim-app
+npm run lint
+npm run build
+```
+
+Before a Rust service PR:
+
+```powershell
+cd E:\Kushim
+.\scripts\validation\check-local-services.ps1 -Start
+cd E:\Kushim\<rust-service>
+cargo fmt --check
+$env:DATABASE_URL='postgresql://kushim:kushim_secret_dev@localhost:5432/kushim'
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test
+cargo audit --ignore RUSTSEC-2023-0071
+```
+
+Before a supervised MVP demo:
+
+```powershell
+cd E:\Kushim
+.\scripts\validation\check-local-services.ps1 -Start
+.\scripts\demo\backend-e2e.ps1
+cd E:\Kushim\kushim-app
+npm run lint
+npm run build
+npm run dev -- --host 127.0.0.1
+```
+
 ## Common Rust validation pattern
 
 Use explicit `DATABASE_URL` from the host when needed:
@@ -21,6 +138,7 @@ cargo fmt --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test
 cargo audit
+cargo audit --ignore RUSTSEC-2023-0071
 ```
 
 Important:
@@ -28,6 +146,7 @@ Important:
 - integration tests for Rust services require PostgreSQL reachable from the host at the configured `DATABASE_URL`;
 - if Docker Desktop or PostgreSQL is not running, DB-backed tests can fail with connection timeouts even when unit tests and clippy pass;
 - initialize the local schema from `infra/postgres/init/001_init.sql` before treating DB-backed test results as meaningful;
+- use `.\scripts\validation\check-local-services.ps1 -Start` before DB-backed Rust tests to avoid false failures from missing Docker/PostgreSQL;
 - do not print `.env` files or provider API keys while validating.
 
 ## `kushim-auth/api`
@@ -39,6 +158,7 @@ $env:DATABASE_URL='postgresql://kushim:kushim_secret_dev@localhost:5432/kushim'
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test
 cargo audit
+cargo audit --ignore RUSTSEC-2023-0071
 ```
 
 Docker validation:
@@ -60,6 +180,7 @@ $env:DATABASE_URL='postgresql://kushim:kushim_secret_dev@localhost:5432/kushim'
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test
 cargo audit
+cargo audit --ignore RUSTSEC-2023-0071
 ```
 
 Docker validation:
@@ -81,6 +202,7 @@ $env:DATABASE_URL='postgresql://kushim:kushim_secret_dev@localhost:5432/kushim'
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test
 cargo audit
+cargo audit --ignore RUSTSEC-2023-0071
 ```
 
 Docker validation:
@@ -119,6 +241,7 @@ $env:DATABASE_URL='postgresql://kushim:kushim_secret_dev@localhost:5432/kushim'
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test
 cargo audit
+cargo audit --ignore RUSTSEC-2023-0071
 ```
 
 Mock provider job validation, when local Docker/PostgreSQL are running:
@@ -201,7 +324,9 @@ Required discipline:
 
 - rerun `cargo audit` when Rust dependencies change
 - report any new advisory explicitly
+- expect plain `cargo audit` to fail while `RUSTSEC-2023-0071` is still present
 - a clean result with `cargo audit --ignore RUSTSEC-2023-0071` means no advisory beyond the currently accepted/monitored one was reported
+- CI must use `cargo audit --ignore RUSTSEC-2023-0071`, not a blanket advisory bypass
 
 ## Documentation-only tasks
 

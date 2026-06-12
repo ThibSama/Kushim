@@ -81,7 +81,7 @@ Critical project rules:
 ```powershell
 cd E:\Kushim
 docker compose build
-docker compose up -d --force-recreate database redis kushim-auth-api kushim-api kushim-worker
+docker compose up -d --force-recreate database redis kushim-auth-api kushim-api kushim-worker kushim-market-data
 ```
 
 Useful health checks:
@@ -93,11 +93,22 @@ curl http://127.0.0.1:8080/health
 curl http://127.0.0.1:8080/ready
 curl http://127.0.0.1:8081/health
 curl http://127.0.0.1:8081/ready
+curl http://127.0.0.1:8082/health
+curl http://127.0.0.1:8082/ready
 ```
 
 Why `--force-recreate` matters:
 
 - after rebuilds, it avoids validating stale containers still running older binaries.
+
+For a fast reproducible backend preflight before DB-backed Rust tests:
+
+```powershell
+cd E:\Kushim
+.\scripts\validation\check-local-services.ps1 -Start
+```
+
+This starts/verifies PostgreSQL, Redis, auth API, business API, worker, and market-data health endpoints. Run it before DB-backed Rust tests to avoid false `PoolTimedOut` failures caused by missing Docker/PostgreSQL.
 
 ## Detailed documentation
 

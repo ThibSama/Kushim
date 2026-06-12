@@ -35,6 +35,44 @@ jobs:
       - run: npm run lint
       - run: npm run build
 
+  kushim-auth-front:
+    name: "kushim-auth/front (lint + build)"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: kushim-auth/front
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: kushim-auth/front/package-lock.json
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+
+  kushim-website:
+    name: "kushim-website (lint + build)"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: kushim-website
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: kushim-website/package-lock.json
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+
   # ─── Rust services ─────────────────────────────────────────────────
   # Each Rust service is an independent Cargo project (no root workspace).
   # Integration tests in job modules require PostgreSQL with the full DDL.
@@ -198,3 +236,23 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - run: cargo test
+
+  rust-audit:
+    name: "Rust advisory audit"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Audit Rust services
+        run: |
+          set -euo pipefail
+          for service in kushim-auth/api kushim-api kushim-worker kushim-market-data; do
+            echo "::group::cargo audit --ignore RUSTSEC-2023-0071 ($service)"
+            (cd "$service" && cargo audit --ignore RUSTSEC-2023-0071)
+            echo "::endgroup::"
+          done

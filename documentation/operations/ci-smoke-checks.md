@@ -15,6 +15,16 @@ Triggers: push to `main`, pull requests targeting `main`.
 - Node 22, `npm ci`, `npm run lint`, `npm run build`
 - Validates frontend TypeScript compilation and ESLint rules
 
+### `kushim-auth/front` (lint + build)
+
+- Node 22, `npm ci`, `npm run lint`, `npm run build`
+- Validates the auth frontend without requiring live auth API calls
+
+### `kushim-website` (lint + build)
+
+- Node 22, `npm ci`, `npm run lint`, `npm run build`
+- Validates the public website build
+
 ### `kushim-market-data` (fmt + clippy + test)
 
 - Rust stable, PostgreSQL 16 service container
@@ -40,6 +50,12 @@ Triggers: push to `main`, pull requests targeting `main`.
 - ~74 tests (unit + integration against PostgreSQL)
 - Tests use a hardcoded dev JWT secret — no `AUTH_JWT_SECRET` env var required
 
+### `rust-audit`
+
+- Installs `cargo-audit`
+- Runs `cargo audit --ignore RUSTSEC-2023-0071` in all Rust service directories
+- Keeps the known advisory visible while still failing CI on any additional advisory
+
 ## What is intentionally not checked
 
 - **Finnhub provider calls**: CI uses mock provider only. No `FINNHUB_API_KEY` secret is configured.
@@ -48,7 +64,7 @@ Triggers: push to `main`, pull requests targeting `main`.
 - **Docker image builds**: not part of the smoke check workflow.
 - **Production deployment**: entirely out of scope.
 - **Release automation**: not implemented.
-- **`cargo audit`**: not included in the smoke workflow to avoid flaky runs from new advisories; should be run periodically or in a separate scheduled workflow.
+- **Plain `cargo audit` as a hard gate**: not used because `RUSTSEC-2023-0071` is known and accepted/monitored for now. The workflow uses `cargo audit --ignore RUSTSEC-2023-0071` so new advisories still fail CI.
 
 ## Caching
 
