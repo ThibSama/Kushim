@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { Card } from "../components/Card";
 import { Input } from "../components/Input";
 import { Button } from "../components/Button";
+import { Badge } from "../components/Badge";
 import { getWebsiteLoginUrl, useAuthStore } from "../../stores/auth";
 
 const fieldStyle: React.CSSProperties = {
@@ -75,14 +76,24 @@ function SectionTitle({
 function SelectField({
   label,
   children,
+  disabled = false,
 }: {
   label: string;
   children: React.ReactNode;
+  disabled?: boolean;
 }) {
   return (
     <div>
       <label style={labelStyle}>{label}</label>
-      <select style={fieldStyle}>{children}</select>
+      <select
+        disabled={disabled}
+        style={{
+          ...fieldStyle,
+          opacity: disabled ? 0.58 : 1,
+          cursor: disabled ? "not-allowed" : "default",
+        }}>
+        {children}
+      </select>
     </div>
   );
 }
@@ -121,7 +132,8 @@ export function Settings() {
             lineHeight: 1.6,
             color: "var(--text-secondary)",
           }}>
-          Gérez votre profil, vos préférences et la sécurité de votre compte.
+          Consultez votre profil et gérez les actions disponibles dans la démo
+          MVP.
         </p>
       </div>
 
@@ -242,26 +254,29 @@ export function Settings() {
             <SectionTitle
               icon={SlidersHorizontal}
               title="Préférences"
-              helper="Personnalisez l'affichage et les formats utilisés dans votre portefeuille."
+              helper="Les préférences utilisateur sont visibles pour préparer l'UX, mais leur sauvegarde n'est pas incluse dans le MVP."
             />
             <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
-              <SelectField label="Devise de base">
+              <SelectField label="Devise de base" disabled>
                 <option>EUR (€)</option>
                 <option>USD ($)</option>
                 <option>GBP (£)</option>
                 <option>CHF (Fr)</option>
               </SelectField>
-              <SelectField label="Thème">
+              <SelectField label="Thème" disabled>
                 <option>Clair</option>
                 <option>Sombre</option>
                 <option>Système</option>
               </SelectField>
-              <SelectField label="Langue">
+              <SelectField label="Langue" disabled>
                 <option>Français</option>
               </SelectField>
             </div>
-            <div className="mt-6 flex justify-end">
-              <Button variant="primary">Enregistrer les préférences</Button>
+            <div className="mt-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <Badge variant="info">Non inclus dans la démo MVP</Badge>
+              <Button variant="primary" disabled title="Fonctionnalité en préparation">
+                Bientôt disponible
+              </Button>
             </div>
           </Card>
 
@@ -269,29 +284,35 @@ export function Settings() {
             <SectionTitle
               icon={Shield}
               title="Sécurité"
-              helper="Modifiez votre mot de passe régulièrement pour protéger votre compte."
+              helper="Le changement de mot de passe depuis l'app est en préparation. La récupération reste gérée par le frontend auth."
             />
             <div className="mt-6 grid grid-cols-1 gap-4">
               <Input
                 label="Mot de passe actuel"
                 type="password"
                 placeholder="Entrez votre mot de passe actuel"
+                disabled
               />
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <Input
                   label="Nouveau mot de passe"
                   type="password"
                   placeholder="Entrez un nouveau mot de passe"
+                  disabled
                 />
                 <Input
                   label="Confirmer le nouveau mot de passe"
                   type="password"
                   placeholder="Confirmez le nouveau mot de passe"
+                  disabled
                 />
               </div>
             </div>
-            <div className="mt-6 flex justify-end">
-              <Button variant="primary">Mettre à jour le mot de passe</Button>
+            <div className="mt-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <Badge variant="info">Fonctionnalité en préparation</Badge>
+              <Button variant="primary" disabled title="Non disponible dans la démo">
+                Bientôt disponible
+              </Button>
             </div>
           </Card>
 
@@ -304,7 +325,7 @@ export function Settings() {
             <SectionTitle
               icon={TriangleAlert}
               title="Zone dangereuse"
-              helper="La suppression de votre compte est irréversible."
+              helper="La suppression de compte n'est pas incluse dans la démo MVP."
             />
             <p
               style={{
@@ -313,8 +334,9 @@ export function Settings() {
                 lineHeight: 1.6,
                 color: "var(--text-secondary)",
               }}>
-              Toutes vos données seront définitivement effacées. Cette action ne
-              peut pas être annulée.
+              Logout reste disponible et révoque la session côté auth. La
+              suppression de compte est volontairement désactivée dans cette
+              démo.
             </p>
             <div className="mt-6 flex flex-col sm:flex-row justify-end gap-3">
               <Button variant="secondary" onClick={() => navigate("/dashboard")}>
@@ -323,7 +345,9 @@ export function Settings() {
               <Button variant="danger" onClick={handleLogout}>
                 Se déconnecter
               </Button>
-              <Button variant="danger">Supprimer mon compte</Button>
+              <Button variant="danger" disabled title="Non disponible dans la démo">
+                Suppression indisponible
+              </Button>
             </div>
           </Card>
         </div>

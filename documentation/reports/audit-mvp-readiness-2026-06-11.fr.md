@@ -228,7 +228,7 @@ Aucune nouvelle fonctionnalité. Aucun changement d'API. Aucun changement de DDL
 | Portefeuille EUR avec mock USD-only → prix manquants | Moyenne | Valuations incorrectes | Créer un portefeuille USD pour la démo |
 | Démonstrateur clique "Ajouter un actif" (Dashboard) | Faible | Modal non fonctionnel visible | Consigne démo : éviter ce bouton |
 | Démonstrateur clique actions Paramètres | Faible | Pas de feedback | Consigne démo : éviter ces boutons |
-| Auth handoff manuel requis | Certaine | Friction UX | Préparer le handoff avant la démo |
+| Handoff auth indisponible localement | Possible si Redis/env/service mal configuré | Friction UX | Utiliser le fallback manuel uniquement en troubleshooting |
 | Quantité brute affichée en Transactions (`3.0000000000`) | Certaine | Cosmétique | Accepter pour la démo (Positions page corrigée) |
 
 ---
@@ -241,7 +241,7 @@ Aucune nouvelle fonctionnalité. Aucun changement d'API. Aucun changement de DDL
 | Benchmark dashboard | Données de benchmark réelles = hors scope MVP | Accepté, signalé par bandeau |
 | Pas de FX conversion | Complexité FX = chantier séparé | Accepté — démo en USD |
 | Pas de scheduler production | Architecture déploiement = chantier séparé | Accepté — mode `once` suffisant |
-| `kushim-auth/front` pas câblé | Handoff manuel fonctionne | Accepté — friction UX seulement |
+| `kushim-auth/front` pas production-grade | Handoff Redis câblé ; stockage token encore MVP | Accepté pour démo supervisée |
 | Boutons Paramètres non fonctionnels | Backend handlers = travail futur | Accepté — ne pas cliquer en démo |
 | KPI "Meilleur actif" toujours "—" | Donnée disponible mais non branchée sur le KPI card | Accepté — cosmétique |
 | Quantité brute en Transactions | Formatage appliqué sur Positions mais pas Transactions | Accepté — cosmétique |
@@ -294,7 +294,7 @@ Conditions :
 1. **Immédiat** : valider ce rapport avec le porteur de projet
 2. **Court terme** : effectuer une démo interne en suivant le parcours section D
 3. **Après démo** : prioriser entre :
-   - Câblage `kushim-auth/front` (supprime le handoff manuel)
+   - Durcissement `kushim-auth/front` / session (handoff câblé, stockage token encore MVP)
    - Stratégie provider market-data production (au-delà du Finnhub MVP gardé)
    - Formatage quantité dans Transactions (alignement avec Positions)
    - Branchement du KPI "Meilleur actif" sur les données holdings existantes

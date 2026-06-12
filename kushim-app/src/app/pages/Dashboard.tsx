@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { Card } from "../components/Card";
 import { KPICard } from "../components/KPICard";
 import { Button } from "../components/Button";
 import { Input } from "../components/Input";
+import { Badge } from "../components/Badge";
 import { SwapModal } from "../components/SwapModal";
 import { CreateOperationModal } from "../components/CreateOperationModal";
 import {
@@ -296,6 +297,7 @@ function PortfolioSelector() {
 }
 
 export function Dashboard() {
+  const navigate = useNavigate();
   const { portfolios, activePortfolioId, status, loadPortfolios } = usePortfolioStore();
   const { operations, loadOperations } = useOperationsStore();
   const {
@@ -314,7 +316,6 @@ export function Dashboard() {
   const [benchPeriod, setBenchPeriod] = useState("1Y");
   const [showSwap, setShowSwap] = useState(false);
   const [showAddTransaction, setShowAddTransaction] = useState(false);
-  const [showAddAsset, setShowAddAsset] = useState(false);
   const periods = ["1M", "3M", "6M", "1Y", "MAX"];
 
   useEffect(() => {
@@ -549,7 +550,7 @@ export function Dashboard() {
                 color: "var(--text-secondary)",
                 marginTop: "6px",
               }}>
-              Alimentez le portefeuille en quelques secondes.
+              Ajoutez des opérations ou consultez le catalogue d'actifs.
             </div>
           </div>
           <div className="flex flex-col sm:flex-row gap-3 w-full md:w-auto">
@@ -571,8 +572,8 @@ export function Dashboard() {
               variant="secondary"
               icon={PlusCircle}
               className="w-full sm:w-auto"
-              onClick={() => setShowAddAsset(true)}>
-              Ajouter un actif
+              onClick={() => navigate("/assets")}>
+              Catalogue d'actifs
             </Button>
           </div>
         </div>
@@ -1116,7 +1117,7 @@ export function Dashboard() {
 
       {/* Performance vs Benchmark */}
       <Card level={1} className="mb-8">
-        <div className="flex items-center justify-between mb-6">
+        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between mb-6">
           <h2
             style={{
               fontSize: "18px",
@@ -1125,7 +1126,19 @@ export function Dashboard() {
             }}>
             Performance vs indice de référence
           </h2>
+          <Badge variant="warning">Données simulées</Badge>
         </div>
+        <p
+          style={{
+            marginTop: "-12px",
+            marginBottom: "20px",
+            fontSize: "13px",
+            lineHeight: 1.5,
+            color: "var(--text-secondary)",
+          }}>
+          Ce benchmark illustre le rendu cible. Il n'est pas calculé depuis un
+          indice réel ni un provider de marché.
+        </p>
 
         <div className="grid grid-cols-1 md:grid-cols-[2fr_1fr] gap-6">
           {/* Left — Chart */}
@@ -1194,9 +1207,9 @@ export function Dashboard() {
                     const amount = typeof value === "number" ? value : Number(value ?? 0);
                     const key = String(name);
                     const labels: Record<string, string> = {
-                      portfolio: "Mon portefeuille",
-                      sp500: "S&P 500",
-                      msci: "MSCI World",
+                      portfolio: "Portefeuille démo",
+                      sp500: "S&P 500 simulé",
+                      msci: "MSCI World simulé",
                     };
                     return [`+${amount.toFixed(1)}%`, labels[key] || key];
                   }}
@@ -1372,58 +1385,6 @@ export function Dashboard() {
         />
       )}
 
-      {/* Add Asset Modal */}
-      {showAddAsset && (
-        <>
-          <div
-            className="fixed inset-0 z-40"
-            style={{
-              background: "rgba(0, 0, 0, 0.40)",
-              backdropFilter: "blur(4px)",
-              WebkitBackdropFilter: "blur(4px)",
-            }}
-            onClick={() => setShowAddAsset(false)}
-          />
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-6">
-            <Card level={3} className="w-full max-w-[520px]">
-              <h2
-                className="mb-4"
-                style={{
-                  fontSize: "18px",
-                  fontWeight: 600,
-                  color: "var(--text-primary)",
-                }}>
-                Ajouter un actif
-              </h2>
-              <p
-                style={{
-                  fontSize: "14px",
-                  color: "var(--text-secondary)",
-                  marginBottom: "20px",
-                }}>
-                Ajoutez un nouvel actif a votre portefeuille et suivez sa
-                valeur.
-              </p>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <Input label="Nom" placeholder="Apple Inc." />
-                <Input label="Ticker" placeholder="AAPL" />
-                <Input label="Quantite" placeholder="20" />
-                <Input label="Prix d'achat" placeholder="€145.00" />
-              </div>
-              <div className="flex gap-3 justify-end mt-6">
-                <Button variant="ghost" onClick={() => setShowAddAsset(false)}>
-                  Annuler
-                </Button>
-                <Button
-                  variant="primary"
-                  onClick={() => setShowAddAsset(false)}>
-                  Ajouter
-                </Button>
-              </div>
-            </Card>
-          </div>
-        </>
-      )}
     </div>
   );
 }

@@ -6,7 +6,9 @@ _Date : 2026-06-11_
 
 ## 1. Objectif de la démo
 
-Montrer que Kushim est un MVP fonctionnel de suivi de portefeuille d'investissement :
+Montrer que Kushim est un MVP fonctionnel de suivi de portefeuille d'investissement. Le chemin valide pour la demo supervisee est **Scenario A mock** : donnees de marche mock deterministes, jobs worker lances explicitement, frontend app verifie dans le navigateur.
+
+Le dry-run Scenario A a valide le flux complet local, incluant logout, avec zero erreur console bloquante observee pendant la validation navigateur.
 
 - authentification réelle ;
 - création de portefeuille et enregistrement d'opérations ;
@@ -103,7 +105,7 @@ npm run dev
 
 ## 5. Refresh des données de marché
 
-Le chemin recommandé pour une démo MVP supervisée reste le provider `mock`, car il alimente aussi les prix historiques de façon déterministe. Finnhub peut être utilisé séparément pour valider des prix courants d'actions avec une allowlist courte.
+Le chemin valide et recommande pour une demo MVP supervisee de 10 minutes reste le provider `mock`, car il alimente aussi les prix historiques de facon deterministe. Finnhub peut etre utilise separement pour valider des prix courants d'actions avec une allowlist courte, mais il n'est pas requis pour la demo.
 
 Finnhub est live-validé pour les prix courants AAPL/MSFT/NVDA. BTC/crypto n'est pas live-validé avec le plan actuel : la tentative mappée `BTC=BINANCE:BTCUSDT` retourne `403 Forbidden`. Les candles historiques Finnhub `/stock/candle` retournent aussi `403 Forbidden` avec le plan actuel.
 
@@ -227,7 +229,7 @@ Puis récupérer le `portfolioId` affiché dans la sortie pour les commandes wor
 3. Après login → redirection automatique vers `http://localhost:5173` avec `?handoff_code=...`
 4. L'app échange le code et établit la session
 
-**Si le handoff ne fonctionne pas** : l'auth frontend peut ne pas être câblé nativement. Dans ce cas, utiliser le handoff manuel (voir la section Troubleshooting).
+Le handoff auth-front -> app est cable dans le flux normal. Si le handoff ne fonctionne pas localement, utiliser le fallback manuel uniquement comme troubleshooting.
 
 ### Étape 2 — Sélection du portefeuille
 
@@ -328,7 +330,7 @@ Points à montrer :
 | Mock market-data provider | Prix USD déterministes, pas de données réelles | Accepter pour la démo, ne pas présenter comme données de marché réelles |
 | Pas de FX | Portefeuille EUR → valuations estimées | Utiliser un portefeuille USD |
 | Pas de scheduler production | Worker/market-data doivent être lancés manuellement | Exécuter les jobs en mode `once` avant la démo |
-| Auth handoff manuel possible | `kushim-auth/front` peut ne pas rediriger automatiquement | Préparer le handoff ou se reconnecter manuellement |
+| Handoff auth indisponible localement | Probleme Redis/env/service, pas le chemin normal | Utiliser le fallback manuel de troubleshooting seulement |
 | Benchmark = données démo | Section benchmark du dashboard est un mock | Le bandeau l'indique clairement |
 | KPI "Meilleur actif" = "—" | Donnée non branchée sur le KPI card | Cosmétique |
 | Quantité brute en Transactions | Affiche `3.0000000000` au lieu de `3` | Cosmétique (Positions est corrigé) |
@@ -395,7 +397,7 @@ Le `username` existe déjà. Utiliser un nom d'utilisateur différent.
 
 ### Handoff ne fonctionne pas
 
-Si `kushim-auth/front` ne redirige pas vers `kushim-app` :
+Le handoff est cable dans le flux normal. Si `kushim-auth/front` ne redirige pas vers `kushim-app` :
 1. Vérifier que l'auth frontend tourne (`http://localhost:3001`)
 2. Vérifier les env vars (`NEXT_PUBLIC_APP_URL`, etc.)
 3. Alternative : se connecter via l'API (PowerShell), récupérer le token, et le stocker manuellement dans localStorage :

@@ -53,55 +53,91 @@ Implemented and validated:
 - strict JSON request bodies
 - posted operation immutability in DB
 
-## What is implemented but not fully integrated
+## What is implemented and demo-ready in the frontends
 
 ### Frontend auth
 
-Present but not fully wired:
+Implemented and wired for MVP demo:
 
-- auth pages
-- recovery pages
-- mock UX
+- login and signup call `kushim-auth/api`;
+- recovery setup and password reset call `kushim-auth/api`;
+- Redis-backed handoff is wired from `kushim-auth/front` to `kushim-app`;
+- the auth frontend no longer merely simulates auth flows.
 
-Still missing:
+Known limitation:
 
-- real integration with `kushim-auth/api`
+- token storage remains localStorage-based for local MVP convenience and is not production-grade.
 
 ### Private app frontend
 
-Present but not fully wired:
+Implemented and largely wired to real APIs:
 
-- dashboard UI
-- assets pages
-- transactions UI
-- settings UI
+- auth/session validation, refresh, logout;
+- portfolio list/create/select;
+- operations list/create;
+- dashboard KPIs, evolution chart, allocation, top assets, and recent transactions;
+- asset catalogue and asset detail;
+- portfolio positions;
+- settings profile display and logout.
 
-Still missing:
+Remaining mock/UI-only areas:
 
-- real integration with `kushim-api`
-- replacement of static mock portfolio data
+- dashboard benchmark remains demo/mock data;
+- settings preference/password/delete actions are UI-only;
+- dashboard "Ajouter un actif" modal may remain placeholder/UI-only;
+- complex operation UX such as split, spin-off, symbol change, and adjustment remains deferred.
 
-## What is implemented with mock provider
+## What is implemented with mock and guarded Finnhub providers
 
 ### `kushim-market-data`
 
-Implemented and validated locally with mock provider.
+Implemented and validated locally with mock provider for the reliable demo path.
 
 Implemented:
 
 - `refresh_current_market_data` job (writes `asset_market_data`)
 - `fill_missing_price_history_cache` job (writes `asset_price_history_cache`)
-- mock provider with deterministic USD prices for common tickers
+- mock provider with deterministic USD current and historical prices for supported symbols
+- guarded Finnhub provider for controlled allowlisted current stock quotes
+- Finnhub current quotes live-validated for AAPL/MSFT/NVDA
+- provider-symbol mapping support, including the tested BTC mapping `BTC=BINANCE:BTCUSDT`
 - once/loop/idle modes
 - health and ready endpoints
 
-Still not implemented:
+Still blocked or deferred:
 
-- real market-data provider integration
+- BTC/crypto live Finnhub validation is blocked by `403 Forbidden` with the current plan/access
+- Finnhub historical `/stock/candle` is blocked by `403 Forbidden` with the current plan/access
+- BTC and historical data remain mock/seeded/manual until a provider/access decision is made
 - asset enrichment
 - FX support
+- production scheduler
+- production-grade provider strategy
 
 ## What is now demonstrable
+
+### Scenario A supervised MVP dry-run — validated locally
+
+The current project state is **GO for a supervised internal MVP demo**.
+
+Validated local flow:
+
+- auth
+- portfolio creation
+- operations
+- market-data mock
+- worker rebuild
+- snapshots
+- backfill
+- dashboard
+- positions
+- transactions
+- assets
+- asset detail
+- settings
+- logout
+
+Browser validation during the dry-run showed zero blocking console errors.
 
 ### Backend E2E smoke test — validated locally
 
@@ -115,13 +151,18 @@ This is a local debug/demo smoke test using the mock market-data provider. It is
 
 Runbook: [documentation/operations/backend-demo-e2e.md](../operations/backend-demo-e2e.md)
 
-## What is missing before a usable end-user demo
+## What remains limited during a supervised MVP demo
 
-For a coherent end-user demo with a frontend, the remaining missing pieces are:
+The reliable demo path uses the mock market-data provider. Finnhub current equities may be shown only as optional dev validation for AAPL/MSFT/NVDA.
 
-- auth frontend -> auth backend wiring
-- app frontend -> business API wiring
-- real market-data provider (or continued use of mock for demo purposes)
+Do not present as validated:
+
+- BTC/crypto via Finnhub;
+- Finnhub historical candles;
+- FX conversion;
+- benchmark data;
+- settings write actions;
+- production readiness.
 
 ## What is missing before production
 
@@ -142,9 +183,13 @@ Use these labels when describing Kushim:
 
 - Backend MVP core: **Implemented and validated**
 - Backend E2E smoke test: **Validated locally (mock provider, 18/18 assertions)**
-- Frontend integration: **Partial**
-- Market data service: **Implemented with mock provider**
-- Real market data provider: **Not implemented**
+- Scenario A mock dry-run: **Validated end-to-end locally**
+- Frontend demo path: **Demo-ready with explicit warnings**
+- Frontend integration: **Largely wired to real APIs**
+- Market data service: **Implemented with mock provider and guarded Finnhub provider**
+- Finnhub current equities: **Live-validated for AAPL/MSFT/NVDA only**
+- Finnhub BTC/crypto: **Not validated; current plan/access returns 403**
+- Finnhub historical: **Not validated; current plan/access returns 403**
 - Production readiness: **Not ready**
 
 ## What should not be claimed today
@@ -152,8 +197,10 @@ Use these labels when describing Kushim:
 Do not claim that Kushim is:
 
 - production-ready
-- fully integrated front-to-back
-- backed by live market sync
+- backed by broad live market sync
+- validating BTC/crypto through Finnhub
+- validating historical Finnhub candles
+- supporting FX conversion
 - doing full historical reconstruction everywhere
 - a complete trading or execution platform
 
@@ -161,4 +208,4 @@ Do not claim that Kushim is:
 
 The current MVP is best described as:
 
-> an advanced backend MVP for portfolio tracking and derived analytics, with a validated E2E backend smoke test (mock provider), partially wired frontends, and a market-data service implemented with mock provider only.
+> a local MVP checkpoint for portfolio tracking and derived analytics, GO for supervised internal demo: backend E2E and Scenario A mock dry-run validated, frontends largely wired to real APIs, market-data implemented with mock provider plus guarded Finnhub current-equity validation, and production readiness explicitly out of scope.

@@ -317,9 +317,10 @@ npm run build
 - Dashboard evolution chart: **connected** to `/snapshots/daily` (Pass 5)
 - Dashboard allocation (pie chart): **connected** to `/holdings` read model, derived by asset class (Pass 5)
 - Dashboard top 5 assets: **connected** to `/holdings` read model (Pass 5)
-- Dashboard benchmark: **mock** (demo data)
+- Dashboard benchmark: **mock** (demo data), clearly labeled as simulated
 - Dashboard allocation stats (open positions, best/worst perf): **connected** to `/holdings` read model (Pass 5b)
 - Dashboard notice banner: **accurate** (states that benchmark remains demo; all other blocks use real data)
+- Dashboard quick action "Catalogue d'actifs": **routes to `/assets`** instead of opening the old placeholder add-asset modal
 - Asset display hydration in Transactions: **implemented** (Pass 5b) — on load, missing asset labels are resolved via `GET /v1/assets/{id}`, best-effort and non-blocking
 - Asset catalogue (`/assets`): **implemented** (real data, search, filters, pagination) (Pass 7)
 - Asset detail (`/assets/:id`): **implemented** (real data, identity, market data, metadata, aliases) (Pass 7)
@@ -327,5 +328,6 @@ npm run build
 - Assets Zustand store: **implemented** (`src/stores/assets.ts`) (Pass 7)
 - Portfolio positions (`/positions`): **implemented** (real holdings data, search, filters, sort, estimated badge, pagination, quantity formatting, currency consistency) (Pass 8 + 8b)
 - Positions → AssetDetail navigation: **implemented** (click row → `/assets/:id`) (Pass 8)
+- Settings preference save, password update, and account deletion actions: **disabled/labeled as not included in the MVP demo**
 - Complex operations (split/spin_off/symbol_change/adjustment): **deferred**
 - Read model unavailable states (`data_available=false`, `read_model_missing`, `snapshot_missing`): **implemented** (Pass 5)

@@ -142,6 +142,7 @@ But :
 - creer un utilisateur actif
 - `username` est l'identifiant unique (format handle : 3-40 caracteres, minuscules, chiffres, `_`, `-`)
 - `public_handle` est automatiquement mis a `username` pour compatibilite interne
+- `username` est l'identifiant utilisateur expose dans les formulaires login/signup ; `public_handle` ne doit pas etre traite comme le contrat user-facing principal
 - emettre un couple `access_token + refresh_token`
 
 Auth :
@@ -156,7 +157,7 @@ Requete :
 }
 ```
 
-Le `username` doit etre unique (index `lower(username)` sur les utilisateurs actifs). Le `public_handle` interne prend la meme valeur que `username`.
+Le `username` doit etre unique (index `lower(username)` sur les utilisateurs actifs). Le `public_handle` interne prend la meme valeur que `username` pour compatibilite, mais le produit actuel utilise `username` comme identifiant de connexion.
 
 Reponse :
 

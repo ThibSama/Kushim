@@ -155,7 +155,7 @@ May write:
 
 ### `kushim-market-data`
 
-Planned future ownership:
+Owns market-data writes:
 
 - `asset_market_data`
 - `asset_price_history_cache`
@@ -176,8 +176,11 @@ Implemented and validated at schema level:
 
 ## Known limitations at repository level
 
-The schema is ahead of some services:
+The schema supports more than the MVP currently exercises:
 
-- `kushim-market-data` is not implemented yet
-- some advanced corporate-action or FX rules remain service-level future work
-- some schema support is broader than the currently implemented MVP logic
+- `kushim-market-data` is implemented for mock current/history data and guarded Finnhub current-equity validation, but it is not a production market-data strategy;
+- Finnhub current equities are validated for AAPL/MSFT/NVDA only;
+- BTC/crypto and Finnhub historical candles are not validated with the current plan/access;
+- FX conversion is not implemented;
+- some advanced corporate-action or FX rules remain service-level future work;
+- some schema support is broader than the currently implemented MVP logic.

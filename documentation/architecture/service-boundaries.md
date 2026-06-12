@@ -115,7 +115,7 @@ Keeping these boundaries clear prevents architecture drift.
 
 ## `kushim-market-data`
 
-### Planned responsibilities
+### Responsibilities
 
 - fetch market/provider data
 - normalize provider payloads
@@ -125,13 +125,21 @@ Keeping these boundaries clear prevents architecture drift.
 
 ### Current state
 
-- scaffolded only
+- implemented beyond scaffold level for MVP/dev usage
+- mock provider supports deterministic current and historical USD data for the demo path
+- guarded Finnhub provider supports tightly allowlisted current equity quote validation
+- Finnhub current quotes are live-validated for AAPL/MSFT/NVDA only
+- BTC provider-symbol mapping exists (`BTC=BINANCE:BTCUSDT`), but live BTC validation is blocked by `403 Forbidden` with the current plan/access
+- Finnhub historical `/stock/candle` is blocked by `403 Forbidden` with the current plan/access
+- no FX conversion and no production scheduler
 
 ### Must not do
 
 - expose the main user-facing portfolio API
 - own portfolio write workflows
 - own snapshot/read-model business logic that belongs to `kushim-worker`
+- reconstruct portfolios
+- own auth flows
 
 ## Frontends
 
@@ -191,6 +199,7 @@ Must not be treated as:
 Current role:
 
 - auth rate limiting
+- auth handoff codes
 - optional worker connectivity check
 
 Not implemented yet:

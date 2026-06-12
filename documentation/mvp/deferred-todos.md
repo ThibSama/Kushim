@@ -113,7 +113,7 @@ Use these labels:
 
 ## Frontend
 
-### Completed
+### Completed / current MVP checkpoint
 
 - auth frontend wiring to `kushim-auth/api` (login, signup, handoff exchange)
 - portfolio list/create/select wiring to `kushim-api`
@@ -129,12 +129,16 @@ Use these labels:
 - AssetDetail page real data wiring (Pass 7)
 - Portfolio positions page real data wiring (Pass 8)
 - dashboard allocation stats (open positions, best/worst performance) derived from real holdings (Pass 5b)
+- Scenario A browser dry-run validated with zero blocking console errors
+- logout validated in the supervised MVP flow
 
 ### Deferred
 
 - correction and audit UX
 - complex operation types UX (split, spin_off, symbol_change, adjustment)
 - dashboard benchmark real data wiring
+- settings preference/password/delete backend actions
+- dashboard "Ajouter un actif" production flow
 
 ### Known limitation
 
@@ -151,6 +155,7 @@ Use these labels:
 - backups and restore drills
 - stronger observability
 - nginx hardening and routing strategy
+- deployment target decision
 
 ### Deferred
 
@@ -168,6 +173,7 @@ Use these labels:
 ### Still deferred
 
 - CI integration of the E2E smoke test
+- Docker image build validation in CI
 - multi-day historical backfill demo (requires portfolio with older `created_at`)
 - frontend E2E testing
 - production market-data provider in E2E scenario beyond tightly allowlisted Finnhub stock quote dev validation

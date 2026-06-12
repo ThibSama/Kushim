@@ -34,7 +34,10 @@ Current repository state, at a high level:
 
 Important:
 
+- Kushim has reached the local MVP demo checkpoint;
 - the project is now **suitable for a supervised internal MVP demo**;
+- Scenario A mock dry-run passed end-to-end, including auth, portfolio creation, operations, market-data mock, worker rebuild, snapshots, backfill, dashboard, positions, transactions, assets, asset detail, settings, and logout;
+- browser validation during the dry-run showed zero blocking console errors;
 - the backend E2E chain is **demonstrable locally** via an automated smoke test (`scripts/demo/backend-e2e.ps1`, 18/18 assertions passed);
 - `kushim-app` is largely wired to real backend data; remaining mock elements are isolated and labeled;
 - the project is **MVP-oriented**, not production-ready;

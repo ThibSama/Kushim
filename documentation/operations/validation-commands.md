@@ -23,6 +23,13 @@ cargo test
 cargo audit
 ```
 
+Important:
+
+- integration tests for Rust services require PostgreSQL reachable from the host at the configured `DATABASE_URL`;
+- if Docker Desktop or PostgreSQL is not running, DB-backed tests can fail with connection timeouts even when unit tests and clippy pass;
+- initialize the local schema from `infra/postgres/init/001_init.sql` before treating DB-backed test results as meaningful;
+- do not print `.env` files or provider API keys while validating.
+
 ## `kushim-auth/api`
 
 ```powershell
@@ -101,6 +108,7 @@ Current state:
 - jobs: `noop`, `refresh_current_market_data`, `fill_missing_price_history_cache`
 - Finnhub current stock quotes are live-validated for AAPL/MSFT/NVDA with a tiny allowlist
 - BTC/crypto and Finnhub historical `/stock/candle` are not currently live-validated with the current plan/access
+- the reliable MVP demo path uses the mock provider for both current and historical data
 
 Suggested minimal validation:
 
@@ -111,6 +119,25 @@ $env:DATABASE_URL='postgresql://kushim:kushim_secret_dev@localhost:5432/kushim'
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test
 cargo audit
+```
+
+Mock provider job validation, when local Docker/PostgreSQL are running:
+
+```powershell
+cd E:\Kushim
+docker compose run --rm `
+  -e MARKET_DATA_MODE=once `
+  -e MARKET_DATA_JOB=refresh_current_market_data `
+  -e MARKET_DATA_PROVIDER=mock `
+  kushim-market-data
+
+docker compose run --rm `
+  -e MARKET_DATA_MODE=once `
+  -e MARKET_DATA_JOB=fill_missing_price_history_cache `
+  -e MARKET_DATA_PROVIDER=mock `
+  -e MARKET_DATA_HISTORY_DATE_FROM=2026-06-01 `
+  -e MARKET_DATA_HISTORY_DATE_TO=2026-06-03 `
+  kushim-market-data
 ```
 
 Finnhub current stock quote smoke, only when a real `FINNHUB_API_KEY` is present in the ignored local `kushim-market-data/.env` file:
@@ -126,6 +153,13 @@ docker compose run --rm `
 ```
 
 Do not print the key, do not use broad allowlists, and do not treat BTC or `fill_missing_price_history_cache` via Finnhub as validated. BTC mapping exists through `MARKET_DATA_PROVIDER_SYMBOL_MAP`; the tested mapping attempt was `BTC=BINANCE:BTCUSDT`, but the current plan/access returned `403 Forbidden`.
+
+Finnhub validation boundaries:
+
+- AAPL/MSFT/NVDA current quotes are the only live-validated Finnhub path today;
+- BTC/crypto is not validated on the current plan/access;
+- Finnhub historical `/stock/candle` is not validated on the current plan/access;
+- historical MVP/demo backfills should remain on mock/seeded/manual data until provider access is decided.
 
 ## Frontends
 
@@ -167,6 +201,7 @@ Required discipline:
 
 - rerun `cargo audit` when Rust dependencies change
 - report any new advisory explicitly
+- a clean result with `cargo audit --ignore RUSTSEC-2023-0071` means no advisory beyond the currently accepted/monitored one was reported
 
 ## Documentation-only tasks
 

@@ -17,7 +17,7 @@ The global state of the project:
 - the backend E2E chain is now demonstrable locally via an automated smoke test (`scripts/demo/backend-e2e.ps1`, 18/18 assertions passed);
 - `kushim-market-data` has a mock provider (safe default) and a guarded Finnhub provider; Finnhub current stock quotes are live-validated for AAPL, MSFT, and NVDA only;
 - `kushim-app` is largely wired to real backend data (auth, portfolios, operations, dashboard, assets, positions) — remaining mocks are isolated (benchmark, settings buttons);
-- `kushim-auth/front` remains partially wired (manual handoff is functional);
+- `kushim-auth/front` is wired to `kushim-auth/api` for login, signup, recovery, and Redis-backed handoff;
 - production readiness is not the current status or claim.
 
 In one sentence:
@@ -85,7 +85,7 @@ portfolio_operations
 | `kushim-api` | Implemented and validated | Advanced MVP business API |
 | `kushim-worker` | Implemented and validated | Current-state pipeline + snapshots + backfill V1 |
 | `kushim-market-data` | Implemented with mock + guarded Finnhub | Two jobs validated, Finnhub current quotes live-validated for AAPL/MSFT/NVDA |
-| `kushim-auth/front` | Partially implemented | Auth UI functional, manual handoff operational |
+| `kushim-auth/front` | Implemented for MVP demo | Auth UI wired to API; Redis-backed handoff operational |
 | `kushim-app` | Largely implemented | Real data throughout, mock remnants isolated (benchmark, settings) |
 | `kushim-website` | Implemented | Marketing site present |
 | `infra/postgres` | Implemented and validated | Rich coherent V3 DDL |
@@ -532,7 +532,7 @@ Main deferred workstreams:
 - distributed locks
 - production scheduler
 - production-grade market-data provider strategy and broader rollout beyond guarded Finnhub MVP
-- auth frontend wiring (`kushim-auth/front` → `kushim-auth/api` — manual handoff works)
+- auth frontend production hardening (`kushim-auth/front` -> `kushim-auth/api` is wired; token storage remains MVP-grade)
 - dashboard benchmark real data (currently demo)
 - settings backend handlers (preferences, password, account deletion)
 - correction/audit UX
@@ -610,11 +610,11 @@ Limitations of this demo:
 - mock provider only (deterministic USD prices, no real data)
 - USD portfolio required (mock only generates USD prices)
 - no FX conversion
-- manual auth handoff to access the frontend
+- Redis-backed auth handoff is wired; manual token injection is troubleshooting only
 
 Still needed for a full user demo:
 
-- natively wired auth frontend (manual handoff works in the meantime)
+- production-grade auth frontend/session hardening (handoff is wired; localStorage token storage remains an MVP limitation)
 - stabilize and extend provider access beyond the guarded Finnhub MVP path (mock remains sufficient for supervised demo)
 - removal of remaining mock remnants (benchmark, settings buttons)
 
@@ -695,7 +695,7 @@ The project should not currently be described as production-ready.
 
 Wire `kushim-auth/front` → `kushim-auth/api`:
 
-- remove manual handoff dependency
+- harden the handoff/session model for production usage
 - improve native login/signup flow
 
 ### Priority 2

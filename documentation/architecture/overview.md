@@ -23,22 +23,26 @@ It is not designed to be:
 
 ## Current architecture map
 
-### Implemented and validated
+### Implemented and validated for the local MVP
 
 - `kushim-auth/api`
 - `kushim-api`
 - `kushim-worker`
+- `kushim-market-data` with mock provider and guarded Finnhub current-equity validation
 - PostgreSQL V3 DDL in `infra/postgres`
 
-### Implemented but not fully integrated
+### Implemented and demo-ready with known MVP limits
 
 - `kushim-auth/front`
 - `kushim-app`
 - `kushim-website`
 
-### Scaffolded / planned
+Important limits:
 
-- `kushim-market-data`
+- Finnhub current equities are live-validated only for AAPL, MSFT, and NVDA.
+- Finnhub BTC/crypto is not validated with the current plan/access (`403 Forbidden` on the tested mapping).
+- Finnhub historical candles are not validated with the current plan/access (`403 Forbidden` on `/stock/candle`).
+- FX, production scheduling, production observability, and production deployment remain out of scope.
 
 ## Main services
 
@@ -86,16 +90,24 @@ Owns:
 
 ### `kushim-market-data`
 
-Future market-data ingestion and sync service.
+Market-data ingestion and sync service.
 
-Will eventually own:
+Owns:
 
 - asset enrichment
 - current `asset_market_data` refresh
 - historical `asset_price_history_cache` fill
 - provider integration and normalization
 
-It is not implemented yet beyond scaffold level.
+Current state:
+
+- implemented beyond scaffold level;
+- mock provider is the safe default for deterministic MVP demos;
+- guarded Finnhub provider exists behind explicit API key and symbol allowlist;
+- Finnhub current stock quotes are live-validated for AAPL, MSFT, and NVDA only;
+- BTC exists as a canonical local asset/concept and provider-symbol mapping exists (`BTC=BINANCE:BTCUSDT`), but live Finnhub BTC validation is blocked by `403 Forbidden` with the current plan/access;
+- Finnhub historical `/stock/candle` is implemented but blocked by `403 Forbidden` with the current plan/access;
+- no FX conversion, no production scheduler, and no production market-data guarantee.
 
 ## Data architecture in one sentence
 
@@ -129,14 +141,26 @@ The backend core is already substantial:
 
 ### Frontend maturity
 
-The frontend layer is visually advanced but not fully integrated:
+The frontend layer is suitable for a supervised internal MVP demo:
 
-- auth frontend still simulates auth flows
-- app frontend still uses mock data for the dashboard and portfolio views
+- `kushim-auth/front` is wired to `kushim-auth/api` for login, signup, recovery, and Redis-backed handoff into the app;
+- `kushim-app` is largely wired to real APIs for auth/session validation, portfolios, operations, dashboard KPIs/evolution/allocation/top assets, transactions, assets, asset detail, positions, settings profile, and logout;
+- browser validation during Scenario A showed zero blocking console errors.
+
+Remaining frontend MVP limits:
+
+- dashboard benchmark remains demo/mock data;
+- settings preference/password/delete actions are UI-only;
+- the dashboard "Ajouter un actif" modal may remain placeholder/UI-only;
+- token storage remains localStorage-based and is not production-grade.
 
 ### Market-data maturity
 
-Still at scaffold stage.
+Implemented for MVP/dev usage with clear limits:
+
+- mock provider is validated for deterministic current and historical demo data;
+- guarded Finnhub provider is partially live-validated for current equities only;
+- BTC/crypto and historical Finnhub are not validated with the current plan/access.
 
 ## Non-production status
 
@@ -144,8 +168,9 @@ Kushim is not production-ready yet.
 
 Key reasons:
 
-- market-data service not implemented
-- frontend/backend wiring incomplete
-- CI/CD and deployment strategy not completed
-- observability still limited
-- some business logic intentionally remains V1-conservative
+- market-data is MVP/dev-grade, not a production provider strategy;
+- BTC/crypto, historical provider access, FX, provider quotas, and freshness policies still need decisions;
+- token/session handling is not production-grade;
+- CI/CD and deployment strategy are incomplete;
+- observability, backups, secret management, and ingress/container hardening remain limited;
+- some business logic intentionally remains V1-conservative.
