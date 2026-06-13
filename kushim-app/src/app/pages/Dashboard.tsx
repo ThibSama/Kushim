@@ -4,8 +4,6 @@ import { Card } from "../components/Card";
 import { KPICard } from "../components/KPICard";
 import { Button } from "../components/Button";
 import { Input } from "../components/Input";
-import { Badge } from "../components/Badge";
-import { SwapModal } from "../components/SwapModal";
 import { CreateOperationModal } from "../components/CreateOperationModal";
 import {
   XAxis,
@@ -16,14 +14,10 @@ import {
   Pie,
   Cell,
   Area,
-  Line,
   ComposedChart,
 } from "recharts";
-import { Plus, ArrowLeftRight, PlusCircle, ChevronUp, Briefcase, AlertCircle } from "lucide-react";
+import { Plus, PlusCircle, Briefcase, AlertCircle } from "lucide-react";
 import { formatCurrency, formatSignedPercent } from "../../utils/portfolio";
-import {
-  benchmarkData,
-} from "../../mocks/demoPortfolio";
 import { usePortfolioStore } from "../../stores/portfolio";
 import { useOperationsStore } from "../../stores/operations";
 import { usePortfolioReadModelsStore } from "../../stores/portfolioReadModels";
@@ -313,8 +307,6 @@ export function Dashboard() {
   const [showCreatePortfolio, setShowCreatePortfolio] = useState(false);
 
   const [period, setPeriod] = useState("1Y");
-  const [benchPeriod, setBenchPeriod] = useState("1Y");
-  const [showSwap, setShowSwap] = useState(false);
   const [showAddTransaction, setShowAddTransaction] = useState(false);
   const periods = ["1M", "3M", "6M", "1Y", "MAX"];
 
@@ -376,7 +368,6 @@ export function Dashboard() {
     gainLoss: summaryData
       ? formatSignedMinorCurrency(summaryData.total_pnl_minor, summaryCurrency)
       : kpiPlaceholder,
-    bestAsset: kpiPlaceholder,
   };
   const gainLossChange =
     summaryPnlPct == null
@@ -483,19 +474,6 @@ export function Dashboard() {
         </div>
       </div>
 
-      {/* Data source notice */}
-      <div
-        className="mb-6 rounded-lg"
-        style={{
-          padding: "10px 16px",
-          fontSize: "13px",
-          color: "var(--text-tertiary)",
-          background: "var(--surface-1-bg)",
-          border: "1px solid var(--surface-1-border)",
-        }}>
-        Les KPIs, l'évolution, l'allocation, le top actifs et les transactions utilisent les données réelles du portefeuille. La section benchmark reste en démonstration.
-      </div>
-
       {/* KPI Row */}
       {(isSummaryLoading || isSummaryUnavailable || summaryError) && (
         <div
@@ -526,7 +504,21 @@ export function Dashboard() {
         />
         <KPICard
           label="Meilleur actif"
-          value={kpiValues.bestAsset}
+          value={
+            isHoldingsLoading
+              ? "Chargement…"
+              : bestHolding
+                ? bestHolding.asset.ticker ?? bestHolding.asset.name
+                : kpiPlaceholder
+          }
+          change={
+            bestHolding
+              ? {
+                  value: formatSignedPercent(bestHolding.pnlValue),
+                  isPositive: bestHolding.pnlValue >= 0,
+                }
+              : undefined
+          }
         />
       </div>
 
@@ -560,13 +552,6 @@ export function Dashboard() {
               className="w-full sm:w-auto"
               onClick={() => setShowAddTransaction(true)}>
               Ajouter une transaction
-            </Button>
-            <Button
-              variant="primary"
-              icon={ArrowLeftRight}
-              className="w-full sm:w-auto"
-              onClick={() => setShowSwap(true)}>
-              Échanger des actifs
             </Button>
             <Button
               variant="secondary"
@@ -1114,265 +1099,6 @@ export function Dashboard() {
           Voir toutes les transactions →
         </Link>
       </Card>
-
-      {/* Performance vs Benchmark */}
-      <Card level={1} className="mb-8">
-        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between mb-6">
-          <h2
-            style={{
-              fontSize: "18px",
-              fontWeight: 600,
-              color: "var(--text-primary)",
-            }}>
-            Performance vs indice de référence
-          </h2>
-          <Badge variant="warning">Données simulées</Badge>
-        </div>
-        <p
-          style={{
-            marginTop: "-12px",
-            marginBottom: "20px",
-            fontSize: "13px",
-            lineHeight: 1.5,
-            color: "var(--text-secondary)",
-          }}>
-          Ce benchmark illustre le rendu cible. Il n'est pas calculé depuis un
-          indice réel ni un provider de marché.
-        </p>
-
-        <div className="grid grid-cols-1 md:grid-cols-[2fr_1fr] gap-6">
-          {/* Left — Chart */}
-          <div>
-            <div className="flex justify-end mb-4">
-              <div className="flex gap-1 flex-wrap">
-                {periods.map((p) => (
-                  <button
-                    key={p}
-                    onClick={() => setBenchPeriod(p)}
-                    className="rounded-[9999px] transition-all hover:-translate-y-[1px]"
-                    style={{
-                      fontSize: "12px",
-                      fontWeight: 600,
-                      minHeight: "36px",
-                      padding: "0 clamp(12px, 2vw, 14px)",
-                      background:
-                        benchPeriod === p
-                          ? "var(--color-cta-bg)"
-                          : "transparent",
-                      color:
-                        benchPeriod === p
-                          ? "var(--color-cta-text)"
-                          : "var(--text-secondary)",
-                    }}>
-                    {p}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <ResponsiveContainer width="100%" height={280}>
-              <ComposedChart data={benchmarkData} id="benchmark-composed-chart">
-                <defs>
-                  <linearGradient
-                    id="portfolioFill"
-                    x1="0"
-                    y1="0"
-                    x2="0"
-                    y2="1">
-                    <stop offset="0%" stopColor="#6366F1" stopOpacity={0.15} />
-                    <stop offset="100%" stopColor="#6366F1" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <XAxis
-                  dataKey="month"
-                  stroke="var(--text-tertiary)"
-                  style={{ fontSize: "12px" }}
-                  tick={{ fill: "var(--text-tertiary)" }}
-                />
-                <YAxis
-                  stroke="var(--text-tertiary)"
-                  style={{ fontSize: "12px" }}
-                  tick={{ fill: "var(--text-tertiary)" }}
-                  tickFormatter={(v) => `${v}%`}
-                  domain={[0, 40]}
-                />
-                <Tooltip
-                  contentStyle={{
-                    background: "var(--surface-3-bg)",
-                    backdropFilter: "blur(16px)",
-                    border: "1px solid var(--surface-3-border)",
-                    borderRadius: "var(--radius-md)",
-                    fontSize: "12px",
-                  }}
-                  formatter={(value, name) => {
-                    const amount = typeof value === "number" ? value : Number(value ?? 0);
-                    const key = String(name);
-                    const labels: Record<string, string> = {
-                      portfolio: "Portefeuille démo",
-                      sp500: "S&P 500 simulé",
-                      msci: "MSCI World simulé",
-                    };
-                    return [`+${amount.toFixed(1)}%`, labels[key] || key];
-                  }}
-                />
-                <Area
-                  type="monotone"
-                  dataKey="portfolio"
-                  fill="url(#portfolioFill)"
-                  stroke="#6366F1"
-                  strokeWidth={2.5}
-                  dot={false}
-                  name="portfolio"
-                />
-                <Line
-                  type="monotone"
-                  dataKey="sp500"
-                  stroke="#F59E0B"
-                  strokeWidth={1.5}
-                  strokeDasharray="6 3"
-                  dot={false}
-                  name="sp500"
-                />
-                <Line
-                  type="monotone"
-                  dataKey="msci"
-                  stroke="#8B5CF6"
-                  strokeWidth={1.5}
-                  strokeDasharray="6 3"
-                  dot={false}
-                  name="msci"
-                />
-              </ComposedChart>
-            </ResponsiveContainer>
-          </div>
-
-          {/* Right — Summary */}
-          <div className="flex flex-col md:justify-center">
-            {/* On mobile: horizontal scroll row */}
-            <div className="flex md:flex-col gap-4 md:gap-0 overflow-x-auto md:overflow-visible pb-2 md:pb-0">
-              {/* Bloc 1 — Mon portefeuille */}
-              <div
-                className="min-w-[180px] md:min-w-0 flex-shrink-0 md:flex-shrink"
-                style={{
-                  paddingBottom: "16px",
-                  borderBottom: "1px solid var(--surface-1-border)",
-                }}>
-                <div className="flex items-center gap-2 mb-2">
-                  <div
-                    className="w-2.5 h-2.5 rounded-full"
-                    style={{ background: "#6366F1" }}
-                  />
-                  <span
-                    style={{
-                      fontSize: "13px",
-                      color: "var(--text-secondary)",
-                    }}>
-                    Mon portefeuille
-                  </span>
-                </div>
-                <div
-                  style={{
-                    fontFamily: "'JetBrains Mono', monospace",
-                    fontSize: "24px",
-                    fontWeight: 700,
-                    color: "var(--color-gain)",
-                  }}>
-                  +36.66%
-                </div>
-                <span
-                  style={{
-                    fontSize: "12px",
-                    color: "var(--text-tertiary)",
-                  }}>
-                  sur 1 an
-                </span>
-              </div>
-
-              {/* Bloc 2 — S&P 500 */}
-              <div
-                className="min-w-[180px] md:min-w-0 flex-shrink-0 md:flex-shrink"
-                style={{
-                  padding: "16px 0",
-                  borderBottom: "1px solid var(--surface-1-border)",
-                }}>
-                <div className="flex items-center gap-2 mb-2">
-                  <div
-                    className="w-2.5 h-2.5 rounded-full"
-                    style={{ background: "#F59E0B" }}
-                  />
-                  <span
-                    style={{
-                      fontSize: "13px",
-                      color: "var(--text-secondary)",
-                    }}>
-                    S&P 500
-                  </span>
-                </div>
-                <div
-                  style={{
-                    fontFamily: "'JetBrains Mono', monospace",
-                    fontSize: "20px",
-                    fontWeight: 600,
-                    color: "var(--text-primary)",
-                  }}>
-                  +10.6%
-                </div>
-                <div className="flex items-center gap-1 mt-1">
-                  <ChevronUp size={14} style={{ color: "var(--color-gain)" }} />
-                  <span
-                    style={{
-                      fontSize: "12px",
-                      fontWeight: 500,
-                      color: "var(--color-gain)",
-                    }}>
-                    +10.6%
-                  </span>
-                </div>
-              </div>
-
-              {/* Bloc 3 — MSCI World */}
-              <div
-                className="min-w-[180px] md:min-w-0 flex-shrink-0 md:flex-shrink"
-                style={{ paddingTop: "16px" }}>
-                <div className="flex items-center gap-2 mb-2">
-                  <div
-                    className="w-2.5 h-2.5 rounded-full"
-                    style={{ background: "#8B5CF6" }}
-                  />
-                  <span
-                    style={{
-                      fontSize: "13px",
-                      color: "var(--text-secondary)",
-                    }}>
-                    MSCI World
-                  </span>
-                </div>
-                <div
-                  style={{
-                    fontFamily: "'JetBrains Mono', monospace",
-                    fontSize: "20px",
-                    fontWeight: 600,
-                    color: "var(--text-primary)",
-                  }}>
-                  +9.2%
-                </div>
-                <div className="flex items-center gap-1 mt-1">
-                  <ChevronUp size={14} style={{ color: "var(--color-gain)" }} />
-                  <span
-                    style={{
-                      fontSize: "12px",
-                      fontWeight: 500,
-                      color: "var(--color-gain)",
-                    }}>
-                    +9.2%
-                  </span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </Card>
-
-      <SwapModal isOpen={showSwap} onClose={() => setShowSwap(false)} />
       {showCreatePortfolio && (
         <CreatePortfolioModal onClose={() => setShowCreatePortfolio(false)} />
       )}

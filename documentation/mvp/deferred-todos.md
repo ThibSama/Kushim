@@ -136,13 +136,18 @@ Use these labels:
 
 - correction and audit UX
 - complex operation types UX (split, spin_off, symbol_change, adjustment)
-- dashboard benchmark real data wiring
-- settings preference/password/delete backend actions
+- dashboard benchmark real data wiring — block removed from the UI until a real index-history endpoint and contract exist
+- real asset swap / exchange product capability — removed from the UI; requires product and accounting semantics before any implementation
+- settings preference editing inside `kushim-app` (deferred to the dedicated auth frontend)
+- in-app password change (deferred to the dedicated auth frontend)
+- in-app account deletion (no backend contract; deferred)
 - dashboard "Ajouter un actif" production flow
 
 ### Known limitation
 
-- dashboard demo notice banner states benchmark is demo — accurate; allocation stats are now real (Pass 5b)
+- the dashboard no longer exposes a simulated benchmark; the section is hidden until real index history is available
+- the swap quick action has been removed; no fake conversion flow remains
+- the Settings page only exposes profile information and logout — preference, password and delete forms are no longer shown as if they were near-functional
 - asset display in Transactions table falls back to truncated UUID after page refresh (in-memory cache only)
 
 ## Infra / DevOps

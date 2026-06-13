@@ -16,13 +16,13 @@ L'état global du projet :
 - le backend principal est avancé et validé sur plusieurs axes ;
 - le backend E2E est désormais démontrable localement via un smoke test automatisé (`scripts/demo/backend-e2e.ps1`, 18/18 assertions passées) ;
 - `kushim-market-data` dispose d'un mock provider (défaut sûr) et d'un provider Finnhub gardé par allowlist ; les quotes courantes Finnhub sont live-validées pour AAPL, MSFT et NVDA uniquement ;
-- `kushim-app` est largement câblé aux données réelles (auth, portefeuilles, opérations, dashboard, actifs, positions) — les résidus mock sont isolés (benchmark, boutons paramètres) ;
+- `kushim-app` n'affiche plus aucune donnée financière simulée côté utilisateur : benchmark démo, swap simulé et formulaires Settings non fonctionnels ont été retirés ; toutes les valeurs visibles proviennent de l'API, des read models, des opérations persistées ou d'états explicitement indisponibles ;
 - `kushim-auth/front` est câblé à `kushim-auth/api` pour login, signup, recovery et handoff Redis ;
 - la production n'est pas le niveau visé aujourd'hui.
 
 En une phrase :
 
-> Kushim est prêt pour une démo MVP interne supervisée : backend E2E validé, frontend largement câblé aux données réelles, market-data avec mock (défaut) et Finnhub gardé (quotes courantes actions validées), pas de mise en production.
+> Kushim est prêt pour une démo MVP interne supervisée : backend E2E validé, frontend sans donnée utilisateur simulée (benchmark démo, swap simulé et formulaires Settings non fonctionnels retirés), market-data avec mock provider (défaut sûr) et Finnhub gardé (quotes courantes actions validées), pas de mise en production. Les prix de marché peuvent toujours provenir du mock provider ou du provider Finnhub gardé ; la source reste explicite côté UI.
 
 ## 2. Objectif MVP produit
 
@@ -86,7 +86,7 @@ portfolio_operations
 | `kushim-worker` | Implémenté et validé | Pipeline courant + snapshots + backfill V1 |
 | `kushim-market-data` | Implémenté avec mock + Finnhub gardé | Deux jobs validés, Finnhub quotes courantes live-validées AAPL/MSFT/NVDA |
 | `kushim-auth/front` | Implémenté pour la démo MVP | UI auth câblée à l'API ; handoff Redis opérationnel |
-| `kushim-app` | Largement implémenté | Données réelles partout, résidus mock isolés (benchmark, paramètres) |
+| `kushim-app` | Largement implémenté | Zéro donnée frontend simulée (benchmark démo, swap simulé, formulaires Settings retirés) ; toutes les valeurs visibles proviennent de l'API ou d'états indisponibles explicites |
 | `kushim-website` | Implémenté | Site marketing présent |
 | `infra/postgres` | Implémenté et validé | DDL V3 riche et cohérent |
 | `infra/redis` | Implémenté minimalement | Utile aujourd'hui pour auth et check worker |
@@ -376,15 +376,13 @@ Présent et câblé à l'API réelle :
 - page transactions avec recherche, filtres, métriques (opérations réelles)
 - états `data_available=false` / `read_model_missing` / `snapshot_missing`
 
-Mocks restants :
+Mocks restants côté utilisateur :
 
-- section benchmark du dashboard (données démo, correctement signalée)
-- modal "Ajouter un actif" sur le Dashboard (placeholder non fonctionnel)
-- boutons préférences/mot de passe/suppression sur la page Paramètres (UI seulement, pas de handlers backend)
+- aucun. La section benchmark démo, l'action "Échanger des actifs" simulée et les formulaires Paramètres non fonctionnels (préférences, changement de mot de passe, suppression de compte) ont été retirés de l'application authentifiée. Le fichier `kushim-app/src/mocks/demoPortfolio.ts` a été supprimé et le dossier `src/mocks/` n'existe plus.
 
 Statut :
 
-- **Largement implémenté — données réelles partout, résidus mock isolés et signalés**
+- **Zéro donnée frontend simulée — toutes les valeurs visibles proviennent de l'API, des read models, des opérations persistées ou d'états indisponibles explicites**
 
 ## 10.3 `kushim-website`
 
@@ -398,7 +396,7 @@ Statut :
 
 ## 10.4 Conséquence MVP
 
-Le travail restant principal sur `kushim-app` est la suppression des derniers résidus mock (benchmark, actions paramètres) et le câblage natif de `kushim-auth/front`.
+Le travail restant principal sur `kushim-app` concerne désormais le câblage natif de `kushim-auth/front` (préférences, changement de mot de passe, suppression de compte) et l'intégration d'un vrai benchmark une fois qu'un endpoint d'historique d'indice existera côté backend. Aucune donnée frontend simulée ne subsiste dans les chemins applicatifs normaux.
 
 ## 11. Statut Docker / infra
 

@@ -1,31 +1,10 @@
-﻿import React from "react";
-import { Shield, User, SlidersHorizontal, TriangleAlert } from "lucide-react";
+import React from "react";
+import { User, Info } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Card } from "../components/Card";
 import { Input } from "../components/Input";
 import { Button } from "../components/Button";
-import { Badge } from "../components/Badge";
 import { getWebsiteLoginUrl, useAuthStore } from "../../stores/auth";
-
-const fieldStyle: React.CSSProperties = {
-  width: "100%",
-  minHeight: "46px",
-  padding: "0 18px",
-  borderRadius: "9999px",
-  border: "1px solid var(--input-border)",
-  background: "var(--input-bg)",
-  color: "var(--text-primary)",
-  fontSize: "15px",
-  outline: "none",
-};
-
-const labelStyle: React.CSSProperties = {
-  display: "block",
-  marginBottom: "8px",
-  fontSize: "12px",
-  fontWeight: 600,
-  color: "var(--text-secondary)",
-};
 
 function SectionTitle({
   icon: Icon,
@@ -73,31 +52,6 @@ function SectionTitle({
   );
 }
 
-function SelectField({
-  label,
-  children,
-  disabled = false,
-}: {
-  label: string;
-  children: React.ReactNode;
-  disabled?: boolean;
-}) {
-  return (
-    <div>
-      <label style={labelStyle}>{label}</label>
-      <select
-        disabled={disabled}
-        style={{
-          ...fieldStyle,
-          opacity: disabled ? 0.58 : 1,
-          cursor: disabled ? "not-allowed" : "default",
-        }}>
-        {children}
-      </select>
-    </div>
-  );
-}
-
 export function Settings() {
   const navigate = useNavigate();
   const logout = useAuthStore((state) => state.logout);
@@ -132,8 +86,7 @@ export function Settings() {
             lineHeight: 1.6,
             color: "var(--text-secondary)",
           }}>
-          Consultez votre profil et gérez les actions disponibles dans la démo
-          MVP.
+          Consultez votre profil et déconnectez-vous de votre session Kushim.
         </p>
       </div>
 
@@ -187,51 +140,19 @@ export function Settings() {
               </div>
             </div>
 
-            <div
-              style={{
-                height: "1px",
-                margin: "24px 0",
-                background: "var(--surface-1-border)",
-              }}
-            />
-
-            <div className="space-y-3">
-              {["Profil", "Préférences", "Sécurité", "Danger"].map((item) => (
-                <div
-                  key={item}
-                  className="rounded-full"
-                  style={{
-                    padding: "10px 14px",
-                    background:
-                      item === "Profil" ? "var(--surface-2-bg)" : "transparent",
-                    color:
-                      item === "Profil"
-                        ? "var(--text-primary)"
-                        : "var(--text-secondary)",
-                    border:
-                      item === "Profil"
-                        ? "1px solid var(--surface-2-border)"
-                        : "1px solid transparent",
-                    fontSize: "13px",
-                    fontWeight: 600,
-                  }}>
-                  {item}
-                </div>
-              ))}
-            </div>
-
             <p
               style={{
                 marginTop: "24px",
                 fontSize: "12px",
                 lineHeight: 1.5,
                 color: "var(--text-tertiary)",
+                textAlign: "center",
               }}>
               {(() => {
                 if (!user?.created_at) return " ";
                 const d = new Date(user.created_at);
                 if (Number.isNaN(d.getTime())) return "Non disponible";
-                return `Compte créé le ${d.toLocaleDateString("fr-FR", { day: "numeric", month: "long", year: "numeric" })}`
+                return `Compte créé le ${d.toLocaleDateString("fr-FR", { day: "numeric", month: "long", year: "numeric" })}`;
               })()}
             </p>
           </Card>
@@ -242,102 +163,12 @@ export function Settings() {
             <SectionTitle
               icon={User}
               title="Profil"
-              helper="Les informations de base de votre espace Kushim."
+              helper="Informations renvoyées par le service d'authentification Kushim."
             />
             <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-4">
               <Input label="Nom d'utilisateur" value={displayName} readOnly />
-              <Input label="Identifiant" value={displayHandle} readOnly />
+              <Input label="Identifiant public" value={displayHandle} readOnly />
             </div>
-          </Card>
-
-          <Card level={1}>
-            <SectionTitle
-              icon={SlidersHorizontal}
-              title="Préférences"
-              helper="Les préférences utilisateur sont visibles pour préparer l'UX, mais leur sauvegarde n'est pas incluse dans le MVP."
-            />
-            <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
-              <SelectField label="Devise de base" disabled>
-                <option>EUR (€)</option>
-                <option>USD ($)</option>
-                <option>GBP (£)</option>
-                <option>CHF (Fr)</option>
-              </SelectField>
-              <SelectField label="Thème" disabled>
-                <option>Clair</option>
-                <option>Sombre</option>
-                <option>Système</option>
-              </SelectField>
-              <SelectField label="Langue" disabled>
-                <option>Français</option>
-              </SelectField>
-            </div>
-            <div className="mt-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-              <Badge variant="info">Non inclus dans la démo MVP</Badge>
-              <Button variant="primary" disabled title="Fonctionnalité en préparation">
-                Bientôt disponible
-              </Button>
-            </div>
-          </Card>
-
-          <Card level={1}>
-            <SectionTitle
-              icon={Shield}
-              title="Sécurité"
-              helper="Le changement de mot de passe depuis l'app est en préparation. La récupération reste gérée par le frontend auth."
-            />
-            <div className="mt-6 grid grid-cols-1 gap-4">
-              <Input
-                label="Mot de passe actuel"
-                type="password"
-                placeholder="Entrez votre mot de passe actuel"
-                disabled
-              />
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <Input
-                  label="Nouveau mot de passe"
-                  type="password"
-                  placeholder="Entrez un nouveau mot de passe"
-                  disabled
-                />
-                <Input
-                  label="Confirmer le nouveau mot de passe"
-                  type="password"
-                  placeholder="Confirmez le nouveau mot de passe"
-                  disabled
-                />
-              </div>
-            </div>
-            <div className="mt-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-              <Badge variant="info">Fonctionnalité en préparation</Badge>
-              <Button variant="primary" disabled title="Non disponible dans la démo">
-                Bientôt disponible
-              </Button>
-            </div>
-          </Card>
-
-          <Card
-            level={1}
-            style={{
-              borderColor: "rgba(239, 68, 68, 0.28)",
-              boxShadow: "0 18px 60px rgba(239, 68, 68, 0.08)",
-            }}>
-            <SectionTitle
-              icon={TriangleAlert}
-              title="Zone dangereuse"
-              helper="La suppression de compte n'est pas incluse dans la démo MVP."
-            />
-            <p
-              style={{
-                marginTop: "18px",
-                fontSize: "14px",
-                lineHeight: 1.6,
-                color: "var(--text-secondary)",
-              }}>
-              Logout reste disponible et révoque la session côté auth. La
-              suppression de compte est volontairement désactivée dans cette
-              démo.
-            </p>
             <div className="mt-6 flex flex-col sm:flex-row justify-end gap-3">
               <Button variant="secondary" onClick={() => navigate("/dashboard")}>
                 Retour au tableau de bord
@@ -345,10 +176,15 @@ export function Settings() {
               <Button variant="danger" onClick={handleLogout}>
                 Se déconnecter
               </Button>
-              <Button variant="danger" disabled title="Non disponible dans la démo">
-                Suppression indisponible
-              </Button>
             </div>
+          </Card>
+
+          <Card level={1}>
+            <SectionTitle
+              icon={Info}
+              title="Autres actions"
+              helper="La gestion du mot de passe, des préférences et la suppression de compte ne sont pas exposées dans cette version. Ces actions seront traitées par le frontend d'authentification dédié."
+            />
           </Card>
         </div>
       </div>
