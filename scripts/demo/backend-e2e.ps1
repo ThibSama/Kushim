@@ -71,6 +71,11 @@ param(
     [string]$HistoryDateFrom = "2026-06-01",
     [string]$HistoryDateTo   = "2026-06-09",
     [string]$BackfillDateTo  = "",
+    # Optional explicit demo password override. When empty, a per-run strong
+    # password is generated in memory. The chosen value is never logged or
+    # written to disk. Override only when wiring this script into a flow
+    # that needs to reuse the same user across runs.
+    [string]$DemoPassword    = "",
     [switch]$SkipDockerJobs,
     [switch]$VerboseJson,
     [switch]$DryRun
@@ -271,9 +276,34 @@ if ($DryRun) {
 Write-Step "B. Signup demo user"
 
 $username = "${DemoPrefix}_${runSuffix}"
-$password = "DemoP@ss2026!"
+
+# Per-run strong password. Generated in memory via a cryptographic RNG.
+# Never logged, never written to disk, never echoed.
+# The password policy (kushim-auth-api) requires 12-128 chars; this gives 32.
+function New-DemoPassword {
+    $alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789!@#%^*-_=+'
+    $bytes = New-Object byte[] 32
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    try {
+        $rng.GetBytes($bytes)
+    } finally {
+        $rng.Dispose()
+    }
+    $chars = New-Object char[] 32
+    for ($i = 0; $i -lt 32; $i++) {
+        $chars[$i] = $alphabet[$bytes[$i] % $alphabet.Length]
+    }
+    return -join $chars
+}
+
+if ([string]::IsNullOrEmpty($DemoPassword)) {
+    $password = New-DemoPassword
+} else {
+    $password = $DemoPassword
+}
 
 Write-Info "username: $username"
+Write-Info "password: generated in memory (length=$($password.Length))"
 
 $signupBody = @{
     username = $username
@@ -328,47 +358,42 @@ try {
 }
 
 # ---------------------------------------------------------------------------
-# Step E: Seed demo AAPL asset
+# Step E: Resolve canonical AAPL asset
+#
+# This script never creates catalogue assets. It expects the canonical
+# (AAPL, NASDAQ) row to already exist, seeded by
+# infra/postgres/init/002_seed_canonical_assets.sql. The seed is loaded
+# automatically on fresh PostgreSQL volumes via docker-compose, and can
+# be re-applied manually with:
+#   powershell -ExecutionPolicy Bypass -File scripts/dev/seed-canonical-assets.ps1
 # ---------------------------------------------------------------------------
-Write-Step "E. Seed demo AAPL asset"
+Write-Step "E. Resolve canonical AAPL asset"
 
-$assetId = [guid]::NewGuid().ToString()
-$assetName = "Apple Inc. (E2E Demo $runSuffix)"
-
-Write-Info "Inserting asset: id=$assetId, name=$assetName"
-
-$insertSql = "INSERT INTO assets (id_asset, asset_class, status, name, native_currency, symbol, ticker, exchange) VALUES ('$assetId', 'equity', 'active', 'Apple Inc. (E2E Demo)', 'USD', 'AAPL', 'AAPL', 'NASDAQ')"
-
+$resolveSql = "SELECT id_asset FROM assets WHERE ticker = 'AAPL' AND symbol = 'AAPL' AND exchange = 'NASDAQ' AND native_currency = 'USD' AND status = 'active'"
 try {
-    $result = docker exec kushim_database psql -U kushim -d kushim -c $insertSql 2>&1
+    $resolveResult = docker exec kushim_database psql -U kushim -d kushim -t -A -c $resolveSql 2>&1
     if ($LASTEXITCODE -ne 0) {
-        throw "psql exited with code $LASTEXITCODE : $result"
+        throw "psql exited with code $LASTEXITCODE : $resolveResult"
     }
-    $script:DemoState.AssetId = $assetId
-    Write-Success "Asset seeded: id=$assetId"
 } catch {
-    Write-Err "Asset seeding failed: $_"
-    Write-Warn "Attempting to find an existing active AAPL asset with USD currency..."
-
-    try {
-        $findSql = "SELECT id_asset FROM assets WHERE symbol = 'AAPL' AND status = 'active' AND native_currency = 'USD' LIMIT 1"
-        $findResult = docker exec kushim_database psql -U kushim -d kushim -t -A -c $findSql 2>&1
-        if ($LASTEXITCODE -ne 0) {
-            throw "psql exited with code $LASTEXITCODE : $findResult"
-        }
-        $foundId = ($findResult | Select-Object -First 1).Trim()
-        if ($foundId -and $foundId -ne "") {
-            $script:DemoState.AssetId = $foundId
-            Write-Success "Found existing AAPL asset: id=$foundId"
-        } else {
-            Write-Err "No existing AAPL asset found. Cannot proceed."
-            exit 1
-        }
-    } catch {
-        Write-Err "Asset lookup failed: $_"
-        exit 1
-    }
+    Write-Err "Canonical AAPL resolution failed: $_"
+    exit 1
 }
+
+$rows = @($resolveResult | Where-Object { $_ -and ($_ -match '^[0-9a-f-]{36}$') })
+if ($rows.Count -eq 0) {
+    Write-Err "Canonical (AAPL, NASDAQ, USD, active) row is missing from the assets catalogue."
+    Write-Err "Run: powershell -ExecutionPolicy Bypass -File scripts/dev/seed-canonical-assets.ps1"
+    exit 1
+}
+if ($rows.Count -gt 1) {
+    Write-Err "Catalogue is ambiguous: $($rows.Count) exact canonical AAPL rows match (ticker='AAPL', exchange='NASDAQ', native_currency='USD', status='active')."
+    Write-Err "Run: powershell -ExecutionPolicy Bypass -File scripts/dev/audit-asset-catalog.ps1 to inspect duplicates."
+    exit 1
+}
+
+$script:DemoState.AssetId = $rows[0].Trim()
+Write-Success "Canonical AAPL resolved: id=$($script:DemoState.AssetId) (reused, not created)"
 
 # ---------------------------------------------------------------------------
 # Step F: Create and post deposit

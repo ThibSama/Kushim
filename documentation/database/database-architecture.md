@@ -8,6 +8,14 @@ The schema source of truth is:
 
 Do not infer schema from old docs when the DDL says otherwise.
 
+## Canonical MVP asset seed
+
+The minimal, deterministic catalogue seed used by demos, tests and controlled provider validations is:
+
+- `infra/postgres/init/002_seed_canonical_assets.sql`
+
+This file owns exactly three rows: `(AAPL, NASDAQ, USD, equity, active)`, `(MSFT, NASDAQ, USD, equity, active)` and `(NVDA, NASDAQ, USD, equity, active)`, with fixed documented UUIDs. It is idempotent (ON CONFLICT on `(ticker, exchange)`), it never deletes or merges legacy rows, and it does not seed market prices, aliases, metadata, operations or portfolios. It is loaded automatically by Docker on fresh local volumes and validated by the `canonical-seed` CI job. It is not a production-grade asset master.
+
 ## Main data layers
 
 ### 1. Identity and auth

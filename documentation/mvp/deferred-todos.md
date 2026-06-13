@@ -12,8 +12,16 @@ Use these labels:
 
 ## Database / data model
 
+### Resolved
+
+- repeated demo runs creating new economic representations of AAPL is fixed: backend E2E now resolves the canonical `(AAPL, NASDAQ)` row seeded by `infra/postgres/init/002_seed_canonical_assets.sql` and never inserts a catalogue asset (see `documentation/operations/backend-demo-e2e.md`, Step E)
+- market-data integration tests no longer use canonical provider symbols for temporary fixtures; they use the `TEST_CURRENT_*` / `TEST_HISTORY_*` / `TEST_TICKER_*` technical prefixes and a `#[cfg(test)]`-only deterministic provider that no Finnhub allowlist resolves
+- CI now validates seed idempotency and identity in the dedicated `canonical-seed` job
+
 ### Deferred
 
+- production-grade asset-master ingestion, enrichment, alias and metadata workflow (the canonical seed is intentionally minimal — three rows, no aliases, no metadata, no prices)
+- broader canonical seed coverage beyond AAPL/MSFT/NVDA
 - operation type to asset class validation matrix
 - nuanced handling of inactive, delisted, or merged assets for historical operations
 - richer FX history cache strategy
@@ -21,6 +29,7 @@ Use these labels:
 
 ### Known limitation
 
+- existing local databases created before the canonical seed may still contain legacy `test_hist_*` / `test_*` / `Apple Inc. (E2E Demo)` rows that resolve to AAPL/MSFT/NVDA via `COALESCE(ticker, symbol)`. They are referenced by posted operations, holdings and snapshots, so this pass does not auto-merge or delete them. Cleanup is an optional local maintenance action (see `scripts/dev/audit-asset-catalog.ps1` for the current local state); the cleanest reset is `docker compose down -v` followed by `docker compose up -d ...` when the local data is disposable
 - current schema supports more advanced cases than the currently implemented service logic uses
 
 ## Auth

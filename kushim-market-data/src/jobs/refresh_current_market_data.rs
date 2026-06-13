@@ -105,7 +105,16 @@ impl<P: MarketDataProvider> Job for RefreshCurrentMarketDataJob<P> {
 #[cfg(test)]
 mod tests {
     use super::RefreshCurrentMarketDataJob;
-    use crate::{jobs::Job, providers::mock::MockProvider, state::AppState, test_utils::lock_env};
+    use crate::{
+        jobs::Job,
+        state::AppState,
+        test_utils::{
+            TEST_SYMBOL_PREFIX_CURRENT, TEST_SYMBOL_PREFIX_UNSUPPORTED, TEST_TICKER_PREFIX,
+            lock_env,
+            providers::{DeterministicTestProvider, TEST_CURRENT_PRICE_MINOR},
+            unique_test_symbol,
+        },
+    };
     use sqlx::{PgPool, Row};
     use uuid::Uuid;
 
@@ -127,6 +136,10 @@ mod tests {
             .expect("test database should be reachable")
     }
 
+    /// Insert a temporary catalogue row using a technical symbol that no
+    /// real provider allowlist resolves. Even if a test panics before its
+    /// cleanup runs, the leftover row cannot collide with AAPL/MSFT/NVDA
+    /// or any other canonical provider symbol.
     async fn create_test_asset(
         pool: &PgPool,
         symbol: Option<&str>,
@@ -136,7 +149,7 @@ mod tests {
     ) -> Uuid {
         let id_asset = Uuid::new_v4();
         let name = format!(
-            "test_{}",
+            "test_current_{}",
             symbol
                 .or(ticker)
                 .unwrap_or(&id_asset.simple().to_string()[..8])
@@ -203,9 +216,10 @@ mod tests {
     #[tokio::test]
     async fn job_upserts_supported_asset() {
         let pool = test_pool().await;
-        let id = create_test_asset(&pool, Some("AAPL"), None, None, "active").await;
+        let symbol = unique_test_symbol(TEST_SYMBOL_PREFIX_CURRENT);
+        let id = create_test_asset(&pool, Some(&symbol), None, None, "active").await;
 
-        let job = RefreshCurrentMarketDataJob::new(MockProvider);
+        let job = RefreshCurrentMarketDataJob::new(DeterministicTestProvider);
         let state = AppState {
             pg_pool: pool.clone(),
         };
@@ -213,10 +227,10 @@ mod tests {
         job.run(&state).await.expect("job should succeed");
 
         let price = get_market_data_price(&pool, id).await;
-        assert_eq!(price, Some(19_523));
+        assert_eq!(price, Some(TEST_CURRENT_PRICE_MINOR));
 
         let source = get_market_data_source(&pool, id).await;
-        assert_eq!(source.as_deref(), Some("mock"));
+        assert_eq!(source.as_deref(), Some("test-static"));
 
         cleanup_test_asset(&pool, id).await;
     }
@@ -224,9 +238,10 @@ mod tests {
     #[tokio::test]
     async fn job_skips_unsupported_asset() {
         let pool = test_pool().await;
-        let id = create_test_asset(&pool, Some("UNKNOWN_XYZ"), None, None, "active").await;
+        let symbol = unique_test_symbol(TEST_SYMBOL_PREFIX_UNSUPPORTED);
+        let id = create_test_asset(&pool, Some(&symbol), None, None, "active").await;
 
-        let job = RefreshCurrentMarketDataJob::new(MockProvider);
+        let job = RefreshCurrentMarketDataJob::new(DeterministicTestProvider);
         let state = AppState {
             pg_pool: pool.clone(),
         };
@@ -241,9 +256,10 @@ mod tests {
     #[tokio::test]
     async fn job_skips_inactive_assets() {
         let pool = test_pool().await;
-        let id = create_test_asset(&pool, Some("MSFT"), None, None, "inactive").await;
+        let symbol = unique_test_symbol(TEST_SYMBOL_PREFIX_CURRENT);
+        let id = create_test_asset(&pool, Some(&symbol), None, None, "inactive").await;
 
-        let job = RefreshCurrentMarketDataJob::new(MockProvider);
+        let job = RefreshCurrentMarketDataJob::new(DeterministicTestProvider);
         let state = AppState {
             pg_pool: pool.clone(),
         };
@@ -258,9 +274,10 @@ mod tests {
     #[tokio::test]
     async fn job_is_idempotent() {
         let pool = test_pool().await;
-        let id = create_test_asset(&pool, Some("NVDA"), None, None, "active").await;
+        let symbol = unique_test_symbol(TEST_SYMBOL_PREFIX_CURRENT);
+        let id = create_test_asset(&pool, Some(&symbol), None, None, "active").await;
 
-        let job = RefreshCurrentMarketDataJob::new(MockProvider);
+        let job = RefreshCurrentMarketDataJob::new(DeterministicTestProvider);
         let state = AppState {
             pg_pool: pool.clone(),
         };
@@ -269,7 +286,10 @@ mod tests {
         job.run(&state).await.expect("second run should succeed");
 
         assert_eq!(count_market_data_rows(&pool, id).await, 1);
-        assert_eq!(get_market_data_price(&pool, id).await, Some(87_640));
+        assert_eq!(
+            get_market_data_price(&pool, id).await,
+            Some(TEST_CURRENT_PRICE_MINOR)
+        );
 
         cleanup_test_asset(&pool, id).await;
     }
@@ -283,16 +303,21 @@ mod tests {
     #[tokio::test]
     async fn job_resolves_via_ticker_when_no_symbol() {
         let pool = test_pool().await;
-        let id = create_test_asset(&pool, None, Some("VTI"), Some("NYSE"), "active").await;
+        let ticker = unique_test_symbol(TEST_TICKER_PREFIX);
+        let id =
+            create_test_asset(&pool, None, Some(&ticker), Some("TEST_EXCHANGE"), "active").await;
 
-        let job = RefreshCurrentMarketDataJob::new(MockProvider);
+        let job = RefreshCurrentMarketDataJob::new(DeterministicTestProvider);
         let state = AppState {
             pg_pool: pool.clone(),
         };
 
         job.run(&state).await.expect("job should succeed");
 
-        assert_eq!(get_market_data_price(&pool, id).await, Some(26_410));
+        assert_eq!(
+            get_market_data_price(&pool, id).await,
+            Some(TEST_CURRENT_PRICE_MINOR)
+        );
 
         cleanup_test_asset(&pool, id).await;
     }

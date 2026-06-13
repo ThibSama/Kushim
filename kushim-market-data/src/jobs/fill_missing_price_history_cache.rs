@@ -141,7 +141,14 @@ fn date_range_len(from: Date, to: Date) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::FillMissingPriceHistoryCacheJob;
-    use crate::{jobs::Job, providers::mock::MockProvider, state::AppState, test_utils::lock_env};
+    use crate::{
+        jobs::Job,
+        state::AppState,
+        test_utils::{
+            TEST_SYMBOL_PREFIX_HISTORY, TEST_SYMBOL_PREFIX_UNSUPPORTED, lock_env,
+            providers::DeterministicTestProvider, unique_test_symbol,
+        },
+    };
     use sqlx::{PgPool, Row};
     use time::{Date, Month};
     use uuid::Uuid;
@@ -164,6 +171,10 @@ mod tests {
             .expect("test database should be reachable")
     }
 
+    /// Insert a temporary catalogue row using a technical symbol that no
+    /// real provider allowlist resolves. Even if a test panics before its
+    /// cleanup runs, the leftover row cannot collide with AAPL/MSFT/NVDA
+    /// or any other canonical provider symbol.
     async fn create_test_asset(
         pool: &PgPool,
         symbol: Option<&str>,
@@ -173,7 +184,7 @@ mod tests {
     ) -> Uuid {
         let id_asset = Uuid::new_v4();
         let name = format!(
-            "test_hist_{}",
+            "test_history_{}",
             symbol
                 .or(ticker)
                 .unwrap_or(&id_asset.simple().to_string()[..8])
@@ -252,10 +263,14 @@ mod tests {
     #[tokio::test]
     async fn job_inserts_missing_rows() {
         let pool = test_pool().await;
-        let id = create_test_asset(&pool, Some("AAPL"), None, None, "active").await;
+        let symbol = unique_test_symbol(TEST_SYMBOL_PREFIX_HISTORY);
+        let id = create_test_asset(&pool, Some(&symbol), None, None, "active").await;
 
-        let job =
-            FillMissingPriceHistoryCacheJob::new(MockProvider, date(2026, 1, 1), date(2026, 1, 3));
+        let job = FillMissingPriceHistoryCacheJob::new(
+            DeterministicTestProvider,
+            date(2026, 1, 1),
+            date(2026, 1, 3),
+        );
         let state = AppState {
             pg_pool: pool.clone(),
         };
@@ -277,10 +292,14 @@ mod tests {
     #[tokio::test]
     async fn job_is_idempotent() {
         let pool = test_pool().await;
-        let id = create_test_asset(&pool, Some("MSFT"), None, None, "active").await;
+        let symbol = unique_test_symbol(TEST_SYMBOL_PREFIX_HISTORY);
+        let id = create_test_asset(&pool, Some(&symbol), None, None, "active").await;
 
-        let job =
-            FillMissingPriceHistoryCacheJob::new(MockProvider, date(2026, 2, 1), date(2026, 2, 3));
+        let job = FillMissingPriceHistoryCacheJob::new(
+            DeterministicTestProvider,
+            date(2026, 2, 1),
+            date(2026, 2, 3),
+        );
         let state = AppState {
             pg_pool: pool.clone(),
         };
@@ -307,10 +326,14 @@ mod tests {
     #[tokio::test]
     async fn job_skips_unsupported_asset() {
         let pool = test_pool().await;
-        let id = create_test_asset(&pool, Some("UNKNOWN_XYZ"), None, None, "active").await;
+        let symbol = unique_test_symbol(TEST_SYMBOL_PREFIX_UNSUPPORTED);
+        let id = create_test_asset(&pool, Some(&symbol), None, None, "active").await;
 
-        let job =
-            FillMissingPriceHistoryCacheJob::new(MockProvider, date(2026, 1, 1), date(2026, 1, 3));
+        let job = FillMissingPriceHistoryCacheJob::new(
+            DeterministicTestProvider,
+            date(2026, 1, 1),
+            date(2026, 1, 3),
+        );
         let state = AppState {
             pg_pool: pool.clone(),
         };
@@ -328,10 +351,14 @@ mod tests {
     #[tokio::test]
     async fn job_skips_inactive_assets() {
         let pool = test_pool().await;
-        let id = create_test_asset(&pool, Some("NVDA"), None, None, "inactive").await;
+        let symbol = unique_test_symbol(TEST_SYMBOL_PREFIX_HISTORY);
+        let id = create_test_asset(&pool, Some(&symbol), None, None, "inactive").await;
 
-        let job =
-            FillMissingPriceHistoryCacheJob::new(MockProvider, date(2026, 3, 1), date(2026, 3, 3));
+        let job = FillMissingPriceHistoryCacheJob::new(
+            DeterministicTestProvider,
+            date(2026, 3, 1),
+            date(2026, 3, 3),
+        );
         let state = AppState {
             pg_pool: pool.clone(),
         };
@@ -349,14 +376,15 @@ mod tests {
     #[tokio::test]
     async fn existing_rows_remain_untouched() {
         let pool = test_pool().await;
-        let id = create_test_asset(&pool, Some("BTC"), None, None, "active").await;
+        let symbol = unique_test_symbol(TEST_SYMBOL_PREFIX_HISTORY);
+        let id = create_test_asset(&pool, Some(&symbol), None, None, "active").await;
         let target_date = date(2026, 5, 10);
 
         sqlx::query(
             r#"
             INSERT INTO asset_price_history_cache
                 (id_asset, price_date, currency, close_minor, source)
-            VALUES ($1, $2, 'USD', 999_999, 'mock')
+            VALUES ($1, $2, 'USD', 999_999, 'test-static')
             "#,
         )
         .bind(id)
@@ -366,7 +394,7 @@ mod tests {
         .expect("seed row should be inserted");
 
         let job = FillMissingPriceHistoryCacheJob::new(
-            MockProvider,
+            DeterministicTestProvider,
             date(2026, 5, 10),
             date(2026, 5, 10),
         );

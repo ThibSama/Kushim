@@ -237,6 +237,73 @@ jobs:
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - run: cargo test
 
+  canonical-seed:
+    name: "Canonical asset seed (idempotency + identity)"
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: kushim
+          POSTGRES_PASSWORD: kushim_secret_dev
+          POSTGRES_DB: kushim
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U kushim"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://kushim:kushim_secret_dev@localhost:5432/kushim
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Load schema (001_init.sql)
+        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f infra/postgres/init/001_init.sql
+
+      - name: Apply canonical seed (first run)
+        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f infra/postgres/init/002_seed_canonical_assets.sql
+
+      - name: Apply canonical seed (second run — must be idempotent)
+        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f infra/postgres/init/002_seed_canonical_assets.sql
+
+      - name: Assert exactly three seeded canonical rows
+        run: |
+          set -euo pipefail
+          count=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM assets WHERE (ticker, exchange) IN (('AAPL','NASDAQ'),('MSFT','NASDAQ'),('NVDA','NASDAQ'));")
+          if [ "$count" != "3" ]; then
+            echo "Expected 3 canonical rows, found $count" >&2
+            exit 1
+          fi
+
+      - name: Assert exactly one row per canonical (ticker, exchange)
+        run: |
+          set -euo pipefail
+          dup=$(psql "$DATABASE_URL" -t -A -c "SELECT COALESCE(SUM(c-1),0) FROM (SELECT COUNT(*) c FROM assets WHERE (ticker, exchange) IN (('AAPL','NASDAQ'),('MSFT','NASDAQ'),('NVDA','NASDAQ')) GROUP BY ticker, exchange) s;")
+          if [ "$dup" != "0" ]; then
+            echo "Duplicate canonical rows detected: $dup extra" >&2
+            exit 1
+          fi
+
+      - name: Assert canonical rows are active USD equities
+        run: |
+          set -euo pipefail
+          bad=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM assets WHERE (ticker, exchange) IN (('AAPL','NASDAQ'),('MSFT','NASDAQ'),('NVDA','NASDAQ')) AND NOT (status = 'active' AND native_currency = 'USD' AND asset_class = 'equity');")
+          if [ "$bad" != "0" ]; then
+            echo "Canonical rows do not all satisfy active/USD/equity: $bad row(s) fail" >&2
+            exit 1
+          fi
+
+      - name: Assert seeded UUIDs match the documented canonical UUIDs
+        run: |
+          set -euo pipefail
+          ok=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM assets WHERE id_asset IN ('01993b00-0001-7000-8001-aaaaaaaaaaaa','01993b00-0002-7000-8001-bbbbbbbbbbbb','01993b00-0003-7000-8001-cccccccccccc') AND (ticker, exchange) IN (('AAPL','NASDAQ'),('MSFT','NASDAQ'),('NVDA','NASDAQ'));")
+          if [ "$ok" != "3" ]; then
+            echo "Documented canonical UUIDs are not all present: $ok / 3" >&2
+            exit 1
+          fi
+
   rust-audit:
     name: "Rust advisory audit"
     runs-on: ubuntu-latest

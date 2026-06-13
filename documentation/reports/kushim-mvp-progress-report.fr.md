@@ -17,6 +17,7 @@ L'état global du projet :
 - le backend E2E est désormais démontrable localement via un smoke test automatisé (`scripts/demo/backend-e2e.ps1`, 18/18 assertions passées) ;
 - `kushim-market-data` dispose d'un mock provider (défaut sûr) et d'un provider Finnhub gardé par allowlist ; les quotes courantes Finnhub sont live-validées pour AAPL, MSFT et NVDA uniquement ;
 - `kushim-app` n'affiche plus aucune donnée financière simulée côté utilisateur : benchmark démo, swap simulé et formulaires Settings non fonctionnels ont été retirés ; toutes les valeurs visibles proviennent de l'API, des read models, des opérations persistées ou d'états explicitement indisponibles ;
+- le catalogue d'actifs MVP dispose d'un seed canonique stable (`infra/postgres/init/002_seed_canonical_assets.sql`) pour AAPL, MSFT et NVDA ; les démos backend, les validations Finnhub contrôlées et les tests d'intégration market-data réutilisent ces lignes au lieu d'en créer à chaque exécution ; un job CI dédié `canonical-seed` valide l'idempotence et l'identité du seed ;
 - `kushim-auth/front` est câblé à `kushim-auth/api` pour login, signup, recovery et handoff Redis ;
 - la production n'est pas le niveau visé aujourd'hui.
 

@@ -49,7 +49,7 @@ The full chain proves:
 
 - PostgreSQL schema initialized (DDL V3 via `infra/postgres/init/001_init.sql`).
 - Role `user` (id_role=1) must exist in the `roles` table. It is created by the DDL init script.
-- At least one mock-supported asset must exist in the `assets` table, or will be seeded during the demo.
+- Canonical MVP assets AAPL, MSFT, NVDA are seeded by `infra/postgres/init/002_seed_canonical_assets.sql`. Fresh local volumes load it automatically. To re-apply on an existing volume run `powershell -ExecutionPolicy Bypass -File scripts/dev/seed-canonical-assets.ps1`.
 
 ### Service modes
 
@@ -82,9 +82,9 @@ Important constraints:
 
 - Use a clearly named demo user (e.g., `demo_e2e_user`, `demo_jury_user`).
 - Use a clearly named demo portfolio (e.g., `"E2E Demo Portfolio"`).
-- Use a fresh UUID for the demo asset if seeding manually.
+- Reuse the canonical AAPL/MSFT/NVDA seeded rows. **Never create a new AAPL/MSFT/NVDA asset for a demo run.** Demo runs may still create new users, portfolios and operations as needed.
 - Do not wipe the database. Do not run `TRUNCATE` or `DELETE FROM` on shared tables.
-- Do not rely on test-created data from `cargo test` runs for a clean demo. Those rows may be cleaned up or have unpredictable names.
+- Do not rely on test-created data from `cargo test` runs for a clean demo. Tests now use technical `TEST_CURRENT_*`/`TEST_HISTORY_*`/`TEST_TICKER_*` symbols that cannot collide with the canonical catalogue.
 - Each demo run should create its own user and portfolio. Reusing a `username` that already exists will produce a 409 conflict.
 
 ---
@@ -168,29 +168,23 @@ Write-Host "Portfolio ID: $portfolioId"
 
 The portfolio must use `base_currency = "USD"`. Using EUR will cause all holdings to be estimated.
 
-### Step E: Seed demo AAPL asset
+### Step E: Resolve canonical AAPL asset
 
-Check if a clean AAPL asset already exists:
-
-```powershell
-docker exec kushim_database psql -U kushim -d kushim -c "SELECT id_asset, symbol, name, status, native_currency FROM assets WHERE symbol = 'AAPL' AND status = 'active' AND native_currency = 'USD' LIMIT 1"
-```
-
-If a suitable row exists, store its `id_asset`:
+The catalogue is seeded by `infra/postgres/init/002_seed_canonical_assets.sql` and exposes a single canonical AAPL row identified by `(ticker='AAPL', exchange='NASDAQ', native_currency='USD', status='active')`. Demo runs reuse this row; they must not insert a new one.
 
 ```powershell
-$assetId = "<paste the id_asset UUID from the query above>"
-```
-
-If no suitable row exists, insert one:
-
-```powershell
-$assetId = [guid]::NewGuid().ToString()
-docker exec kushim_database psql -U kushim -d kushim -c "INSERT INTO assets (id_asset, asset_class, status, name, native_currency, symbol, ticker, exchange) VALUES ('$assetId', 'equity', 'active', 'Apple Inc. (Demo)', 'USD', 'AAPL', 'AAPL', 'NASDAQ')"
+$assetId = docker exec kushim_database psql -U kushim -d kushim -t -A -c "SELECT id_asset FROM assets WHERE ticker='AAPL' AND symbol='AAPL' AND exchange='NASDAQ' AND native_currency='USD' AND status='active'"
+$assetId = $assetId.Trim()
 Write-Host "Asset ID: $assetId"
 ```
 
-Note: if an AAPL symbol already exists from test runs, inserting a second row is allowed (the DDL does not enforce symbol uniqueness). Use your newly inserted `id_asset` in subsequent steps.
+If the query returns nothing, the canonical seed is missing from this volume. Re-apply it (idempotent, never deletes legacy rows):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/dev/seed-canonical-assets.ps1
+```
+
+If the query returns more than one UUID, the catalogue is ambiguous because of legacy duplicate active rows that pre-date the canonical seed. Run `scripts/dev/audit-asset-catalog.ps1` to inspect them; the cleanup decision (preserve vs. reset the local volume) is documented in `documentation/mvp/deferred-todos.md` under *Frontend / Backend known limitations*.
 
 ### Step F: Create and post deposit operation
 
