@@ -237,8 +237,8 @@ jobs:
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - run: cargo test
 
-  canonical-seed:
-    name: "Canonical asset seed (idempotency + identity)"
+  fresh-db-bootstrap:
+    name: "Fresh-database bootstrap (schema + seeds, idempotency + identity)"
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -262,18 +262,44 @@ jobs:
       - name: Load schema (001_init.sql)
         run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f infra/postgres/init/001_init.sql
 
-      - name: Apply canonical seed (first run)
+      - name: Apply canonical asset seed (first run)
         run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f infra/postgres/init/002_seed_canonical_assets.sql
 
-      - name: Apply canonical seed (second run — must be idempotent)
+      - name: Apply auth role seed (first run)
+        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f infra/postgres/init/003_seed_auth_roles.sql
+
+      - name: Apply canonical asset seed (second run — must be idempotent)
         run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f infra/postgres/init/002_seed_canonical_assets.sql
 
-      - name: Assert exactly three seeded canonical rows
+      - name: Apply auth role seed (second run — must be idempotent)
+        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f infra/postgres/init/003_seed_auth_roles.sql
+
+      - name: Assert exactly one 'user' role with deterministic id_role = 1
+        run: |
+          set -euo pipefail
+          total=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM roles WHERE label = 'user';")
+          if [ "$total" != "1" ]; then
+            echo "Expected exactly one 'user' role, found $total" >&2
+            exit 1
+          fi
+          id_one=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM roles WHERE label = 'user' AND id_role = 1;")
+          if [ "$id_one" != "1" ]; then
+            echo "'user' role does not have deterministic id_role = 1" >&2
+            exit 1
+          fi
+
+      - name: Assert exactly three seeded canonical rows (no extras)
         run: |
           set -euo pipefail
           count=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM assets WHERE (ticker, exchange) IN (('AAPL','NASDAQ'),('MSFT','NASDAQ'),('NVDA','NASDAQ'));")
           if [ "$count" != "3" ]; then
             echo "Expected 3 canonical rows, found $count" >&2
+            exit 1
+          fi
+          # The seed must not introduce unexpected extra asset rows on a fresh DB.
+          total_assets=$(psql "$DATABASE_URL" -t -A -c "SELECT COUNT(*) FROM assets;")
+          if [ "$total_assets" != "3" ]; then
+            echo "Fresh database has $total_assets asset rows, expected exactly 3 from the canonical seed" >&2
             exit 1
           fi
 

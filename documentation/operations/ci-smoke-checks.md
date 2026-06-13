@@ -50,14 +50,15 @@ Triggers: push to `main`, pull requests targeting `main`.
 - ~74 tests (unit + integration against PostgreSQL)
 - Tests use a hardcoded dev JWT secret — no `AUTH_JWT_SECRET` env var required
 
-### `canonical-seed` (idempotency + identity)
+### `fresh-db-bootstrap` (schema + seeds, idempotency + identity)
 
 - Spins up a PostgreSQL 16 service container.
 - Loads `infra/postgres/init/001_init.sql` (schema source of truth).
-- Applies `infra/postgres/init/002_seed_canonical_assets.sql` twice in a row to prove idempotency.
-- Asserts that exactly three canonical rows exist, exactly one for each `(ticker, exchange)` in `(AAPL, NASDAQ)`, `(MSFT, NASDAQ)`, `(NVDA, NASDAQ)`.
+- Applies `infra/postgres/init/002_seed_canonical_assets.sql` and `infra/postgres/init/003_seed_auth_roles.sql`, then applies both seeds a second time to prove idempotency.
+- Asserts exactly one `user` role exists with deterministic `id_role = 1`.
+- Asserts that exactly three canonical asset rows exist (and no unexpected extras on a fresh DB), exactly one for each `(ticker, exchange)` in `(AAPL, NASDAQ)`, `(MSFT, NASDAQ)`, `(NVDA, NASDAQ)`.
 - Asserts those three rows are `active` USD `equity` assets.
-- Asserts the documented stable UUIDs from the seed are the ones present in the database.
+- Asserts the documented stable UUIDs from the canonical seed are the ones present in the database.
 - Does not call Finnhub and requires no secret. Runs in isolation from the Rust service jobs so it cannot alter their fixture assumptions.
 
 ### `rust-audit`
@@ -91,7 +92,7 @@ Each Rust service job starts a PostgreSQL 16 service container with:
 
 The full DDL schema is loaded before tests via `psql`. This matches the local development setup.
 
-The canonical asset seed (`002_seed_canonical_assets.sql`) is **not** loaded into the Rust service jobs. Their integration tests use technical `TEST_CURRENT_*` / `TEST_HISTORY_*` / `TEST_TICKER_*` symbols that cannot collide with the canonical catalogue, and loading the seed there would silently change their fixture assumptions. The dedicated `canonical-seed` job is the single place where seed identity and idempotency are validated.
+The seed files (`002_seed_canonical_assets.sql`, `003_seed_auth_roles.sql`) are **not** loaded into the Rust service jobs. Their integration tests seed whatever reference data they need (roles, technical `TEST_CURRENT_*` / `TEST_HISTORY_*` / `TEST_TICKER_*` symbols) and loading the canonical seeds there could silently change their fixture assumptions. The dedicated `fresh-db-bootstrap` job is the single place where schema + seed identity and idempotency are validated.
 
 ## Adding new services
 

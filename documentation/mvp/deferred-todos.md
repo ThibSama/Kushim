@@ -15,8 +15,10 @@ Use these labels:
 ### Resolved
 
 - repeated demo runs creating new economic representations of AAPL is fixed: backend E2E now resolves the canonical `(AAPL, NASDAQ)` row seeded by `infra/postgres/init/002_seed_canonical_assets.sql` and never inserts a catalogue asset (see `documentation/operations/backend-demo-e2e.md`, Step E)
+- fresh-database auth bootstrap defect is fixed: the `user` role is seeded by `infra/postgres/init/003_seed_auth_roles.sql`, so signup works on a brand-new database with no manual SQL insertion. The role is reference data (deterministic `id_role = 1`, no credentials)
+- backend E2E now validates `DemoPrefix` locally (auth username contract `^[a-z0-9_][a-z0-9_-]{2,39}$`) and fails fast before calling `/auth/signup` instead of emitting an opaque HTTP error
 - market-data integration tests no longer use canonical provider symbols for temporary fixtures; they use the `TEST_CURRENT_*` / `TEST_HISTORY_*` / `TEST_TICKER_*` technical prefixes and a `#[cfg(test)]`-only deterministic provider that no Finnhub allowlist resolves
-- CI now validates seed idempotency and identity in the dedicated `canonical-seed` job
+- CI now validates the complete fresh-database bootstrap (schema + canonical asset seed + auth role seed) idempotently in the dedicated `fresh-db-bootstrap` job
 
 ### Deferred
 

@@ -48,8 +48,13 @@ The full chain proves:
 ### Database state
 
 - PostgreSQL schema initialized (DDL V3 via `infra/postgres/init/001_init.sql`).
-- Role `user` (id_role=1) must exist in the `roles` table. It is created by the DDL init script.
+- Role `user` (id_role=1) is seeded by `infra/postgres/init/003_seed_auth_roles.sql`. This is reference data (no credentials), required because signup assigns the `user` role to new accounts. A fresh database supports signup without any manual SQL insertion.
 - Canonical MVP assets AAPL, MSFT, NVDA are seeded by `infra/postgres/init/002_seed_canonical_assets.sql`. Fresh local volumes load it automatically. To re-apply on an existing volume run `powershell -ExecutionPolicy Bypass -File scripts/dev/seed-canonical-assets.ps1`.
+- Both seeds and the schema run automatically (in lexical order) on a fresh PostgreSQL volume via `docker-compose.yml`.
+
+### DemoPrefix validation
+
+The script builds the username as `<DemoPrefix>_<runSuffix>` where `runSuffix` is `yyyyMMdd_HHmmss`. The auth username contract is `^[a-z0-9_][a-z0-9_-]{2,39}$` (3–40 chars). The script validates the final username locally and fails fast **before** calling `/auth/signup` if the prefix is empty, too long, or contains disallowed characters. With the current 15-char timestamp the usual maximum `DemoPrefix` length is 24, but the script computes it from the actual suffix. Use a short lowercase prefix such as `canon_asset`.
 
 ### Service modes
 

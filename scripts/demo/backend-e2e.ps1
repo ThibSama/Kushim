@@ -275,11 +275,55 @@ if ($DryRun) {
 # ---------------------------------------------------------------------------
 Write-Step "B. Signup demo user"
 
+# ---------------------------------------------------------------------------
+# Username contract (kushim-auth/api): ^[a-z0-9_][a-z0-9_-]{2,39}$
+#   - 3 to 40 characters total
+#   - first char: lowercase letter, digit, or underscore
+#   - remaining chars: lowercase letters, digits, underscores, hyphens
+# The final username is "<DemoPrefix>_<runSuffix>". We validate it locally
+# and fail fast BEFORE calling /auth/signup so an over-long or malformed
+# prefix produces an actionable error instead of an opaque HTTP 4xx.
+# ---------------------------------------------------------------------------
+$AUTH_USERNAME_MAX = 40
+$AUTH_USERNAME_REGEX = '^[a-z0-9_][a-z0-9_-]{2,39}$'
+
 $username = "${DemoPrefix}_${runSuffix}"
+
+# Maximum prefix length for the current suffix: total max minus the
+# "_<runSuffix>" tail that this script always appends.
+$suffixTailLength = ("_" + $runSuffix).Length
+$maxPrefixLength = $AUTH_USERNAME_MAX - $suffixTailLength
+
+function Stop-WithPrefixError {
+    Write-Err "DemoPrefix is invalid."
+    Write-Err "Generated username: $username"
+    Write-Err "Maximum username length: $AUTH_USERNAME_MAX"
+    Write-Err "Maximum DemoPrefix length for this run: $maxPrefixLength"
+    Write-Err "Allowed DemoPrefix characters: lowercase a-z, digits, underscore and hyphen."
+    exit 1
+}
+
+if ([string]::IsNullOrWhiteSpace($DemoPrefix)) {
+    Write-Err "DemoPrefix must not be empty or whitespace."
+    Stop-WithPrefixError
+}
+
+if ($username.Length -gt $AUTH_USERNAME_MAX) {
+    Write-Err "Generated username is $($username.Length) characters; the auth API allows at most $AUTH_USERNAME_MAX."
+    Stop-WithPrefixError
+}
+
+if ($username -cnotmatch $AUTH_USERNAME_REGEX) {
+    Write-Err "Generated username does not match the auth username contract $AUTH_USERNAME_REGEX."
+    Stop-WithPrefixError
+}
 
 # Per-run strong password. Generated in memory via a cryptographic RNG.
 # Never logged, never written to disk, never echoed.
 # The password policy (kushim-auth-api) requires 12-128 chars; this gives 32.
+$AUTH_PASSWORD_MIN = 12
+$AUTH_PASSWORD_MAX = 128
+
 function New-DemoPassword {
     $alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789!@#%^*-_=+'
     $bytes = New-Object byte[] 32
@@ -296,14 +340,33 @@ function New-DemoPassword {
     return -join $chars
 }
 
-if ([string]::IsNullOrEmpty($DemoPassword)) {
-    $password = New-DemoPassword
-} else {
+$passwordIsOverride = -not [string]::IsNullOrEmpty($DemoPassword)
+if ($passwordIsOverride) {
+    # Validate the explicit override against the current auth policy
+    # (length + nonblank only; no complexity rules are enforced by the API).
+    if ([string]::IsNullOrWhiteSpace($DemoPassword)) {
+        Write-Err "DemoPassword override must not be blank."
+        exit 1
+    }
+    if ($DemoPassword.Length -lt $AUTH_PASSWORD_MIN) {
+        Write-Err "DemoPassword override is too short: minimum $AUTH_PASSWORD_MIN characters."
+        exit 1
+    }
+    if ($DemoPassword.Length -gt $AUTH_PASSWORD_MAX) {
+        Write-Err "DemoPassword override is too long: maximum $AUTH_PASSWORD_MAX characters."
+        exit 1
+    }
     $password = $DemoPassword
+} else {
+    $password = New-DemoPassword
 }
 
 Write-Info "username: $username"
-Write-Info "password: generated in memory (length=$($password.Length))"
+if ($passwordIsOverride) {
+    Write-Info "password: explicit override provided (value redacted)"
+} else {
+    Write-Info "password: generated in memory (length=$($password.Length))"
+}
 
 $signupBody = @{
     username = $username
@@ -317,8 +380,14 @@ try {
     $script:DemoState.Username     = $username
     Write-Success "User created: id=$($script:DemoState.UserId)"
 } catch {
+    # The username/password were validated locally above, so a failure here is
+    # most likely a server-side condition. Surface the sanitized error and the
+    # likely categories without asserting a single cause. The error text from
+    # Invoke-ApiPost already includes HTTP status and the response body; it does
+    # not include the request password (only the response is echoed).
     Write-Err "Signup failed: $_"
-    Write-Err "If username already exists, re-run the script (new timestamp suffix) or use -DemoPrefix with a different value."
+    Write-Err "Likely causes (not exhaustive): duplicate username; missing auth reference data (the 'user' role seed); username/password rejected by the auth policy; or an auth API internal error."
+    Write-Err "If the 'user' role is missing on a fresh database, apply infra/postgres/init/003_seed_auth_roles.sql (loaded automatically on fresh volumes)."
     exit 1
 }
 

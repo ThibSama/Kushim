@@ -17,7 +17,8 @@ The global state of the project:
 - the backend E2E chain is now demonstrable locally via an automated smoke test (`scripts/demo/backend-e2e.ps1`, 18/18 assertions passed);
 - `kushim-market-data` has a mock provider (safe default) and a guarded Finnhub provider; Finnhub current stock quotes are live-validated for AAPL, MSFT, and NVDA only;
 - `kushim-app` no longer exposes any simulated user-facing financial data: the demo benchmark block, the simulated swap flow, and the non-functional Settings forms (preferences, password change, account deletion) have been removed. Every visible value comes from the API, read models, persisted operations, or an explicitly unavailable state;
-- the MVP asset catalogue now has a stable canonical seed (`infra/postgres/init/002_seed_canonical_assets.sql`) for AAPL, MSFT and NVDA; backend demos, controlled Finnhub validations and market-data integration tests reuse these rows instead of creating new ones per run; a dedicated `canonical-seed` CI job validates seed idempotency and identity;
+- the MVP asset catalogue now has a stable canonical seed (`infra/postgres/init/002_seed_canonical_assets.sql`) for AAPL, MSFT and NVDA; backend demos, controlled Finnhub validations and market-data integration tests reuse these rows instead of creating new ones per run;
+- a fresh database supports signup with no manual SQL insertion: the `user` role (reference data, `id_role = 1`, no credentials) is seeded by `infra/postgres/init/003_seed_auth_roles.sql`; backend E2E now validates `DemoPrefix` locally before the signup call; a dedicated `fresh-db-bootstrap` CI job validates the complete bootstrap (schema + asset seed + role seed) idempotently;
 - `kushim-auth/front` is wired to `kushim-auth/api` for login, signup, recovery, and Redis-backed handoff;
 - production readiness is not the current status or claim.
 

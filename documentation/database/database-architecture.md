@@ -8,13 +8,21 @@ The schema source of truth is:
 
 Do not infer schema from old docs when the DDL says otherwise.
 
-## Canonical MVP asset seed
+## Fresh-database seeds
 
-The minimal, deterministic catalogue seed used by demos, tests and controlled provider validations is:
+Two seed files, separate from the schema DDL, provide the minimal reference data a fresh database needs. Both are idempotent, loaded automatically by Docker on fresh local volumes (in lexical order after `001_init.sql`), and validated by the `fresh-db-bootstrap` CI job.
+
+### Canonical MVP asset seed
 
 - `infra/postgres/init/002_seed_canonical_assets.sql`
 
-This file owns exactly three rows: `(AAPL, NASDAQ, USD, equity, active)`, `(MSFT, NASDAQ, USD, equity, active)` and `(NVDA, NASDAQ, USD, equity, active)`, with fixed documented UUIDs. It is idempotent (ON CONFLICT on `(ticker, exchange)`), it never deletes or merges legacy rows, and it does not seed market prices, aliases, metadata, operations or portfolios. It is loaded automatically by Docker on fresh local volumes and validated by the `canonical-seed` CI job. It is not a production-grade asset master.
+This file owns exactly three rows: `(AAPL, NASDAQ, USD, equity, active)`, `(MSFT, NASDAQ, USD, equity, active)` and `(NVDA, NASDAQ, USD, equity, active)`, with fixed documented UUIDs. It is idempotent (ON CONFLICT on `(ticker, exchange)`), it never deletes or merges legacy rows, and it does not seed market prices, aliases, metadata, operations or portfolios. It is not a production-grade asset master.
+
+### Auth role seed
+
+- `infra/postgres/init/003_seed_auth_roles.sql`
+
+This file owns the minimal authentication reference data: a single `user` role with deterministic `id_role = 1`. `kushim-auth/api` signup assigns this role to every new account via `RoleRepository::find_by_label("user")`, so on a brand-new database signup fails until this row exists. With this seed, a fresh database supports signup **without any manual SQL insertion**. The `user` row is reference data, not a demo user: it stores no credentials, password hashes, or recovery phrases. It is idempotent (ON CONFLICT on `label`); if an unrelated role already occupies `id_role = 1` with a different label, the primary-key conflict fails loudly rather than silently overwriting it.
 
 ## Main data layers
 
