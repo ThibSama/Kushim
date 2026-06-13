@@ -196,6 +196,7 @@ Use these labels:
 - frontend E2E testing
 - production market-data provider in E2E scenario beyond tightly allowlisted Finnhub stock quote dev validation
 - FX conversion in E2E scenario
+- Upgrade GitHub Actions dependencies that still emit Node.js 20 deprecation warnings before GitHub forces the Node.js 24 runtime; current warnings are non-blocking and the workflow remains green
 
 ## Documentation
 
