@@ -4,6 +4,11 @@ services:
       context: ./kushim-website
     env_file:
       - ./kushim-website/.env.local.example
+    # Explicit Docker overrides: the dev server reads NEXT_PUBLIC_* at runtime,
+    # so these canonical nginx URLs reach the browser bundle reliably (the
+    # example env_file documents direct-dev defaults only).
+    environment:
+      NEXT_PUBLIC_AUTH_URL: http://auth.kushim.localhost
     expose:
       - "3000"
     networks:
@@ -14,6 +19,10 @@ services:
       context: ./kushim-auth/front
     env_file:
       - ./kushim-auth/front/.env.local.example
+    environment:
+      NEXT_PUBLIC_APP_URL: http://app.kushim.localhost
+      NEXT_PUBLIC_WEBSITE_URL: http://kushim.localhost
+      NEXT_PUBLIC_AUTH_API_URL: http://auth-api.kushim.localhost
     expose:
       - "3001"
     networks:
@@ -30,6 +39,10 @@ services:
       REDIS_URL: redis://redis:6379/0
       RATE_LIMIT_ENABLED: "true"
       APP_ENV: docker
+      # Browser origins that legitimately call the auth API: the auth frontend
+      # (login/signup/handoff create) and the app (handoff exchange). Direct-dev
+      # origins retained. Explicit allowlist, no wildcard.
+      CORS_ALLOWED_ORIGINS: "http://auth.kushim.localhost,http://app.kushim.localhost,http://localhost:3001,http://localhost:5173"
     depends_on:
       database:
         condition: service_healthy
@@ -52,6 +65,13 @@ services:
       context: ./kushim-app
     env_file:
       - ./kushim-app/.env.example
+    # Explicit Docker overrides: Vite exposes VITE_*-prefixed process env to
+    # import.meta.env at dev-server start, so these canonical nginx URLs reach
+    # the browser bundle reliably.
+    environment:
+      VITE_AUTH_URL: http://auth.kushim.localhost
+      VITE_AUTH_API_URL: http://auth-api.kushim.localhost
+      VITE_API_URL: http://api.kushim.localhost
     expose:
       - "5173"
     networks:
@@ -70,6 +90,9 @@ services:
       KUSHIM_API_PORT: 8080
       AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:-dev_only_change_me_minimum_32_chars}
       JWT_ISSUER: ${JWT_ISSUER:-kushim-auth}
+      # Browser origin that calls the business API: the app. Direct-dev origin
+      # retained. Explicit allowlist, no wildcard.
+      CORS_ALLOWED_ORIGINS: "http://app.kushim.localhost,http://localhost:5173"
     depends_on:
       database:
         condition: service_healthy
@@ -196,6 +219,7 @@ services:
       - kushim-auth-front
       - kushim-app
       - kushim-api
+      - kushim-auth-api
     ports:
       - "80:80"
     volumes:

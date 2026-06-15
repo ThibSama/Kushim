@@ -6,6 +6,32 @@ This document gives the current local Docker workflow for Kushim.
 
 It is for development and validation, not for production deployment.
 
+## Canonical URLs (Docker vs direct dev)
+
+In Docker the browser must use the nginx domains (the internal ports 3000 /
+3001 / 5173 are **not** published). Direct-port URLs are only for running a
+service outside Docker. `docker-compose.yml` injects the Docker URLs into each
+frontend at runtime (`NEXT_PUBLIC_*` / `VITE_*`) and the canonical browser
+origins into each API's `CORS_ALLOWED_ORIGINS`.
+
+| Service | Docker browser URL | Direct dev URL |
+|---|---|---|
+| Website | http://kushim.localhost | http://localhost:3000 |
+| Auth UI | http://auth.kushim.localhost | http://localhost:3001 |
+| Auth API | http://auth-api.kushim.localhost | http://localhost:3002 |
+| App | http://app.kushim.localhost | http://localhost:5173 |
+| Business API | http://api.kushim.localhost | http://localhost:8080 |
+
+`*.kushim.localhost` resolve to `127.0.0.1` automatically (the `.localhost`
+TLD). nginx routes each host to the right service; `auth-api.kushim.localhost`
+proxies to `kushim-auth-api:3002`.
+
+Auth handoff flow (Docker): landing → `http://auth.kushim.localhost/inscription`
+or `/connexion` → auth API → handoff code → redirect to
+`http://app.kushim.localhost/?handoff_code=...` → app exchanges the one-time
+code against `http://auth-api.kushim.localhost` → tokens stored → `/dashboard`.
+Only the short-lived one-time handoff code ever appears in a URL.
+
 ## Main command pattern
 
 Build a service:
