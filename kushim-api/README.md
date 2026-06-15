@@ -276,6 +276,45 @@ Reponse :
 }
 ```
 
+### `GET /v1/reference/currencies` (P1)
+
+But :
+
+- exposer le catalogue canonique des devises supportees pour la creation de
+  portefeuilles et de `portfolio_operations`
+- source unique de verite partagee avec la validation backend (le frontend
+  ne maintient aucune liste cote client)
+
+Auth :
+
+- `Authorization: Bearer <access_token>` ; les refresh tokens sont rejetes
+  comme sur les autres endpoints `/v1/reference/*`
+
+Origine : ISO 4217 codes ordinaires actifs (snapshot 2026-06-15). Exclusions
+documentees : unites metaux precieux (`XAU`/`XAG`/`XPD`/`XPT`), unites de
+fonds/reglement (`XBA`-`XBD`, `XDR`, `XSU`, `XUA`), code de test (`XTS`),
+code aucune-devise (`XXX`), cryptos (jamais ISO 4217 actif), codes retires
+(p. ex. `HRK` remplace par `EUR` en 2023).
+
+Garanties :
+
+- ordre alphabetique deterministe par code ;
+- pas de doublon ;
+- codes en MAJUSCULES sur 3 lettres ASCII ;
+- contient au minimum EUR, USD, GBP, JPY, CHF, CAD, AUD.
+
+Reponse type :
+
+```json
+{
+  "data": [
+    { "value": "AED", "label": "UAE Dirham" },
+    { "value": "EUR", "label": "Euro" },
+    { "value": "USD", "label": "US Dollar" }
+  ]
+}
+```
+
 ### `GET /v1/assets`
 
 But :
@@ -461,7 +500,10 @@ Auth :
 Regles :
 
 - `id_user` provient uniquement du token
-- `base_currency` doit etre composee de `3` lettres majuscules
+- `base_currency` est trim/upcase et doit appartenir au catalogue canonique
+  (`GET /v1/reference/currencies`). Codes mal formes -> `400`
+  `invalid_base_currency`. Codes 3 lettres valides hors catalogue ->
+  `422` `unsupported_currency` (P1)
 - `visibility` accepte `private`, `public`, `unlisted`
 - `visibility` par defaut : `private`
 
@@ -869,6 +911,33 @@ Important :
 - `spin_off` et `symbol_change` exigent `id_asset != id_related_asset`
 - l'API ne fait qu'ecrire la source de verite + la requete de refresh ; elle
   n'ecrit jamais `rm_portfolio_summary`, `rm_portfolio_holdings` ou les snapshots
+
+P1 — contrat devises et cross-currency :
+
+- `currency` est trim/upcase et validee contre le catalogue canonique. Code
+  mal forme -> `400` `invalid_currency`. Code valide hors catalogue ->
+  `422` `unsupported_currency`.
+- Si `operation.currency == portfolio.base_currency`, aucun
+  `fx_rate_to_portfolio` n'est requis.
+- Si `operation.currency != portfolio.base_currency`, **ET** que l'operation
+  a une jambe monetaire convertie par le worker (`cash_amount_minor != 0`),
+  ET que le statut transmis est `posted`, alors un `fx_rate_to_portfolio`
+  positif est obligatoire AVANT toute insertion. Direction conventionnelle :
+  `1 unite de operation.currency = fx_rate_to_portfolio unites de
+  portfolio.base_currency`.
+- En cas de violation, l'API renvoie `422` `unsupported_cross_currency` et
+  NI l'operation NI la `portfolio_refresh_requests` ne sont creees (rejet
+  atomique avant insert).
+- Les operations zero-cash (split, spin_off, symbol_change avec
+  `cash_amount_minor = 0`) ne requierent jamais de `fx_rate_to_portfolio`
+  meme en cross-currency (le worker n'a rien a convertir).
+- Le contrat s'applique aux quatre chemins de posting : creation directe
+  posted, transition pending->posted via `/post`, creation d'une correction
+  posted, post d'une correction pending. Aucun chemin ne contourne la
+  garde.
+- Les operations posted historiques anterieures a P1 et sans
+  `fx_rate_to_portfolio` restent lisibles ; le fallback worker (contribution
+  zero + `is_estimated = true`) est preserve pour compatibilite.
   (seul `kushim-worker` calcule la donnee derivee)
 
 Exemple deposit :

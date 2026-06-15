@@ -175,10 +175,11 @@ Falls back to the first portfolio if the persisted ID no longer exists.
 
 **Create portfolio flow:**
 
-1. User fills name + base currency (3-letter uppercase, e.g. EUR).
+1. User picks the base currency from `CurrencySelect` (defaults to EUR).
 2. `POST /v1/portfolios` with `{ name, base_currency, visibility: "private" }`.
 3. On success: portfolio is added to state and set as active.
-4. Validation errors from the backend are displayed in the modal.
+4. Validation errors from the backend are mapped to safe French messages
+   (`unsupported_currency` → "Cette devise n'est pas prise en charge.").
 
 **Logout:** Portfolio state is reset when the user logs out.
 
@@ -216,6 +217,7 @@ After portfolio selection, the Transactions page and Dashboard load operations v
 | `/v1/portfolios/{id}/operations/{opId}` | GET | Get a single operation |
 | `/v1/reference/operation-types` | GET | List valid operation types |
 | `/v1/reference/operation-statuses` | GET | List valid operation statuses |
+| `/v1/reference/currencies` | GET | Canonical currency catalogue (P1) — single source of truth used by `CurrencySelect` and by backend validation. Access-token only. |
 
 **State management:** `src/stores/operations.ts` (Zustand)
 
@@ -285,6 +287,89 @@ After portfolio selection, the Transactions page and Dashboard load operations v
 | transfer_out | Cash | — |
 
 **Deferred operation types:** split, spin_off, symbol_change, adjustment (require complex UX).
+
+## Currency contract and manual FX (P1)
+
+### `CurrencySelect`
+
+`src/app/components/CurrencySelect.tsx` is the single user-facing currency
+picker. It feeds from `GET /v1/reference/currencies` (canonical ISO 4217
+catalogue maintained in `kushim-api/src/domain/currency.rs`). No currency list
+is duplicated client-side.
+
+- Searchable by code (`EUR`, `USD`, …) and by localized French label
+  (`Intl.DisplayNames("fr", "currency")` with a fallback on the backend label,
+  then the code itself).
+- Keyboard usable: `ArrowDown`/`ArrowUp` navigate, `Enter` selects, `Escape`
+  closes, click outside closes.
+- Controlled value: always a canonical uppercase three-letter code. The
+  component never exposes a free-text input as a value.
+- Loading state ("Chargement…"), API error state ("Impossible de charger la
+  liste des devises."), no-results state ("Aucune devise trouvée.").
+- A small in-memory cache shares the fetched catalogue between every
+  instance for the duration of the page session.
+
+### Default currencies
+
+- `CreatePortfolioModal` defaults the base currency to **EUR**.
+- `CreateOperationModal` defaults the operation currency to the **active
+  portfolio's base currency**.
+
+### Manual FX field (CreateOperationModal)
+
+Direction is fixed and explicit:
+
+> **`1 unit of operation currency = fx_rate_to_portfolio units of portfolio
+> base currency`**.
+
+The field is rendered (and the rate is required at submit time) when **all**
+of the following are true:
+
+1. the selected operation currency differs from the portfolio's base
+   currency;
+2. the operation type is not structurally zero-cash (the backend forces
+   `cash_amount_minor = 0` for `split` / `spin_off` / `symbol_change`);
+3. the previewed submitted monetary leg is positive
+   (`cash_amount_minor > 0` or `gross_amount_minor > 0`).
+
+The rule is grounded in the actual monetary leg, **not** in an
+operation-type allowlist. This matches the worker contract: the worker
+applies `converted_cash` to `cash_amount_minor` for every type, including
+`transfer_in` and `transfer_out`. Consequence: a positive-cash
+`transfer_in` / `transfer_out` in a foreign currency exposes the FX
+field and requires a rate, exactly like a `deposit` / `withdrawal`.
+
+State hygiene:
+
+- switching the selected currency back to the portfolio base currency
+  clears the FX field immediately, so a previously typed rate cannot leak
+  into a same-currency submission;
+- if the monetary leg becomes zero before submit, the FX field stops being
+  required and the field's value is excluded from the payload — no stale
+  rate is ever sent;
+- the rate is submitted as the user's original string
+  (`fx_rate_to_portfolio: "0.92"`), with no binary-float reformatting.
+
+### Error mapping
+
+Backend P1 error codes are mapped to safe French user-facing messages
+(`mapBackendErrorToFrench`):
+
+| Code | Message |
+|---|---|
+| `unsupported_cross_currency` | « Le taux de change est requis lorsque la devise de l'opération diffère de la devise de base du portefeuille. » |
+| `unsupported_currency` | « Cette devise n'est pas prise en charge. » |
+| `invalid_fx_rate_to_portfolio` | « Le taux de change doit être un nombre positif. » |
+
+Backend validation remains authoritative — client-side guards exist only
+to give the user immediate feedback.
+
+### No automatic FX provider in P1
+
+P1 explicitly does not integrate any FX provider. Cross-currency posted
+monetary operations require a user-supplied rate. Provider selection and
+historical-restatement policy remain tracked in
+`documentation/mvp/deferred-todos.md` (Market-data / Still deferred).
 
 **Asset display in Transactions table:** Operations show asset ticker when available via local display cache. Falls back to truncated UUID if asset was created in a prior session.
 

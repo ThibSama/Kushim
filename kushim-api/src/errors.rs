@@ -35,6 +35,16 @@ pub enum ApiError {
         code: &'static str,
         message: &'static str,
     },
+    /// Returned for semantic-layer rejections that should map to HTTP 422
+    /// (Unprocessable Entity). Used by the P1 currency contract for
+    /// `unsupported_currency` and `unsupported_cross_currency` so client
+    /// tooling can distinguish a syntactically valid payload from a payload
+    /// that violates a business rule.
+    #[error("unprocessable entity")]
+    UnprocessableEntity {
+        code: &'static str,
+        message: &'static str,
+    },
     #[error("internal server error")]
     Internal {
         code: &'static str,
@@ -96,6 +106,13 @@ impl IntoResponse for ApiError {
                 .into_response(),
             Self::Conflict { code, message } => (
                 StatusCode::CONFLICT,
+                Json(ApiErrorBody {
+                    error: ApiErrorPayload { code, message },
+                }),
+            )
+                .into_response(),
+            Self::UnprocessableEntity { code, message } => (
+                StatusCode::UNPROCESSABLE_ENTITY,
                 Json(ApiErrorBody {
                     error: ApiErrorPayload { code, message },
                 }),

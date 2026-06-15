@@ -1,5 +1,7 @@
 use crate::{
     domain::asset::AssetStatus,
+    domain::currency::{self, CurrencyValidationError},
+    domain::portfolio::Portfolio,
     domain::portfolio_operation::{
         NewPortfolioOperation, OperationStatus, OperationType, PortfolioOperation,
         PortfolioOperationFilters, UpdatePortfolioOperation,
@@ -189,6 +191,13 @@ pub enum PortfolioOperationServiceError {
         code: &'static str,
         message: &'static str,
     },
+    /// Semantic-layer rejection mapped to HTTP 422. Used by the P1 currency
+    /// contract for `unsupported_currency` and `unsupported_cross_currency`.
+    #[error("unprocessable entity")]
+    UnprocessableEntity {
+        code: &'static str,
+        message: &'static str,
+    },
     #[error("resource not found")]
     NotFound {
         code: &'static str,
@@ -222,7 +231,8 @@ impl PortfolioOperationService {
         &self,
         input: CreatePortfolioOperationInput,
     ) -> Result<OperationWriteOutcome, PortfolioOperationServiceError> {
-        self.assert_owned_portfolio(input.id_portfolio, input.id_user)
+        let portfolio = self
+            .assert_owned_portfolio(input.id_portfolio, input.id_user)
             .await?;
 
         let operation_status = input.operation_status.unwrap_or(OperationStatus::Pending);
@@ -232,6 +242,11 @@ impl PortfolioOperationService {
                 message: "operation creation does not accept cancelled status",
             });
         }
+
+        // Normalize the currency to its catalogue-canonical form before the
+        // candidate is built, so the row persisted (and later replayed by the
+        // worker) always uses the canonical uppercase code.
+        let canonical_currency = validate_currency(&input.currency)?;
 
         let new_operation = NewPortfolioOperation {
             id_portfolio: input.id_portfolio,
@@ -248,7 +263,7 @@ impl PortfolioOperationService {
             fees_minor: input.fees_minor,
             taxes_minor: input.taxes_minor,
             cash_amount_minor: input.cash_amount_minor.unwrap_or(0),
-            currency: normalize_required_string(&input.currency),
+            currency: canonical_currency.to_string(),
             fx_rate_to_portfolio: normalize_optional_string(input.fx_rate_to_portfolio),
             external_provider: normalize_optional_string(input.external_provider),
             external_reference: normalize_optional_string(input.external_reference),
@@ -259,6 +274,19 @@ impl PortfolioOperationService {
 
         validate_operation_payload(&new_operation)?;
         self.validate_asset_references(&new_operation).await?;
+
+        // P1 cross-currency contract: a direct posted creation with a
+        // non-zero monetary leg in a foreign currency must carry a valid
+        // positive `fx_rate_to_portfolio`. Reject BEFORE the insert so neither
+        // the operation row nor the refresh request is created.
+        if new_operation.operation_status == OperationStatus::Posted {
+            validate_cross_currency_posting(
+                &new_operation.currency,
+                &portfolio.base_currency,
+                new_operation.cash_amount_minor,
+                new_operation.fx_rate_to_portfolio.as_deref(),
+            )?;
+        }
 
         let (operation, refresh_request) = self
             .portfolio_operation_repository
@@ -314,7 +342,8 @@ impl PortfolioOperationService {
         &self,
         input: UpdatePortfolioOperationInput,
     ) -> Result<PortfolioOperation, PortfolioOperationServiceError> {
-        self.assert_owned_portfolio(input.id_portfolio, input.id_user)
+        let _portfolio = self
+            .assert_owned_portfolio(input.id_portfolio, input.id_user)
             .await?;
 
         let existing = self
@@ -383,7 +412,7 @@ impl PortfolioOperationService {
                 .cash_amount_minor
                 .unwrap_or(existing.cash_amount_minor),
             currency: match input.currency {
-                Some(value) => normalize_required_string(&value),
+                Some(value) => validate_currency(&value)?.to_string(),
                 None => existing.currency,
             },
             fx_rate_to_portfolio: match input.fx_rate_to_portfolio {
@@ -450,7 +479,8 @@ impl PortfolioOperationService {
         &self,
         input: CancelPortfolioOperationInput,
     ) -> Result<PortfolioOperation, PortfolioOperationServiceError> {
-        self.assert_owned_portfolio(input.id_portfolio, input.id_user)
+        let _portfolio = self
+            .assert_owned_portfolio(input.id_portfolio, input.id_user)
             .await?;
 
         let existing = self
@@ -489,7 +519,8 @@ impl PortfolioOperationService {
         &self,
         input: CreatePortfolioOperationCorrectionInput,
     ) -> Result<OperationWriteOutcome, PortfolioOperationServiceError> {
-        self.assert_owned_portfolio(input.id_portfolio, input.id_user)
+        let portfolio = self
+            .assert_owned_portfolio(input.id_portfolio, input.id_user)
             .await?;
 
         let original_operation = self
@@ -541,10 +572,10 @@ impl PortfolioOperationService {
             fees_minor: input.fees_minor,
             taxes_minor: input.taxes_minor,
             cash_amount_minor: input.cash_amount_minor.unwrap_or(0),
-            currency: input
-                .currency
-                .map(|value| normalize_required_string(&value))
-                .unwrap_or_else(|| original_operation.currency.clone()),
+            currency: match input.currency {
+                Some(value) => validate_currency(&value)?.to_string(),
+                None => original_operation.currency.clone(),
+            },
             fx_rate_to_portfolio: normalize_optional_string(input.fx_rate_to_portfolio),
             external_provider: normalize_optional_string(input.external_provider),
             external_reference: normalize_optional_string(input.external_reference),
@@ -556,6 +587,16 @@ impl PortfolioOperationService {
         validate_correction_payload(&new_operation)?;
         validate_operation_payload(&new_operation)?;
         self.validate_asset_references(&new_operation).await?;
+
+        // P1 cross-currency contract for posted corrections.
+        if new_operation.operation_status == OperationStatus::Posted {
+            validate_cross_currency_posting(
+                &new_operation.currency,
+                &portfolio.base_currency,
+                new_operation.cash_amount_minor,
+                new_operation.fx_rate_to_portfolio.as_deref(),
+            )?;
+        }
 
         let (operation, refresh_request) = self
             .portfolio_operation_repository
@@ -573,7 +614,8 @@ impl PortfolioOperationService {
         &self,
         input: PostPortfolioOperationInput,
     ) -> Result<OperationWriteOutcome, PortfolioOperationServiceError> {
-        self.assert_owned_portfolio(input.id_portfolio, input.id_user)
+        let portfolio = self
+            .assert_owned_portfolio(input.id_portfolio, input.id_user)
             .await?;
 
         let existing = self
@@ -608,6 +650,16 @@ impl PortfolioOperationService {
         }
         validate_operation_payload(&candidate)?;
         self.validate_asset_references(&candidate).await?;
+
+        // P1 cross-currency contract: transitioning a pending row to posted
+        // must satisfy the FX contract atomically — if it does not, the row
+        // stays pending and no refresh request is enqueued.
+        validate_cross_currency_posting(
+            &candidate.currency,
+            &portfolio.base_currency,
+            candidate.cash_amount_minor,
+            candidate.fx_rate_to_portfolio.as_deref(),
+        )?;
 
         let (operation, refresh_request) = self
             .portfolio_operation_repository
@@ -796,25 +848,23 @@ impl PortfolioOperationService {
         })
     }
 
+    /// Loads the portfolio owned by `id_user` or returns `NotFound` (mapped
+    /// to 404 by the HTTP layer, preserving cross-user isolation). The
+    /// returned `Portfolio` is reused by callers that need `base_currency`
+    /// for cross-currency validation without performing a second query.
     async fn assert_owned_portfolio(
         &self,
         id_portfolio: Uuid,
         id_user: Uuid,
-    ) -> Result<(), PortfolioOperationServiceError> {
-        let portfolio = self
-            .portfolio_repository
+    ) -> Result<Portfolio, PortfolioOperationServiceError> {
+        self.portfolio_repository
             .find_by_id_and_user(id_portfolio, id_user)
             .await
-            .map_err(map_portfolio_repository_error)?;
-
-        if portfolio.is_none() {
-            return Err(PortfolioOperationServiceError::NotFound {
+            .map_err(map_portfolio_repository_error)?
+            .ok_or(PortfolioOperationServiceError::NotFound {
                 code: "portfolio_not_found",
                 message: "portfolio was not found",
-            });
-        }
-
-        Ok(())
+            })
     }
 
     async fn validate_asset_references(
@@ -893,7 +943,12 @@ impl PortfolioOperationService {
 fn validate_operation_payload(
     operation: &NewPortfolioOperation,
 ) -> Result<(), PortfolioOperationServiceError> {
-    validate_currency(&operation.currency)?;
+    // The candidate was built from a string that already went through
+    // `validate_currency` at the constructor (so it is canonical and part of
+    // the catalogue). Calling `validate_currency` again here is defensive: it
+    // ensures unit tests that construct a candidate directly can still rely
+    // on payload validation rejecting bad currency codes.
+    let _ = validate_currency(&operation.currency)?;
     validate_non_negative_i64("price_minor", operation.price_minor)?;
     validate_non_negative_i64("gross_amount_minor", operation.gross_amount_minor)?;
     validate_non_negative_i64("fees_minor", operation.fees_minor)?;
@@ -1095,15 +1150,69 @@ fn parse_optional_datetime(
     value.map(parse_datetime).transpose()
 }
 
-fn validate_currency(value: &str) -> Result<(), PortfolioOperationServiceError> {
-    let is_valid = value.len() == 3
-        && value
-            .chars()
-            .all(|character| character.is_ascii_uppercase());
-    if !is_valid {
-        return Err(PortfolioOperationServiceError::Validation {
-            code: "invalid_currency",
-            message: "currency must be exactly 3 uppercase letters",
+/// Validates `value` against the canonical currency catalogue. Format
+/// failures stay on the existing `invalid_currency`/400 path; unknown
+/// three-letter codes map to `unsupported_currency`/422 so the frontend can
+/// distinguish a schema error from a value not part of the catalogue.
+///
+/// Returns the canonical uppercase code on success so callers can use the
+/// catalogue-canonical form for cross-currency comparison.
+fn validate_currency(value: &str) -> Result<&'static str, PortfolioOperationServiceError> {
+    match currency::normalize_and_validate(value) {
+        Ok(canonical) => Ok(canonical),
+        Err(CurrencyValidationError::Empty | CurrencyValidationError::InvalidFormat) => {
+            Err(PortfolioOperationServiceError::Validation {
+                code: "invalid_currency",
+                message: "currency must be exactly 3 uppercase letters",
+            })
+        }
+        Err(CurrencyValidationError::Unsupported) => {
+            Err(PortfolioOperationServiceError::UnprocessableEntity {
+                code: "unsupported_currency",
+                message: "currency is not part of the supported currency catalogue",
+            })
+        }
+    }
+}
+
+/// Enforces the cross-currency posting contract. When the operation about to
+/// be posted has a non-zero monetary leg (`cash_amount_minor != 0`) AND its
+/// currency differs from the portfolio's base currency, a positive
+/// `fx_rate_to_portfolio` must already be present on the row.
+///
+/// Same-currency operations never require an FX rate. Zero-cash corporate
+/// actions (split, spin_off, symbol_change with `cash_amount_minor == 0`) never
+/// require an FX rate either — the worker has no monetary amount to convert,
+/// so the rule is grounded in the replay contract rather than the type name.
+///
+/// `fx_rate_to_portfolio` is otherwise validated as a positive decimal by
+/// `validate_optional_positive_decimal`; that check still runs separately.
+fn validate_cross_currency_posting(
+    operation_currency: &str,
+    portfolio_base_currency: &str,
+    cash_amount_minor: i64,
+    fx_rate_to_portfolio: Option<&str>,
+) -> Result<(), PortfolioOperationServiceError> {
+    if operation_currency == portfolio_base_currency {
+        return Ok(());
+    }
+
+    if cash_amount_minor == 0 {
+        return Ok(());
+    }
+
+    let has_positive_rate = fx_rate_to_portfolio
+        .map(|value| {
+            BigDecimal::from_str(value)
+                .map(|parsed| parsed.sign() == bigdecimal::num_bigint::Sign::Plus)
+                .unwrap_or(false)
+        })
+        .unwrap_or(false);
+
+    if !has_positive_rate {
+        return Err(PortfolioOperationServiceError::UnprocessableEntity {
+            code: "unsupported_cross_currency",
+            message: "fx_rate_to_portfolio is required when operation currency differs from the portfolio base currency",
         });
     }
 
@@ -1243,10 +1352,6 @@ fn require_positive_cash(value: i64) -> Result<(), PortfolioOperationServiceErro
     }
 
     Ok(())
-}
-
-fn normalize_required_string(value: &str) -> String {
-    value.trim().to_string()
 }
 
 fn normalize_optional_string(value: Option<String>) -> Option<String> {

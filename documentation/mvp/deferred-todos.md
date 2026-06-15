@@ -88,7 +88,12 @@ Use these labels:
 - production scheduler
 - partial failure strategy for broader batch jobs
 - queue-based orchestration if scaling later requires it
-- **cross-currency operation contribution** (`kushim-worker/src/domain/portfolio_state.rs::convert_amount_to_base`): a posted operation whose `currency` differs from the portfolio's `base_currency` and that carries no `fx_rate_to_portfolio` currently converts to zero and marks the portfolio as estimated. Consequence: the cash leg of a foreign-currency buy/sell/dividend is silently zero, the invested base cost for that asset is zero, and after the P0.2 estimated-holding fallback the holding's `market_value_minor` also stays at zero — the position is materially undervalued in summary, holdings and snapshots. Must be addressed by either (a) rejecting such operations at API write time with a safe explicit 422 carrying a documented `error_code` (e.g. `unsupported_cross_currency`), or (b) an FX provider that supplies `fx_rate_to_portfolio` before the operation is posted (and a documented restatement policy when historical FX rates land later). Until then, the negative-total rebuild guard remains the only line of defence against accidentally posted foreign-currency operations.
+- **cross-currency operation contribution** (`kushim-worker/src/domain/portfolio_state.rs::convert_amount_to_base`): a posted operation whose `currency` differs from the portfolio's `base_currency` and that carries no `fx_rate_to_portfolio` converts to zero and marks the portfolio as estimated. **P1 status update**: option (a) has been implemented in `kushim-api` — new posted cross-currency operations without a positive `fx_rate_to_portfolio` are now blocked at write time by the `unsupported_cross_currency` (HTTP 422) guard on every posting path (direct posted create, pending → posted transition, posted correction creation). Consequences:
+  - new invalid posted operations can no longer be created;
+  - legacy rows posted before P1 may still exist with no FX and remain readable; the worker fallback (zero contribution, `is_estimated = true`) is intentionally preserved for backward compatibility with them — DDL and rows are not mutated;
+  - automatic provider-based remediation (option b: server-side FX lookup, historical restatement when a better rate lands later) still depends on the deferred Market-data **FX rate provider selection and integration** TODO below.
+
+  Until the FX provider lands, the only supported way to post a cross-currency monetary operation is for the user to supply a positive `fx_rate_to_portfolio` (manual entry in the operation modal, or direct API payload) interpreted as `1 unit of operation currency = fx_rate_to_portfolio units of portfolio base currency`.
 
 ### Known limitation
 
@@ -135,6 +140,39 @@ Use these labels:
 - freshness and reconciliation policy
 - production scheduling for market-data jobs
 - queues/locks if scaling later requires them
+- **FX rate provider selection and integration** *(reaffirmed by P1
+  currency contract; P1 explicitly does not integrate any provider)*: evaluate
+  and select a reliable provider for current AND historical foreign-exchange
+  rates. The decision must explicitly evaluate:
+  - current FX rates;
+  - historical FX rates;
+  - supported currency pairs;
+  - direct pairs versus triangulation;
+  - base/quote conventions;
+  - rate timestamps and trading dates;
+  - weekend and holiday behavior;
+  - precision and rounding;
+  - update frequency;
+  - historical depth;
+  - pricing;
+  - rate limits;
+  - reliability and availability;
+  - provider fallback;
+  - caching;
+  - licensing;
+  - redistribution rights;
+  - provenance and auditability;
+  - historical restatement policy when a better FX rate arrives later.
+
+  Constraints carried forward from P1:
+  - Kushim must not invent an automatic FX rate.
+  - Provider integration is required before any automatic conversion.
+  - Until then, cross-currency posted monetary operations require a
+    user-supplied validated `fx_rate_to_portfolio` enforced at API write time
+    by `unsupported_cross_currency` (HTTP 422).
+  - The frontend operation modal must keep its manual FX field as the
+    single way to supply a rate for a cross-currency posted operation until
+    the provider lands.
 
 ## Frontend
 

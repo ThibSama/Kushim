@@ -1,8 +1,9 @@
-use crate::auth::AuthenticatedUser;
+use crate::{auth::AuthenticatedUser, domain::currency::SUPPORTED_CURRENCIES};
 use axum::Json;
 use serde::Serialize;
+use std::sync::LazyLock;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ReferenceItem {
     pub value: &'static str,
     pub label: &'static str,
@@ -12,6 +13,21 @@ pub struct ReferenceItem {
 pub struct ReferenceListResponse {
     pub data: &'static [ReferenceItem],
 }
+
+#[derive(Debug, Serialize)]
+pub struct CurrencyReferenceListResponse {
+    pub data: Vec<ReferenceItem>,
+}
+
+static CURRENCY_ITEMS: LazyLock<Vec<ReferenceItem>> = LazyLock::new(|| {
+    SUPPORTED_CURRENCIES
+        .iter()
+        .map(|entry| ReferenceItem {
+            value: entry.code,
+            label: entry.label,
+        })
+        .collect()
+});
 
 static OPERATION_TYPES: &[ReferenceItem] = &[
     ReferenceItem {
@@ -123,6 +139,17 @@ pub async fn list_portfolio_visibilities(
 ) -> Json<ReferenceListResponse> {
     Json(ReferenceListResponse {
         data: PORTFOLIO_VISIBILITIES,
+    })
+}
+
+/// Canonical currency catalogue used both for backend validation and for
+/// frontend currency selectors. Returns codes in deterministic
+/// alphabetical-by-code order. Access-token only, refresh tokens rejected.
+pub async fn list_currencies(
+    _authenticated: AuthenticatedUser,
+) -> Json<CurrencyReferenceListResponse> {
+    Json(CurrencyReferenceListResponse {
+        data: CURRENCY_ITEMS.clone(),
     })
 }
 
@@ -374,6 +401,122 @@ mod tests {
             .expect("response should be built");
 
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn currencies_without_token_returns_401() {
+        let app = http::router(test_state());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/reference/currencies")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("response should be built");
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn currencies_with_refresh_token_returns_401() {
+        let app = http::router(test_state());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/reference/currencies")
+                    .header(AUTHORIZATION, format!("Bearer {}", build_refresh_token()))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("response should be built");
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn currencies_returns_mandatory_minimum() {
+        // P1 mandatory minimum: EUR, USD, GBP, JPY, CHF, CAD, AUD must all be
+        // present, codes must be unique uppercase, and ordering is
+        // deterministic (alphabetical by code).
+        let app = http::router(test_state());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/reference/currencies")
+                    .header(AUTHORIZATION, format!("Bearer {}", build_access_token()))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("response should be built");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_json(response).await;
+        let data = body["data"].as_array().expect("data should be an array");
+        assert!(data.len() >= 50, "catalogue is suspiciously small");
+
+        let codes: Vec<&str> = data
+            .iter()
+            .map(|entry| entry["value"].as_str().expect("value is a string"))
+            .collect();
+
+        for required in ["EUR", "USD", "GBP", "JPY", "CHF", "CAD", "AUD"] {
+            assert!(
+                codes.contains(&required),
+                "missing required code {required}"
+            );
+        }
+
+        let mut sorted = codes.clone();
+        sorted.sort();
+        assert_eq!(codes, sorted, "currencies must be alphabetically ordered");
+
+        let unique: std::collections::HashSet<&&str> = codes.iter().collect();
+        assert_eq!(unique.len(), codes.len(), "currency codes must be unique");
+
+        for code in &codes {
+            assert_eq!(code.len(), 3, "code length: {code}");
+            assert!(
+                code.chars().all(|c| c.is_ascii_uppercase()),
+                "code not uppercase ASCII: {code}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn currencies_excludes_special_codes() {
+        let app = http::router(test_state());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/reference/currencies")
+                    .header(AUTHORIZATION, format!("Bearer {}", build_access_token()))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("response should be built");
+        let body = response_json(response).await;
+        let codes: Vec<&str> = body["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["value"].as_str().unwrap())
+            .collect();
+        for excluded in [
+            "XAU", "XAG", "XPD", "XPT", // precious metals
+            "XTS", "XXX", // test / no-currency
+            "XBA", "XBB", "XBC", "XBD", // bond market units
+            "XDR", "XSU", "XUA", // settlement/fund units
+        ] {
+            assert!(
+                !codes.contains(&excluded),
+                "excluded code {excluded} must not appear"
+            );
+        }
     }
 
     #[tokio::test]

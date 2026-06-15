@@ -127,6 +127,9 @@ fn map_service_error(error: PortfolioServiceError) -> ApiError {
         PortfolioServiceError::Validation { code, message } => {
             ApiError::Validation { code, message }
         }
+        PortfolioServiceError::UnprocessableEntity { code, message } => {
+            ApiError::UnprocessableEntity { code, message }
+        }
         PortfolioServiceError::NotFound => ApiError::NotFound {
             code: "portfolio_not_found",
             message: "portfolio was not found",
@@ -404,9 +407,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reject_invalid_base_currency() {
+    async fn lowercase_base_currency_is_normalized_and_accepted() {
+        // P1 contract: lowercase/whitespace input is trimmed and uppercased
+        // against the canonical catalogue, then accepted on success.
         let pool = test_pool().await;
-        let handle = format!("pcu{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let handle = format!("pcl{}", &Uuid::new_v4().simple().to_string()[..12]);
         let id_user = create_user(&pool, &handle).await;
         let app = crate::http::router(test_state(pool.clone()).await);
 
@@ -423,7 +428,45 @@ mod tests {
                     .body(Body::from(
                         json!({
                             "name": "My Portfolio",
-                            "base_currency": "eur"
+                            "base_currency": " eur "
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .expect("response should be built");
+
+        let status = response.status();
+        let body = response_json(response).await;
+        cleanup_user(&pool, id_user).await;
+
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(body["portfolio"]["base_currency"], "EUR");
+    }
+
+    #[tokio::test]
+    async fn reject_invalid_base_currency_format() {
+        // Wrong-length codes (e.g. "EURO") are a schema-level error → 400.
+        let pool = test_pool().await;
+        let handle = format!("pci{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let id_user = create_user(&pool, &handle).await;
+        let app = crate::http::router(test_state(pool.clone()).await);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/portfolios")
+                    .header(
+                        AUTHORIZATION,
+                        format!("Bearer {}", build_token(id_user, &handle)),
+                    )
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "name": "My Portfolio",
+                            "base_currency": "EURO"
                         })
                         .to_string(),
                     ))
@@ -438,6 +481,54 @@ mod tests {
 
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(body["error"]["code"], "invalid_base_currency");
+    }
+
+    #[tokio::test]
+    async fn reject_unsupported_base_currency_code() {
+        // Three-letter code that is not part of the catalogue → 422
+        // unsupported_currency, no portfolio persisted.
+        let pool = test_pool().await;
+        let handle = format!("pcz{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let id_user = create_user(&pool, &handle).await;
+        let app = crate::http::router(test_state(pool.clone()).await);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/portfolios")
+                    .header(
+                        AUTHORIZATION,
+                        format!("Bearer {}", build_token(id_user, &handle)),
+                    )
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "name": "My Portfolio",
+                            "base_currency": "ZZZ"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .expect("response should be built");
+
+        let status = response.status();
+        let body = response_json(response).await;
+
+        // Ensure the rejected portfolio was NOT persisted.
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM portfolios WHERE id_user = $1")
+            .bind(id_user)
+            .fetch_one(&pool)
+            .await
+            .expect("count should succeed");
+
+        cleanup_user(&pool, id_user).await;
+
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(body["error"]["code"], "unsupported_currency");
+        assert_eq!(count, 0);
     }
 
     #[tokio::test]

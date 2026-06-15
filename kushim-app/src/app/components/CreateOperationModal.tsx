@@ -4,12 +4,43 @@ import { Card } from "./Card";
 import { Button } from "./Button";
 import { Input } from "./Input";
 import { AssetSearchSelect } from "./AssetSearchSelect";
+import { CurrencySelect } from "./CurrencySelect";
 import { usePortfolioStore } from "../../stores/portfolio";
 import { useOperationsStore } from "../../stores/operations";
 import { useRefreshTrackingStore } from "../../stores/refreshTracking";
 import { operationTypeLabel, CASH_OPERATION_TYPES, cacheAssetDisplay } from "../../lib/operations";
 import type { Asset, CreateOperationPayload } from "../../lib/api/businessApi";
 import { ApiRequestError } from "../../lib/api/httpClient";
+
+// P1: operation types whose worker replay structurally cannot carry a cash
+// amount (the backend payload validation forces `cash_amount_minor = 0` for
+// these). The FX requirement is gated on the actual submitted monetary leg
+// rather than on a type allowlist — but for these types the monetary leg is
+// always zero, so the FX field is hidden up-front to avoid showing a
+// meaningless input.
+//
+// IMPORTANT: transfer_in / transfer_out are NOT in this set even though they
+// are listed in the "cash" group of the type selector. The worker treats them
+// as conversions of `cash_amount_minor` like deposits/withdrawals, so they
+// require FX when their cash leg is positive and cross-currency.
+const STRUCTURAL_ZERO_CASH_TYPES = new Set([
+  "split",
+  "spin_off",
+  "symbol_change",
+]);
+
+function mapBackendErrorToFrench(code: string, fallback: string): string {
+  switch (code) {
+    case "unsupported_cross_currency":
+      return "Le taux de change est requis lorsque la devise de l'opération diffère de la devise de base du portefeuille.";
+    case "unsupported_currency":
+      return "Cette devise n'est pas prise en charge.";
+    case "invalid_fx_rate_to_portfolio":
+      return "Le taux de change doit être un nombre positif.";
+    default:
+      return `${code}: ${fallback}`;
+  }
+}
 
 const ASSET_OPERATION_TYPES = ["buy", "sell", "dividend"];
 
@@ -43,11 +74,14 @@ export function CreateOperationModal({ portfolioId, onClose }: Props) {
     (s) => s.portfolios.find((p) => p.id_portfolio === portfolioId) ?? null,
   );
 
+  const baseCurrency = portfolio?.base_currency ?? "EUR";
   const [opType, setOpType] = useState("deposit");
   const [executedAt, setExecutedAt] = useState(
     new Date().toISOString().slice(0, 16),
   );
-  const [currency, setCurrency] = useState(portfolio?.base_currency ?? "EUR");
+  // The operation defaults to the active portfolio's base currency.
+  const [currency, setCurrency] = useState(baseCurrency);
+  const [fxRate, setFxRate] = useState("");
   const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null);
   const [quantity, setQuantity] = useState("");
   const [price, setPrice] = useState("");
@@ -58,6 +92,21 @@ export function CreateOperationModal({ portfolioId, onClose }: Props) {
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Currency change handler clears stale FX state when the user picks the
+  // portfolio base currency again, so a previously typed rate cannot leak
+  // into a same-currency submission. (We do this here rather than in a
+  // useEffect to comply with React 19's `set-state-in-effect` lint rule.)
+  const handleCurrencyChange = (next: string) => {
+    setCurrency(next);
+    if (next.toUpperCase() === baseCurrency.toUpperCase()) {
+      setFxRate("");
+    }
+  };
+
+  const isCrossCurrency =
+    currency.toUpperCase() !== baseCurrency.toUpperCase() &&
+    currency.length === 3;
 
   useEffect(() => {
     loadReferenceData();
@@ -84,6 +133,28 @@ export function CreateOperationModal({ portfolioId, onClose }: Props) {
   })();
 
   const effectiveGross = grossAmount || autoGross || "";
+
+  // Preview the submit-time monetary leg from the current form values.
+  // Mirrors the conversion done in `handleSubmit` so the FX field visibility
+  // and the submit-time requirement agree. The worker FX rule is grounded in
+  // the actual `cash_amount_minor` / `gross_amount_minor` submitted, NOT in
+  // an operation-type allowlist — transfer_in/transfer_out with positive
+  // cash DO require FX in cross-currency.
+  const previewGross = Math.round(parseFloat(effectiveGross || "0") * 100);
+  const previewCash = cashAmount
+    ? Math.round(parseFloat(cashAmount) * 100)
+    : previewGross;
+  const previewHasMonetaryLeg = previewCash > 0 || previewGross > 0;
+
+  // The FX field is shown only when:
+  // (a) the operation currency differs from the portfolio base currency;
+  // (b) the operation type is not structurally zero-cash (split/spin_off/
+  //     symbol_change — the backend forces cash_amount_minor = 0 for these);
+  // (c) the previewed monetary leg is positive.
+  const needsFxRate =
+    isCrossCurrency &&
+    !STRUCTURAL_ZERO_CASH_TYPES.has(opType) &&
+    previewHasMonetaryLeg;
 
   const supportedRefTypes = operationTypes.filter((t) =>
     SUPPORTED_TYPES.includes(t.value),
@@ -128,6 +199,24 @@ export function CreateOperationModal({ portfolioId, onClose }: Props) {
       return;
     }
 
+    // P1 client-side cross-currency guard. Mirrors the backend rule, grounded
+    // in the actual submitted monetary leg rather than the operation type.
+    // The backend remains authoritative.
+    const actualMonetaryLeg = cash > 0 || gross > 0;
+    const fxRequired =
+      isCrossCurrency &&
+      !STRUCTURAL_ZERO_CASH_TYPES.has(opType) &&
+      actualMonetaryLeg;
+    if (fxRequired) {
+      const fx = fxRate.trim();
+      if (!fx || !/^\d+(\.\d+)?$/.test(fx) || parseFloat(fx) <= 0) {
+        setError(
+          `Le taux de change est requis (1 ${currency.toUpperCase()} = X ${baseCurrency.toUpperCase()}).`,
+        );
+        return;
+      }
+    }
+
     const payload: CreateOperationPayload = {
       operation_type: opType,
       // The normal modal flow records an operation the user wants reflected in
@@ -142,6 +231,14 @@ export function CreateOperationModal({ portfolioId, onClose }: Props) {
       taxes_minor: taxes,
       notes: notes.trim() || undefined,
     };
+
+    // Send the FX rate ONLY when it is genuinely required by the actual
+    // submission shape — guarantees no stale value can leak into a
+    // same-currency, zero-cash, or structural-zero-cash submission. Kept as
+    // a string (no binary float reformatting).
+    if (fxRequired && fxRate.trim()) {
+      payload.fx_rate_to_portfolio = fxRate.trim();
+    }
 
     if (isAssetType(opType) && selectedAsset) {
       payload.id_asset = selectedAsset.id_asset;
@@ -176,7 +273,7 @@ export function CreateOperationModal({ portfolioId, onClose }: Props) {
       onClose();
     } catch (e) {
       if (e instanceof ApiRequestError) {
-        setError(`${e.code}: ${e.message}`);
+        setError(mapBackendErrorToFrench(e.code, e.message));
       } else {
         setError("Erreur inattendue lors de la création.");
       }
@@ -273,14 +370,33 @@ export function CreateOperationModal({ portfolioId, onClose }: Props) {
                 value={executedAt}
                 onChange={(e) => setExecutedAt(e.target.value)}
               />
-              <Input
+              <CurrencySelect
+                id="operation-currency"
                 label="Devise"
                 value={currency}
-                onChange={(e) => setCurrency(e.target.value.toUpperCase())}
-                maxLength={3}
-                placeholder="EUR"
+                onChange={handleCurrencyChange}
               />
             </div>
+
+            {/* P1 FX-rate field. Shown when the operation currency differs
+                from the portfolio base currency AND the operation type has a
+                monetary leg the worker would convert. Switching back to the
+                base currency clears the stale value (see useEffect above). */}
+            {needsFxRate && (
+              <div className="flex flex-col gap-2">
+                <Input
+                  label={`Taux de change (1 ${currency.toUpperCase()} = X ${baseCurrency.toUpperCase()})`}
+                  type="number"
+                  step="0.000001"
+                  min="0"
+                  inputMode="decimal"
+                  value={fxRate}
+                  onChange={(e) => setFxRate(e.target.value)}
+                  placeholder="0.92"
+                  helperText={`Exemple : si 1 ${currency.toUpperCase()} vaut 0,92 ${baseCurrency.toUpperCase()}, saisissez 0.92.`}
+                />
+              </div>
+            )}
 
             {/* Quantity + Price for buy/sell */}
             {showQuantity && (
