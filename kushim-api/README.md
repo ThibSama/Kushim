@@ -848,6 +848,16 @@ Auth :
 Statut :
 
 - si `operation_status` est omis, la valeur appliquee est `pending`
+- une creation `posted` (ou la pose d'une operation pending, ou une correction
+  posted) ecrit l'operation ET met en file une requete de rafraichissement
+  durable dans `portfolio_refresh_requests` au sein de la **meme transaction
+  PostgreSQL** (atomicite, pas de refresh perdu)
+
+Reponse (enveloppe) :
+
+- pour une ecriture qui produit une operation `posted` :
+  `{ "operation": { ... }, "refresh_request": { "id_portfolio_refresh_request": "...", "status": "pending", "requested_at": "..." } }`
+- pour une creation `pending` : `{ "operation": { ... }, "refresh_request": null }`
 
 Important :
 
@@ -857,7 +867,9 @@ Important :
 - si un asset reference n'existe pas, l'API renvoie une erreur `400` propre au lieu d'une erreur SQL
 - en V1, tout asset reference doit etre actuellement `active`
 - `spin_off` et `symbol_change` exigent `id_asset != id_related_asset`
-- aucune ecriture n'est faite dans `rm_portfolio_summary`, `rm_portfolio_holdings` ou les snapshots
+- l'API ne fait qu'ecrire la source de verite + la requete de refresh ; elle
+  n'ecrit jamais `rm_portfolio_summary`, `rm_portfolio_holdings` ou les snapshots
+  (seul `kushim-worker` calcule la donnee derivee)
 
 Exemple deposit :
 
@@ -1071,6 +1083,44 @@ Exemple de reponse :
   ]
 }
 ```
+
+### `GET /v1/portfolios/{id_portfolio}/refresh-requests/{id_refresh_request}`
+
+But :
+
+- suivre l'etat d'une requete de rafraichissement automatique enfilee lors de la
+  pose d'une operation
+
+Auth :
+
+- `Authorization: Bearer <access_token>`
+- verifie que le portefeuille appartient a l'utilisateur authentifie
+- verifie que la requete appartient au portefeuille ; sinon `404`
+
+Reponse :
+
+```json
+{
+  "refresh_request": {
+    "id_portfolio_refresh_request": "...",
+    "id_portfolio": "...",
+    "status": "pending | processing | completed | failed",
+    "attempts": 0,
+    "requested_at": "...",
+    "processing_started_at": null,
+    "completed_at": null,
+    "updated_at": "...",
+    "error_code": null
+  }
+}
+```
+
+Important :
+
+- l'erreur interne brute (`last_error`) n'est jamais exposee ; seul un
+  `error_code` public (`refresh_failed`) est renvoye quand `status = failed`
+- la donnee derivee (summary/holdings/snapshots) reste lue via ses endpoints
+  read-only dedies
 
 ### `GET /v1/portfolios/{id_portfolio}/operations/{id_portfolio_operation}/audit`
 

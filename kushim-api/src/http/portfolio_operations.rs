@@ -1,11 +1,12 @@
 use crate::{
     auth::AuthenticatedUser,
     domain::portfolio_operation::{OperationStatus, OperationType, PortfolioOperation},
+    domain::portfolio_refresh_request::{PortfolioRefreshRequest, RefreshRequestStatus},
     errors::ApiError,
     http::extractors::{ApiJson, ApiPath, ApiQuery},
     services::portfolio_operations::{
         CancelPortfolioOperationInput, CreatePortfolioOperationCorrectionInput,
-        CreatePortfolioOperationInput, ListPortfolioOperationsInput,
+        CreatePortfolioOperationInput, ListPortfolioOperationsInput, OperationWriteOutcome,
         PortfolioOperationAuditTimelineInput, PortfolioOperationAuditTimelineItemView,
         PortfolioOperationAuditTimelineView, PortfolioOperationAuditView,
         PortfolioOperationCorrectionsView, PortfolioOperationServiceError,
@@ -139,6 +140,85 @@ pub struct PortfolioOperationEnvelope {
     pub operation: PortfolioOperationResponse,
 }
 
+/// Compact refresh-request identity returned alongside a write that produced a
+/// posted operation. `null` for pending creations.
+#[derive(Debug, Serialize)]
+pub struct RefreshRequestRef {
+    pub id_portfolio_refresh_request: Uuid,
+    pub status: String,
+    pub requested_at: String,
+}
+
+impl From<PortfolioRefreshRequest> for RefreshRequestRef {
+    fn from(value: PortfolioRefreshRequest) -> Self {
+        Self {
+            id_portfolio_refresh_request: value.id_portfolio_refresh_request,
+            status: value.status.as_str().to_string(),
+            requested_at: format_datetime(value.requested_at),
+        }
+    }
+}
+
+/// Envelope for operation writes: includes the operation and the refresh
+/// request when one was enqueued (posted writes), `null` otherwise.
+#[derive(Debug, Serialize)]
+pub struct PortfolioOperationWriteEnvelope {
+    pub operation: PortfolioOperationResponse,
+    pub refresh_request: Option<RefreshRequestRef>,
+}
+
+impl From<OperationWriteOutcome> for PortfolioOperationWriteEnvelope {
+    fn from(value: OperationWriteOutcome) -> Self {
+        Self {
+            operation: value.operation.into(),
+            refresh_request: value.refresh_request.map(RefreshRequestRef::from),
+        }
+    }
+}
+
+/// Full refresh-request status returned by the read endpoint. The raw
+/// `last_error` is never exposed; only a safe public `error_code` is surfaced
+/// when the request failed.
+#[derive(Debug, Serialize)]
+pub struct RefreshRequestStatusResponse {
+    pub id_portfolio_refresh_request: Uuid,
+    pub id_portfolio: Uuid,
+    pub status: String,
+    pub attempts: i32,
+    pub requested_at: String,
+    pub processing_started_at: Option<String>,
+    pub completed_at: Option<String>,
+    pub updated_at: String,
+    pub error_code: Option<&'static str>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RefreshRequestStatusEnvelope {
+    pub refresh_request: RefreshRequestStatusResponse,
+}
+
+impl From<PortfolioRefreshRequest> for RefreshRequestStatusResponse {
+    fn from(value: PortfolioRefreshRequest) -> Self {
+        let error_code = if value.status == RefreshRequestStatus::Failed {
+            Some("refresh_failed")
+        } else {
+            None
+        };
+
+        Self {
+            id_portfolio_refresh_request: value.id_portfolio_refresh_request,
+            id_portfolio: value.id_portfolio,
+            status: value.status.as_str().to_string(),
+            attempts: value.attempts,
+            requested_at: format_datetime(value.requested_at),
+            processing_started_at: value.processing_started_at.map(format_datetime),
+            completed_at: value.completed_at.map(format_datetime),
+            updated_at: format_datetime(value.updated_at),
+            error_code,
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub struct PortfolioOperationListResponse {
     pub operations: Vec<PortfolioOperationResponse>,
@@ -185,7 +265,7 @@ pub async fn create_portfolio_operation(
     ApiPath(id_portfolio): ApiPath<Uuid>,
     ApiJson(request): ApiJson<CreatePortfolioOperationRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let operation = state
+    let outcome = state
         .portfolio_operation_service
         .create_operation(CreatePortfolioOperationInput {
             id_user: authenticated.claims.sub,
@@ -216,9 +296,7 @@ pub async fn create_portfolio_operation(
 
     Ok((
         StatusCode::CREATED,
-        Json(PortfolioOperationEnvelope {
-            operation: operation.into(),
-        }),
+        Json(PortfolioOperationWriteEnvelope::from(outcome)),
     ))
 }
 
@@ -334,7 +412,7 @@ pub async fn create_portfolio_operation_correction(
     ApiPath((id_portfolio, id_portfolio_operation)): ApiPath<(Uuid, Uuid)>,
     ApiJson(request): ApiJson<CreateCorrectionRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let operation = state
+    let outcome = state
         .portfolio_operation_service
         .create_correction(CreatePortfolioOperationCorrectionInput {
             id_user: authenticated.claims.sub,
@@ -364,9 +442,7 @@ pub async fn create_portfolio_operation_correction(
 
     Ok((
         StatusCode::CREATED,
-        Json(PortfolioOperationEnvelope {
-            operation: operation.into(),
-        }),
+        Json(PortfolioOperationWriteEnvelope::from(outcome)),
     ))
 }
 
@@ -374,8 +450,8 @@ pub async fn post_portfolio_operation(
     State(state): State<AppState>,
     authenticated: AuthenticatedUser,
     ApiPath((id_portfolio, id_portfolio_operation)): ApiPath<(Uuid, Uuid)>,
-) -> Result<Json<PortfolioOperationEnvelope>, ApiError> {
-    let operation = state
+) -> Result<Json<PortfolioOperationWriteEnvelope>, ApiError> {
+    let outcome = state
         .portfolio_operation_service
         .post_operation(PostPortfolioOperationInput {
             id_user: authenticated.claims.sub,
@@ -385,8 +461,22 @@ pub async fn post_portfolio_operation(
         .await
         .map_err(map_service_error)?;
 
-    Ok(Json(PortfolioOperationEnvelope {
-        operation: operation.into(),
+    Ok(Json(PortfolioOperationWriteEnvelope::from(outcome)))
+}
+
+pub async fn get_portfolio_refresh_request(
+    State(state): State<AppState>,
+    authenticated: AuthenticatedUser,
+    ApiPath((id_portfolio, id_refresh_request)): ApiPath<(Uuid, Uuid)>,
+) -> Result<Json<RefreshRequestStatusEnvelope>, ApiError> {
+    let refresh_request = state
+        .portfolio_operation_service
+        .get_refresh_request(authenticated.claims.sub, id_portfolio, id_refresh_request)
+        .await
+        .map_err(map_service_error)?;
+
+    Ok(Json(RefreshRequestStatusEnvelope {
+        refresh_request: refresh_request.into(),
     }))
 }
 
@@ -605,6 +695,7 @@ mod tests {
         repositories::{
             assets::AssetRepository, portfolio_operations::PortfolioOperationRepository,
             portfolio_read_models::PortfolioReadModelRepository,
+            portfolio_refresh_requests::PortfolioRefreshRequestRepository,
             portfolio_snapshots::PortfolioSnapshotRepository, portfolios::PortfolioRepository,
         },
         services::{
@@ -887,6 +978,7 @@ mod tests {
             AssetRepository::new(pool.clone()),
             portfolio_repository.clone(),
             PortfolioOperationRepository::new(pool.clone()),
+            PortfolioRefreshRequestRepository::new(pool.clone()),
         );
         let portfolio_read_model_service = PortfolioReadModelService::new(
             portfolio_repository.clone(),
@@ -971,6 +1063,317 @@ mod tests {
     fn assert_rfc3339_string(value: &Value) {
         let as_str = value.as_str().expect("date field should be a JSON string");
         OffsetDateTime::parse(as_str, &Rfc3339).expect("date field should be valid RFC3339");
+    }
+
+    fn posted_deposit_payload() -> Value {
+        let mut payload = deposit_payload();
+        payload["operation_status"] = json!("posted");
+        payload
+    }
+
+    // Posted operations are immutable (DB trigger), so they cannot be deleted.
+    // Tests that create posted operations therefore clean up only the deletable
+    // refresh requests and leave the immutable rows in place — the same pattern
+    // the worker integration tests follow for posted fixtures.
+    async fn cleanup_refresh_requests(pool: &PgPool, id_portfolio: Uuid) {
+        sqlx::query("DELETE FROM portfolio_refresh_requests WHERE id_portfolio = $1")
+            .bind(id_portfolio)
+            .execute(pool)
+            .await
+            .expect("refresh requests should be deleted");
+    }
+
+    async fn count_pending_refresh_requests(pool: &PgPool, id_portfolio: Uuid) -> i64 {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM portfolio_refresh_requests WHERE id_portfolio = $1 AND status = 'pending'",
+        )
+        .bind(id_portfolio)
+        .fetch_one(pool)
+        .await
+        .expect("count should succeed")
+    }
+
+    async fn count_all_refresh_requests(pool: &PgPool, id_portfolio: Uuid) -> i64 {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM portfolio_refresh_requests WHERE id_portfolio = $1",
+        )
+        .bind(id_portfolio)
+        .fetch_one(pool)
+        .await
+        .expect("count should succeed")
+    }
+
+    async fn post_json(
+        pool: &PgPool,
+        id_user: Uuid,
+        handle: &str,
+        uri: &str,
+        body: Value,
+    ) -> (StatusCode, Value) {
+        let app = crate::http::router(test_state(pool.clone()).await);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(uri)
+                    .header(
+                        AUTHORIZATION,
+                        format!("Bearer {}", build_access_token(id_user, handle)),
+                    )
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .expect("response should be built");
+        let status = response.status();
+        (status, response_json(response).await)
+    }
+
+    #[tokio::test]
+    async fn posted_create_enqueues_refresh_request_atomically() {
+        let pool = test_pool().await;
+        let handle = format!("prc{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let id_user = create_user(&pool, &handle).await;
+        let id_portfolio = create_portfolio(&pool, id_user, None).await;
+
+        let (status, body) = post_json(
+            &pool,
+            id_user,
+            &handle,
+            &format!("/v1/portfolios/{id_portfolio}/operations"),
+            posted_deposit_payload(),
+        )
+        .await;
+
+        let pending = count_pending_refresh_requests(&pool, id_portfolio).await;
+        cleanup_refresh_requests(&pool, id_portfolio).await;
+
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(body["operation"]["operation_status"], "posted");
+        assert_eq!(body["refresh_request"]["status"], "pending");
+        assert_rfc3339_string(&body["refresh_request"]["requested_at"]);
+        assert!(body["refresh_request"]["id_portfolio_refresh_request"].is_string());
+        // Operation row AND refresh request row both committed.
+        assert_eq!(pending, 1);
+    }
+
+    #[tokio::test]
+    async fn pending_create_does_not_enqueue_refresh_request() {
+        let pool = test_pool().await;
+        let handle = format!("pnc{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let id_user = create_user(&pool, &handle).await;
+        let id_portfolio = create_portfolio(&pool, id_user, None).await;
+
+        let (status, body) = post_json(
+            &pool,
+            id_user,
+            &handle,
+            &format!("/v1/portfolios/{id_portfolio}/operations"),
+            deposit_payload(),
+        )
+        .await;
+
+        let total = count_all_refresh_requests(&pool, id_portfolio).await;
+        cleanup_user_tree(&pool, id_user, &[]).await;
+
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(body["operation"]["operation_status"], "pending");
+        assert!(body["refresh_request"].is_null());
+        assert_eq!(total, 0);
+    }
+
+    #[tokio::test]
+    async fn posting_pending_operation_enqueues_refresh_request() {
+        let pool = test_pool().await;
+        let handle = format!("ppo{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let id_user = create_user(&pool, &handle).await;
+        let id_portfolio = create_portfolio(&pool, id_user, None).await;
+        let id_operation =
+            insert_operation(&pool, id_portfolio, "pending", deposit_payload()).await;
+
+        let (status, body) = post_json(
+            &pool,
+            id_user,
+            &handle,
+            &format!("/v1/portfolios/{id_portfolio}/operations/{id_operation}/post"),
+            json!({}),
+        )
+        .await;
+
+        let pending = count_pending_refresh_requests(&pool, id_portfolio).await;
+        cleanup_refresh_requests(&pool, id_portfolio).await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["operation"]["operation_status"], "posted");
+        assert_eq!(body["refresh_request"]["status"], "pending");
+        assert_eq!(pending, 1);
+    }
+
+    #[tokio::test]
+    async fn cancel_does_not_enqueue_refresh_request() {
+        let pool = test_pool().await;
+        let handle = format!("cnc{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let id_user = create_user(&pool, &handle).await;
+        let id_portfolio = create_portfolio(&pool, id_user, None).await;
+        let id_operation =
+            insert_operation(&pool, id_portfolio, "pending", deposit_payload()).await;
+
+        let (status, _body) = post_json(
+            &pool,
+            id_user,
+            &handle,
+            &format!("/v1/portfolios/{id_portfolio}/operations/{id_operation}/cancel"),
+            json!({}),
+        )
+        .await;
+
+        let total = count_all_refresh_requests(&pool, id_portfolio).await;
+        cleanup_user_tree(&pool, id_user, &[]).await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(total, 0);
+    }
+
+    #[tokio::test]
+    async fn posted_creates_coalesce_into_single_pending_request() {
+        let pool = test_pool().await;
+        let handle = format!("col{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let id_user = create_user(&pool, &handle).await;
+        let id_portfolio = create_portfolio(&pool, id_user, None).await;
+
+        let uri = format!("/v1/portfolios/{id_portfolio}/operations");
+        let (s1, _) = post_json(&pool, id_user, &handle, &uri, posted_deposit_payload()).await;
+        let (s2, _) = post_json(&pool, id_user, &handle, &uri, posted_deposit_payload()).await;
+
+        let pending = count_pending_refresh_requests(&pool, id_portfolio).await;
+        cleanup_refresh_requests(&pool, id_portfolio).await;
+
+        assert_eq!(s1, StatusCode::CREATED);
+        assert_eq!(s2, StatusCode::CREATED);
+        // Two posted operations, but at most one pending refresh request.
+        assert_eq!(pending, 1);
+    }
+
+    #[tokio::test]
+    async fn get_refresh_request_returns_status_without_raw_error() {
+        let pool = test_pool().await;
+        let handle = format!("grr{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let id_user = create_user(&pool, &handle).await;
+        let id_portfolio = create_portfolio(&pool, id_user, None).await;
+
+        let (_, create_body) = post_json(
+            &pool,
+            id_user,
+            &handle,
+            &format!("/v1/portfolios/{id_portfolio}/operations"),
+            posted_deposit_payload(),
+        )
+        .await;
+        let id_refresh = create_body["refresh_request"]["id_portfolio_refresh_request"]
+            .as_str()
+            .expect("refresh request id")
+            .to_string();
+
+        // Simulate a worker failure with a sensitive diagnostic.
+        sqlx::query(
+            "UPDATE portfolio_refresh_requests SET status = 'failed', attempts = 3, last_error = $2 WHERE id_portfolio_refresh_request = $1",
+        )
+        .bind(Uuid::parse_str(&id_refresh).unwrap())
+        .bind("SENSITIVE_INTERNAL_DETAIL_should_not_leak")
+        .execute(&pool)
+        .await
+        .expect("update should succeed");
+
+        let app = crate::http::router(test_state(pool.clone()).await);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!(
+                        "/v1/portfolios/{id_portfolio}/refresh-requests/{id_refresh}"
+                    ))
+                    .header(
+                        AUTHORIZATION,
+                        format!("Bearer {}", build_access_token(id_user, &handle)),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("response should be built");
+        let status = response.status();
+        let raw_body = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body readable");
+        let raw_text = String::from_utf8_lossy(&raw_body).to_string();
+        let body: Value = serde_json::from_slice(&raw_body).expect("json body");
+
+        cleanup_refresh_requests(&pool, id_portfolio).await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["refresh_request"]["status"], "failed");
+        assert_eq!(body["refresh_request"]["error_code"], "refresh_failed");
+        assert_eq!(body["refresh_request"]["attempts"], 3);
+        assert!(
+            !raw_text.contains("SENSITIVE_INTERNAL_DETAIL_should_not_leak"),
+            "raw last_error must never be exposed"
+        );
+        assert!(
+            !raw_text.contains("last_error"),
+            "response must not contain a last_error field"
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_request_from_another_user_is_not_exposed() {
+        let pool = test_pool().await;
+        let owner_handle = format!("own{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let id_owner = create_user(&pool, &owner_handle).await;
+        let id_portfolio = create_portfolio(&pool, id_owner, None).await;
+
+        let (_, create_body) = post_json(
+            &pool,
+            id_owner,
+            &owner_handle,
+            &format!("/v1/portfolios/{id_portfolio}/operations"),
+            posted_deposit_payload(),
+        )
+        .await;
+        let id_refresh = create_body["refresh_request"]["id_portfolio_refresh_request"]
+            .as_str()
+            .expect("refresh request id")
+            .to_string();
+
+        let attacker_handle = format!("atk{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let id_attacker = create_user(&pool, &attacker_handle).await;
+
+        let app = crate::http::router(test_state(pool.clone()).await);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!(
+                        "/v1/portfolios/{id_portfolio}/refresh-requests/{id_refresh}"
+                    ))
+                    .header(
+                        AUTHORIZATION,
+                        format!(
+                            "Bearer {}",
+                            build_access_token(id_attacker, &attacker_handle)
+                        ),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("response should be built");
+        let status = response.status();
+
+        cleanup_refresh_requests(&pool, id_portfolio).await;
+        cleanup_user_tree(&pool, id_attacker, &[]).await;
+
+        assert_eq!(status, StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

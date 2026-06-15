@@ -20,7 +20,7 @@ use axum::{
 use serde_json::{Value, json};
 use tower_http::cors::CorsLayer;
 
-pub const ROUTES_DESCRIPTION: &str = "/health, /ready, /v1/me, /v1/reference/operation-types, /v1/reference/operation-statuses, /v1/reference/portfolio-visibilities, /v1/assets, /v1/assets/{id_asset}, /v1/portfolios, /v1/portfolios/{id_portfolio}, /v1/portfolios/{id_portfolio}/summary, /v1/portfolios/{id_portfolio}/holdings, /v1/portfolios/{id_portfolio}/snapshots/daily, /v1/portfolios/{id_portfolio}/snapshots/daily/{snapshot_date}/holdings, /v1/portfolios/{id_portfolio}/operations, /v1/portfolios/{id_portfolio}/operations/audit, /v1/portfolios/{id_portfolio}/operations/{id_portfolio_operation}, /v1/portfolios/{id_portfolio}/operations/{id_portfolio_operation}/cancel, /v1/portfolios/{id_portfolio}/operations/{id_portfolio_operation}/corrections, /v1/portfolios/{id_portfolio}/operations/{id_portfolio_operation}/post, /v1/portfolios/{id_portfolio}/operations/{id_portfolio_operation}/audit";
+pub const ROUTES_DESCRIPTION: &str = "/health, /ready, /v1/me, /v1/reference/operation-types, /v1/reference/operation-statuses, /v1/reference/portfolio-visibilities, /v1/assets, /v1/assets/{id_asset}, /v1/portfolios, /v1/portfolios/{id_portfolio}, /v1/portfolios/{id_portfolio}/summary, /v1/portfolios/{id_portfolio}/holdings, /v1/portfolios/{id_portfolio}/snapshots/daily, /v1/portfolios/{id_portfolio}/snapshots/daily/{snapshot_date}/holdings, /v1/portfolios/{id_portfolio}/operations, /v1/portfolios/{id_portfolio}/operations/audit, /v1/portfolios/{id_portfolio}/operations/{id_portfolio_operation}, /v1/portfolios/{id_portfolio}/operations/{id_portfolio_operation}/cancel, /v1/portfolios/{id_portfolio}/operations/{id_portfolio_operation}/corrections, /v1/portfolios/{id_portfolio}/operations/{id_portfolio_operation}/post, /v1/portfolios/{id_portfolio}/operations/{id_portfolio_operation}/audit, /v1/portfolios/{id_portfolio}/refresh-requests/{id_refresh_request}";
 
 pub fn router(state: AppState) -> Router {
     router_with_cors(state, None)
@@ -101,6 +101,10 @@ pub fn router_with_cors(state: AppState, cors_allowed_origins: Option<&str>) -> 
         .route(
             "/v1/portfolios/{id_portfolio}/operations/{id_portfolio_operation}/audit",
             get(portfolio_operations::get_portfolio_operation_audit),
+        )
+        .route(
+            "/v1/portfolios/{id_portfolio}/refresh-requests/{id_refresh_request}",
+            get(portfolio_operations::get_portfolio_refresh_request),
         )
         .layer(middleware::map_response(
             normalize_plaintext_error_responses,
