@@ -49,6 +49,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       RATE_LIMIT_ENABLED: "true"
       APP_ENV: docker
+      ACCESS_TOKEN_TTL_SECONDS: "${ACCESS_TOKEN_TTL_SECONDS:-900}"
       # Browser origins that legitimately call the auth API: the auth frontend
       # (login/signup/handoff create) and the app (handoff exchange). Direct-dev
       # origins retained. Explicit allowlist, no wildcard.

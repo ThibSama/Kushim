@@ -5,16 +5,30 @@ import {
   logoutSession,
   refreshSession,
 } from "../lib/api/authApi";
-import { isUnauthorized } from "../lib/api/httpClient";
+import { ApiRequestError, isUnauthorized } from "../lib/api/httpClient";
+import {
+  bumpSessionGeneration,
+  clearSession,
+  configureSessionGate,
+  refreshAccessToken,
+} from "../lib/api/sessionGate";
+import {
+  clearStoredTokens,
+  readAccessToken,
+  readRefreshToken,
+  writeTokens,
+} from "../lib/api/tokenStorage";
 import { usePortfolioStore } from "./portfolio";
 import { useOperationsStore } from "./operations";
 import { usePortfolioReadModelsStore } from "./portfolioReadModels";
+import { clearPersistedRefreshTracking } from "../lib/api/refreshTrackingStorage";
+import { useRefreshTrackingStore } from "./refreshTracking";
 
-const ACCESS_TOKEN_KEY = "kushim_access_token";
-const REFRESH_TOKEN_KEY = "kushim_refresh_token";
-const LEGACY_TOKEN_KEY = "kushim_token";
-
-export type SessionStatus = "idle" | "validating" | "authenticated" | "unauthenticated";
+export type SessionStatus =
+  | "idle"
+  | "validating"
+  | "authenticated"
+  | "unauthenticated";
 
 type AuthState = {
   token: string | null;
@@ -26,97 +40,108 @@ type AuthState = {
   validateSession: () => Promise<boolean>;
 };
 
-function readStoredToken(): string | null {
-  if (typeof window === "undefined") return null;
-  return (
-    localStorage.getItem(ACCESS_TOKEN_KEY) ??
-    localStorage.getItem(LEGACY_TOKEN_KEY)
-  );
+function resetDomainStores() {
+  usePortfolioStore.getState().reset();
+  useOperationsStore.getState().reset();
+  usePortfolioReadModelsStore.getState().reset();
+  useRefreshTrackingStore.getState().reset();
+  clearPersistedRefreshTracking();
 }
 
-function readStoredRefreshToken(): string | null {
-  if (typeof window === "undefined") return null;
-  return localStorage.getItem(REFRESH_TOKEN_KEY);
-}
+export const useAuthStore = create<AuthState>((set) => {
+  // Wire the session gate to this store. The refresh callback uses the raw
+  // authApi (public endpoint, not the interceptor). The cleared-session
+  // handler resets local state synchronously.
+  configureSessionGate({
+    refresh: (refreshToken) => refreshSession(refreshToken),
+    onSessionCleared: () => {
+      resetDomainStores();
+      set({ token: null, user: null, sessionStatus: "unauthenticated" });
+    },
+    // After a successful rotation: keep the Zustand store in sync with the
+    // new access token immediately. The gate already guarantees this fires
+    // only when the session generation hasn't moved (no late logout race).
+    onTokensRotated: (accessToken) => {
+      set({ token: accessToken });
+    },
+  });
 
-function clearAllTokens() {
-  localStorage.removeItem(ACCESS_TOKEN_KEY);
-  localStorage.removeItem(REFRESH_TOKEN_KEY);
-  localStorage.removeItem(LEGACY_TOKEN_KEY);
-}
+  return {
+    token: readAccessToken(),
+    user: null,
+    sessionStatus: readAccessToken() ? "idle" : "unauthenticated",
 
-export const useAuthStore = create<AuthState>((set, get) => ({
-  token: readStoredToken(),
-  user: null,
-  sessionStatus: readStoredToken() ? "idle" : "unauthenticated",
+    setTokens: (accessToken, refreshToken) => {
+      writeTokens(accessToken, refreshToken);
+      // Bump the session generation so a late /auth/refresh response from a
+      // previous identity cannot retroactively overwrite this fresh login.
+      bumpSessionGeneration();
+      // sessionStatus -> "idle" triggers RequireAuth's validation effect.
+      set({ token: accessToken, sessionStatus: "idle" });
+    },
 
-  setTokens: (accessToken, refreshToken) => {
-    localStorage.setItem(ACCESS_TOKEN_KEY, accessToken);
-    localStorage.setItem(REFRESH_TOKEN_KEY, refreshToken);
-    localStorage.removeItem(LEGACY_TOKEN_KEY);
-    set({ token: accessToken });
-  },
-
-  setUser: (user) => {
-    set({ user, sessionStatus: "authenticated" });
-  },
-
-  logout: async () => {
-    const refreshToken = readStoredRefreshToken();
-    if (refreshToken) {
-      await logoutSession(refreshToken);
-    }
-    clearAllTokens();
-    usePortfolioStore.getState().reset();
-    useOperationsStore.getState().reset();
-    usePortfolioReadModelsStore.getState().reset();
-    set({ token: null, user: null, sessionStatus: "unauthenticated" });
-  },
-
-  validateSession: async () => {
-    const accessToken = get().token;
-    if (!accessToken) {
-      set({ sessionStatus: "unauthenticated" });
-      return false;
-    }
-
-    set({ sessionStatus: "validating" });
-
-    try {
-      const user = await getCurrentUser(accessToken);
+    setUser: (user) => {
       set({ user, sessionStatus: "authenticated" });
-      return true;
-    } catch (error) {
-      if (!isUnauthorized(error)) {
+    },
+
+    logout: async () => {
+      const refreshToken = readRefreshToken();
+      try {
+        if (refreshToken) {
+          await logoutSession(refreshToken);
+        }
+      } finally {
+        // clearSession bumps the generation, clears tokens and calls
+        // onSessionCleared, which resets all domain stores.
+        clearSession("logout");
+        // Defensive: ensure tokens are gone even if the gate is mid-configure.
+        clearStoredTokens();
+      }
+    },
+
+    validateSession: async () => {
+      const accessToken = readAccessToken();
+      if (!accessToken) {
         set({ sessionStatus: "unauthenticated" });
         return false;
       }
 
-      // Access token expired — attempt refresh
-      const refreshToken = readStoredRefreshToken();
-      if (!refreshToken) {
-        clearAllTokens();
-        set({ token: null, user: null, sessionStatus: "unauthenticated" });
-        return false;
-      }
+      set({ sessionStatus: "validating" });
 
       try {
-        const result = await refreshSession(refreshToken);
-        localStorage.setItem(ACCESS_TOKEN_KEY, result.access_token);
-        localStorage.setItem(REFRESH_TOKEN_KEY, result.refresh_token);
-        set({ token: result.access_token });
-
-        const user = await getCurrentUser(result.access_token);
-        set({ user, sessionStatus: "authenticated" });
+        const user = await getCurrentUser(accessToken);
+        set({ token: accessToken, user, sessionStatus: "authenticated" });
         return true;
-      } catch {
-        clearAllTokens();
-        set({ token: null, user: null, sessionStatus: "unauthenticated" });
-        return false;
+      } catch (error) {
+        if (!isUnauthorized(error)) {
+          set({ sessionStatus: "unauthenticated" });
+          return false;
+        }
+
+        // Expired access token — refresh once via the gate (single-flight
+        // shared with concurrent authenticated requests).
+        const rotated = await refreshAccessToken();
+        if (!rotated) {
+          // refreshAccessToken already cleared the session.
+          return false;
+        }
+
+        try {
+          const user = await getCurrentUser(rotated);
+          set({ token: rotated, user, sessionStatus: "authenticated" });
+          return true;
+        } catch (retryError) {
+          if (retryError instanceof ApiRequestError && retryError.status === 401) {
+            clearSession("retry_unauthorized");
+          } else {
+            set({ sessionStatus: "unauthenticated" });
+          }
+          return false;
+        }
       }
-    }
-  },
-}));
+    },
+  };
+});
 
 export function getWebsiteLoginUrl() {
   const authUrl = import.meta.env.VITE_AUTH_URL || "http://localhost:3001";

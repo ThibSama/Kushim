@@ -1,6 +1,19 @@
-import { apiRequest } from "./httpClient";
+// Business API client.
+//
+// All requests go through `authenticatedRequest`, which reads the live access
+// token from `tokenStorage`, handles 401 → single-flight refresh → at-most-one
+// retry, and clears the local session on terminal auth failures. Callers
+// historically passed an `accessToken` as the first argument; that parameter
+// is now optional and ignored — the wrapper is the single source of truth for
+// the bearer token at request time. Keeping the parameter avoids touching ~40
+// existing call sites in this corrective pass.
+
+import { authenticatedRequest } from "./authenticatedRequest";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8080";
+
+// Discarded by authenticatedRequest — see file header.
+type IgnoredToken = string | null | undefined;
 
 export type BusinessUser = {
   id_user: string;
@@ -23,45 +36,39 @@ export type CreatePortfolioPayload = {
   visibility?: "private" | "public" | "unlisted";
 };
 
-export async function getBusinessMe(
-  accessToken: string,
-): Promise<BusinessUser> {
-  return apiRequest<BusinessUser>(API_URL, "/v1/me", {
-    token: accessToken,
-  });
+export async function getBusinessMe(_token?: IgnoredToken): Promise<BusinessUser> {
+  return authenticatedRequest<BusinessUser>(API_URL, "/v1/me");
 }
 
-export async function listPortfolios(
-  accessToken: string,
-): Promise<Portfolio[]> {
-  const res = await apiRequest<{ portfolios: Portfolio[] }>(
+export async function listPortfolios(_token?: IgnoredToken): Promise<Portfolio[]> {
+  const res = await authenticatedRequest<{ portfolios: Portfolio[] }>(
     API_URL,
     "/v1/portfolios",
-    { token: accessToken },
   );
   return res.portfolios;
 }
 
 export async function createPortfolio(
-  accessToken: string,
-  payload: CreatePortfolioPayload,
+  payloadOrToken: CreatePortfolioPayload | IgnoredToken,
+  maybePayload?: CreatePortfolioPayload,
 ): Promise<Portfolio> {
-  const res = await apiRequest<{ portfolio: Portfolio }>(
+  const payload = (maybePayload ?? (payloadOrToken as CreatePortfolioPayload));
+  const res = await authenticatedRequest<{ portfolio: Portfolio }>(
     API_URL,
     "/v1/portfolios",
-    { method: "POST", token: accessToken, body: payload },
+    { method: "POST", body: payload },
   );
   return res.portfolio;
 }
 
 export async function getPortfolio(
-  accessToken: string,
-  idPortfolio: string,
+  idOrToken: string | IgnoredToken,
+  maybeId?: string,
 ): Promise<Portfolio> {
-  const res = await apiRequest<{ portfolio: Portfolio }>(
+  const id = (maybeId ?? (idOrToken as string));
+  const res = await authenticatedRequest<{ portfolio: Portfolio }>(
     API_URL,
-    `/v1/portfolios/${idPortfolio}`,
-    { token: accessToken },
+    `/v1/portfolios/${id}`,
   );
   return res.portfolio;
 }
@@ -202,53 +209,83 @@ function appendQuery(path: string, query?: Record<string, string | number | unde
 }
 
 export async function getPortfolioSummary(
-  accessToken: string,
-  portfolioId: string,
+  idOrToken: string | IgnoredToken,
+  maybeId?: string,
 ): Promise<PortfolioSummaryEnvelope> {
-  return apiRequest<PortfolioSummaryEnvelope>(
+  const portfolioId = (maybeId ?? (idOrToken as string));
+  return authenticatedRequest<PortfolioSummaryEnvelope>(
     API_URL,
     `/v1/portfolios/${portfolioId}/summary`,
-    { token: accessToken },
   );
 }
 
 export async function getPortfolioHoldings(
-  accessToken: string,
-  portfolioId: string,
-  query?: PortfolioHoldingsQuery,
+  idOrToken: string | IgnoredToken,
+  maybeIdOrQuery?: string | PortfolioHoldingsQuery,
+  maybeQuery?: PortfolioHoldingsQuery,
 ): Promise<PortfolioHoldingsEnvelope> {
-  return apiRequest<PortfolioHoldingsEnvelope>(
+  // Signatures supported:
+  //   getPortfolioHoldings(portfolioId, query?)
+  //   getPortfolioHoldings(accessToken, portfolioId, query?) — legacy
+  const portfolioId =
+    typeof maybeIdOrQuery === "string" ? maybeIdOrQuery : (idOrToken as string);
+  const query =
+    typeof maybeIdOrQuery === "string"
+      ? maybeQuery
+      : (maybeIdOrQuery as PortfolioHoldingsQuery | undefined);
+  return authenticatedRequest<PortfolioHoldingsEnvelope>(
     API_URL,
     appendQuery(`/v1/portfolios/${portfolioId}/holdings`, query),
-    { token: accessToken },
   );
 }
 
 export async function getDailySnapshots(
-  accessToken: string,
-  portfolioId: string,
-  query?: PortfolioDailySnapshotsQuery,
+  idOrToken: string | IgnoredToken,
+  maybeIdOrQuery?: string | PortfolioDailySnapshotsQuery,
+  maybeQuery?: PortfolioDailySnapshotsQuery,
 ): Promise<PortfolioDailySnapshotsEnvelope> {
-  return apiRequest<PortfolioDailySnapshotsEnvelope>(
+  const portfolioId =
+    typeof maybeIdOrQuery === "string" ? maybeIdOrQuery : (idOrToken as string);
+  const query =
+    typeof maybeIdOrQuery === "string"
+      ? maybeQuery
+      : (maybeIdOrQuery as PortfolioDailySnapshotsQuery | undefined);
+  return authenticatedRequest<PortfolioDailySnapshotsEnvelope>(
     API_URL,
     appendQuery(`/v1/portfolios/${portfolioId}/snapshots/daily`, query),
-    { token: accessToken },
   );
 }
 
 export async function getDailySnapshotHoldings(
-  accessToken: string,
-  portfolioId: string,
-  snapshotDate: string,
-  query?: PortfolioHoldingsQuery,
+  idOrToken: string | IgnoredToken,
+  maybeIdOrDate?: string,
+  maybeDateOrQuery?: string | PortfolioHoldingsQuery,
+  maybeQuery?: PortfolioHoldingsQuery,
 ): Promise<PortfolioDailySnapshotHoldingsEnvelope> {
-  return apiRequest<PortfolioDailySnapshotHoldingsEnvelope>(
+  // Supported:
+  //   getDailySnapshotHoldings(portfolioId, snapshotDate, query?)
+  //   getDailySnapshotHoldings(accessToken, portfolioId, snapshotDate, query?)
+  let portfolioId: string;
+  let snapshotDate: string;
+  let query: PortfolioHoldingsQuery | undefined;
+  if (
+    typeof maybeIdOrDate === "string" &&
+    typeof maybeDateOrQuery === "string"
+  ) {
+    portfolioId = maybeIdOrDate;
+    snapshotDate = maybeDateOrQuery;
+    query = maybeQuery;
+  } else {
+    portfolioId = idOrToken as string;
+    snapshotDate = maybeIdOrDate as string;
+    query = maybeDateOrQuery as PortfolioHoldingsQuery | undefined;
+  }
+  return authenticatedRequest<PortfolioDailySnapshotHoldingsEnvelope>(
     API_URL,
     appendQuery(
       `/v1/portfolios/${portfolioId}/snapshots/daily/${snapshotDate}/holdings`,
       query,
     ),
-    { token: accessToken },
   );
 }
 
@@ -316,9 +353,14 @@ export type AssetPagination = {
 };
 
 export async function listAssets(
-  accessToken: string,
-  filters?: AssetFilters,
+  filtersOrToken?: AssetFilters | IgnoredToken,
+  maybeFilters?: AssetFilters,
 ): Promise<{ assets: Asset[]; pagination: AssetPagination }> {
+  const filters: AssetFilters | undefined =
+    maybeFilters ??
+    (typeof filtersOrToken === "object" && filtersOrToken !== null
+      ? (filtersOrToken as AssetFilters)
+      : undefined);
   const params = new URLSearchParams();
   if (filters?.search) params.set("search", filters.search);
   if (filters?.asset_class) params.set("asset_class", filters.asset_class);
@@ -330,21 +372,20 @@ export async function listAssets(
   if (filters?.offset != null) params.set("offset", String(filters.offset));
   const qs = params.toString();
   const path = `/v1/assets${qs ? `?${qs}` : ""}`;
-  return apiRequest<{ assets: Asset[]; pagination: AssetPagination }>(
+  return authenticatedRequest<{ assets: Asset[]; pagination: AssetPagination }>(
     API_URL,
     path,
-    { token: accessToken },
   );
 }
 
 export async function getAsset(
-  accessToken: string,
-  assetId: string,
+  idOrToken: string | IgnoredToken,
+  maybeId?: string,
 ): Promise<Asset> {
-  const res = await apiRequest<{ asset: Asset }>(
+  const assetId = (maybeId ?? (idOrToken as string));
+  const res = await authenticatedRequest<{ asset: Asset }>(
     API_URL,
     `/v1/assets/${assetId}`,
-    { token: accessToken },
   );
   return res.asset;
 }
@@ -406,74 +447,135 @@ export type OperationFilters = {
   id_asset?: string;
 };
 
+export type RefreshRequestRef = {
+  id_portfolio_refresh_request: string;
+  status: string;
+  requested_at: string;
+};
+
+export type CreateOperationResult = {
+  operation: PortfolioOperation;
+  refresh_request: RefreshRequestRef | null;
+};
+
+export type RefreshRequestPublicStatus =
+  | "pending"
+  | "processing"
+  | "completed"
+  | "failed";
+
+export type RefreshRequestStatusView = {
+  id_portfolio_refresh_request: string;
+  id_portfolio: string;
+  status: RefreshRequestPublicStatus;
+  attempts: number;
+  requested_at: string;
+  processing_started_at: string | null;
+  completed_at: string | null;
+  updated_at: string;
+  error_code: string | null;
+};
+
 export type ReferenceItem = {
   value: string;
   label: string;
 };
 
 export async function listOperations(
-  accessToken: string,
-  portfolioId: string,
-  filters?: OperationFilters,
+  idOrToken: string | IgnoredToken,
+  maybeIdOrFilters?: string | OperationFilters,
+  maybeFilters?: OperationFilters,
 ): Promise<PortfolioOperation[]> {
+  const portfolioId =
+    typeof maybeIdOrFilters === "string"
+      ? maybeIdOrFilters
+      : (idOrToken as string);
+  const filters: OperationFilters | undefined =
+    typeof maybeIdOrFilters === "string"
+      ? maybeFilters
+      : (maybeIdOrFilters as OperationFilters | undefined);
   const params = new URLSearchParams();
   if (filters?.operation_type) params.set("operation_type", filters.operation_type);
   if (filters?.operation_status) params.set("operation_status", filters.operation_status);
   if (filters?.id_asset) params.set("id_asset", filters.id_asset);
   const qs = params.toString();
   const path = `/v1/portfolios/${portfolioId}/operations${qs ? `?${qs}` : ""}`;
-  const res = await apiRequest<{ operations: PortfolioOperation[] }>(
+  const res = await authenticatedRequest<{ operations: PortfolioOperation[] }>(
     API_URL,
     path,
-    { token: accessToken },
   );
   return res.operations;
 }
 
 export async function createOperation(
-  accessToken: string,
-  portfolioId: string,
-  payload: CreateOperationPayload,
-): Promise<PortfolioOperation> {
-  const res = await apiRequest<{ operation: PortfolioOperation }>(
+  idOrToken: string | IgnoredToken,
+  maybeIdOrPayload: string | CreateOperationPayload,
+  maybePayload?: CreateOperationPayload,
+): Promise<CreateOperationResult> {
+  const portfolioId =
+    typeof maybeIdOrPayload === "string"
+      ? maybeIdOrPayload
+      : (idOrToken as string);
+  const payload =
+    maybePayload ?? (maybeIdOrPayload as CreateOperationPayload);
+  const res = await authenticatedRequest<{
+    operation: PortfolioOperation;
+    refresh_request: RefreshRequestRef | null;
+  }>(API_URL, `/v1/portfolios/${portfolioId}/operations`, {
+    method: "POST",
+    body: payload,
+  });
+  return {
+    operation: res.operation,
+    refresh_request: res.refresh_request ?? null,
+  };
+}
+
+export async function getRefreshRequest(
+  idOrToken: string | IgnoredToken,
+  maybeIdOrRequest: string,
+  maybeRequest?: string,
+): Promise<RefreshRequestStatusView> {
+  const portfolioId = maybeRequest !== undefined
+    ? maybeIdOrRequest
+    : (idOrToken as string);
+  const refreshRequestId = maybeRequest ?? maybeIdOrRequest;
+  const res = await authenticatedRequest<{
+    refresh_request: RefreshRequestStatusView;
+  }>(
     API_URL,
-    `/v1/portfolios/${portfolioId}/operations`,
-    { method: "POST", token: accessToken, body: payload },
+    `/v1/portfolios/${portfolioId}/refresh-requests/${refreshRequestId}`,
   );
-  return res.operation;
+  return res.refresh_request;
 }
 
 export async function getOperation(
-  accessToken: string,
-  portfolioId: string,
-  operationId: string,
+  idOrToken: string | IgnoredToken,
+  maybeIdOrOp: string,
+  maybeOp?: string,
 ): Promise<PortfolioOperation> {
-  const res = await apiRequest<{ operation: PortfolioOperation }>(
+  const portfolioId =
+    maybeOp !== undefined ? maybeIdOrOp : (idOrToken as string);
+  const operationId = maybeOp ?? maybeIdOrOp;
+  const res = await authenticatedRequest<{ operation: PortfolioOperation }>(
     API_URL,
     `/v1/portfolios/${portfolioId}/operations/${operationId}`,
-    { token: accessToken },
   );
   return res.operation;
 }
 
-export async function listOperationTypes(
-  accessToken: string,
-): Promise<ReferenceItem[]> {
-  const res = await apiRequest<{ data: ReferenceItem[] }>(
+export async function listOperationTypes(_token?: IgnoredToken): Promise<ReferenceItem[]> {
+  const res = await authenticatedRequest<{ data: ReferenceItem[] }>(
     API_URL,
     "/v1/reference/operation-types",
-    { token: accessToken },
   );
   return res.data;
 }
 
-export async function listOperationStatuses(
-  accessToken: string,
-): Promise<ReferenceItem[]> {
-  const res = await apiRequest<{ data: ReferenceItem[] }>(
+export async function listOperationStatuses(_token?: IgnoredToken): Promise<ReferenceItem[]> {
+  const res = await authenticatedRequest<{ data: ReferenceItem[] }>(
     API_URL,
     "/v1/reference/operation-statuses",
-    { token: accessToken },
   );
   return res.data;
 }

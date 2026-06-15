@@ -162,6 +162,8 @@ Use these labels:
 - the swap quick action has been removed; no fake conversion flow remains
 - the Settings page only exposes profile information and logout — preference, password and delete forms are no longer shown as if they were near-functional
 - asset display in Transactions table falls back to truncated UUID after page refresh (in-memory cache only)
+- **browser token storage uses `localStorage`** (`kushim_access_token`, `kushim_refresh_token`). It is readable by any script that runs in the page and survives cross-tab. The P0.3 session layer (`tokenStorage.ts` / `sessionGate.ts` / `authenticatedRequest.ts`) centralizes the access pattern (single source of truth, single-flight refresh, retry-at-most-once, logout race protection) but does **not** upgrade the storage primitive. Production-grade browser session security (HttpOnly cookie + CSRF defence, or a service-worker-isolated token vault) requires an auth-API protocol change (cookie issuance, OPTIONS/CORS for credentials, CSRF token endpoint) and is out of scope for the MVP.
+- **Refresh tracking sessionStorage** (`kushim_active_portfolio_refresh`) persists `portfolioId` + `refreshRequestId` + `startedAt` only — no token, no `last_error`, no financial values. Recovery TTL: 15 minutes. Frontend polling budget: 60 s per cycle. Both constants live in `kushim-app/src/lib/api/refreshTrackingStorage.ts` and `kushim-app/src/stores/refreshTracking.ts`.
 
 ## Infra / DevOps
 
