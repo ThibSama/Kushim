@@ -154,6 +154,25 @@ Purpose:
 
 - run rebuild, then snapshot generation
 
+### `process_portfolio_refresh_requests` (automatic refresh, P0)
+
+Purpose:
+
+- consume the durable `portfolio_refresh_requests` queue (written atomically by
+  `kushim-api` when an operation is posted) and run
+  `refresh_current_portfolio_state` for each request's target portfolio
+
+Mechanics:
+
+- claims eligible `pending` / stale `processing` rows with
+  `FOR UPDATE SKIP LOCKED` in a short transaction, marks them `processing`,
+  records the worker name + start time, increments `attempts`, then releases the
+  claim transaction before the rebuild
+- marks `completed` after both rebuild + snapshot succeed; bounded retry then
+  terminal `failed` after the configured maximum attempts; abandoned
+  `processing` rows become retryable after the lock timeout
+- PostgreSQL is the durable queue; no read-model calculations run in a trigger
+
 ### `backfill_daily_snapshots`
 
 Purpose:

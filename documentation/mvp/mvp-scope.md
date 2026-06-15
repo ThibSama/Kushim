@@ -31,6 +31,9 @@ Implemented and validated:
 - worker daily snapshot generation
 - worker composite current refresh
 - worker first historical backfill V1
+- automatic portfolio refresh (P0): durable `portfolio_refresh_requests` queue
+  enqueued atomically on operation posting, consumed by the worker loop job
+  `process_portfolio_refresh_requests` (PostgreSQL-only, no external queue)
 
 ### Data model
 

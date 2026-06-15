@@ -20,6 +20,22 @@ Important:
 - If the named volume already contains data, `001_init.sql` will not run again automatically.
 - To re-run initialization from scratch, remove the volume and recreate the container.
 
+Incremental upgrades for EXISTING volumes:
+
+- `infra/postgres/init/001_init.sql` already contains the full current schema
+  (including `portfolio_refresh_requests`) for fresh volumes.
+- Existing local volumes do not pick up new tables automatically. Apply the
+  idempotent, non-destructive upgrade scripts under `infra/postgres/upgrades/`
+  with:
+
+  ```powershell
+  powershell -ExecutionPolicy Bypass -File scripts/dev/apply-db-upgrades.ps1
+  ```
+
+  Each upgrade script uses `IF NOT EXISTS` / guarded `DO` blocks and never drops,
+  truncates, or deletes application data. It is safe to run multiple times.
+  Editing `001_init.sql` alone does NOT upgrade an existing volume.
+
 Trigger scope:
 
 - Triggers are used only for simple invariants and `updated_at` automation.

@@ -84,6 +84,24 @@ docker compose build
 docker compose up -d --force-recreate database redis kushim-auth-api kushim-api kushim-worker kushim-market-data
 ```
 
+For the full browser flow (website → auth → app), also start the frontends and
+nginx, then use the canonical Docker URLs (the internal frontend ports are not
+published — use the nginx domains in the browser):
+
+```powershell
+docker compose up -d kushim-website kushim-auth-front kushim-app nginx
+```
+
+| Service | Docker browser URL | Direct dev URL |
+|---|---|---|
+| Website | http://kushim.localhost | http://localhost:3000 |
+| Auth UI | http://auth.kushim.localhost | http://localhost:3001 |
+| Auth API | http://auth-api.kushim.localhost | http://localhost:3002 |
+| App | http://app.kushim.localhost | http://localhost:5173 |
+| Business API | http://api.kushim.localhost | http://localhost:8080 |
+
+See `documentation/operations/docker-local-dev.md` for the auth-handoff details.
+
 Useful health checks:
 
 ```powershell

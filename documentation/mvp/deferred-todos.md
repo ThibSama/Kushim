@@ -67,6 +67,18 @@ Use these labels:
 
 ## Worker
 
+### Resolved
+
+- automatic portfolio refresh after an operation is posted (P0): `kushim-api`
+  enqueues a durable `portfolio_refresh_requests` row in the same transaction
+  that posts the operation, and `kushim-worker` runs
+  `process_portfolio_refresh_requests` in loop mode to rebuild current read
+  models + the current daily snapshot automatically. The manual
+  `rebuild_current_read_models` / `generate_daily_snapshots` invocation after an
+  operation is no longer required (validated end-to-end via
+  `scripts/demo/backend-e2e.ps1`). Uses PostgreSQL `FOR UPDATE SKIP LOCKED` as a
+  durable queue — no Redis/queue infrastructure.
+
 ### Deferred
 
 - multi-portfolio backfill orchestration
