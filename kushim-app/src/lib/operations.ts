@@ -1,41 +1,26 @@
-import { type Asset, type PortfolioOperation, getAsset } from "./api/businessApi";
+import { type PortfolioOperation } from "./api/businessApi";
 
-// Local display cache: maps id_asset -> display label (ticker or name).
-// Populated when an asset is selected in the create modal or hydrated on load.
-const assetDisplayCache = new Map<string, string>();
-
-export function cacheAssetDisplay(asset: Asset): void {
-  assetDisplayCache.set(asset.id_asset, asset.ticker ?? asset.name);
-}
-
-export function getAssetDisplay(idAsset: string | null): string {
-  if (!idAsset) return "—";
-  return assetDisplayCache.get(idAsset) ?? idAsset.slice(0, 8) + "…";
-}
-
-export function hydrateAssetDisplayCache(
-  operations: PortfolioOperation[],
-  accessToken: string,
-  onUpdate: () => void,
-): void {
-  const missing = new Set<string>();
-  for (const op of operations) {
-    if (op.id_asset && !assetDisplayCache.has(op.id_asset)) {
-      missing.add(op.id_asset);
-    }
+/// Derives the label rendered in the Transactions "Actif" column from a
+/// portfolio operation.
+///
+/// Order of preference:
+///   1. `operation.asset.ticker` — the canonical short label;
+///   2. `operation.asset.name` — fallback when no ticker is recorded;
+///   3. "—" for cash-only operations (no asset reference at all);
+///   4. truncated UUID — defensive fallback if the backend returned an
+///      `id_asset` but failed to resolve the compact `asset` reference
+///      (legacy or corrupt data).
+///
+/// The pipeline does not invoke `GET /v1/assets/{id}`; every label is derived
+/// directly from the operation response.
+export function operationAssetLabel(op: PortfolioOperation): string {
+  if (op.asset) {
+    return op.asset.ticker ?? op.asset.name;
   }
-  if (missing.size === 0) return;
-
-  for (const id of missing) {
-    getAsset(accessToken, id)
-      .then((asset) => {
-        assetDisplayCache.set(asset.id_asset, asset.ticker ?? asset.name);
-        onUpdate();
-      })
-      .catch(() => {
-        // best-effort: keep truncated UUID fallback
-      });
+  if (op.id_asset) {
+    return op.id_asset.slice(0, 8) + "…";
   }
+  return "—";
 }
 
 const OPERATION_TYPE_LABELS: Record<string, string> = {
@@ -106,7 +91,7 @@ export function operationToRow(op: PortfolioOperation): TransactionRow {
     ? op.executed_at
     : date.toLocaleDateString("fr-FR", { year: "numeric", month: "2-digit", day: "2-digit" });
 
-  const asset = getAssetDisplay(op.id_asset);
+  const asset = operationAssetLabel(op);
   const qty = op.quantity != null ? formatQuantity(op.quantity) : "—";
   const price = op.price_minor != null ? minorToMajor(op.price_minor) : null;
   const fees = minorToMajor(op.fees_minor) + minorToMajor(op.taxes_minor);

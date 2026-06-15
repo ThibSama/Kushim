@@ -392,11 +392,25 @@ export async function getAsset(
 
 // --- Operations ---
 
+/// Compact asset identity returned alongside an operation so the Transactions
+/// UI can render the asset column without a separate `GET /v1/assets/{id}`
+/// round trip. `null` for cash-only operations and for operations whose asset
+/// id could not be resolved (legacy/corrupt data) — the UI falls back to a
+/// safe placeholder rather than crashing.
+export type OperationAssetRef = {
+  id_asset: string;
+  name: string;
+  ticker: string | null;
+  status: string;
+};
+
 export type PortfolioOperation = {
   id_portfolio_operation: string;
   id_portfolio: string;
   id_asset: string | null;
   id_related_asset: string | null;
+  asset: OperationAssetRef | null;
+  related_asset: OperationAssetRef | null;
   operation_type: string;
   operation_status: string;
   executed_at: string;

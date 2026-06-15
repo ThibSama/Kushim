@@ -9,7 +9,6 @@ import {
   listOperationTypes,
   listOperationStatuses,
 } from "../lib/api/businessApi";
-import { hydrateAssetDisplayCache } from "../lib/operations";
 import { useAuthStore } from "./auth";
 
 export type OperationsStatus = "idle" | "loading" | "success" | "error";
@@ -51,9 +50,6 @@ export const useOperationsStore = create<OperationsState>((set, get) => ({
     try {
       const operations = await listOperations(token, portfolioId);
       set({ operations, status: "success" });
-      hydrateAssetDisplayCache(operations, token, () => {
-        set({ operations: [...get().operations] });
-      });
     } catch (e) {
       const message = e instanceof Error ? e.message : "unknown error";
       set({ status: "error", error: message });
@@ -79,9 +75,6 @@ export const useOperationsStore = create<OperationsState>((set, get) => ({
     try {
       const operations = await listOperations(token, portfolioId);
       set({ operations, status: "success" });
-      hydrateAssetDisplayCache(operations, token, () => {
-        set({ operations: [...get().operations] });
-      });
     } catch {
       // Non-blocking: keep the previously displayed operations on failure.
     }
