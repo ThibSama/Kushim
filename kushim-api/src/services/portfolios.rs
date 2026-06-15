@@ -1,4 +1,5 @@
 use crate::{
+    domain::currency::{self, CurrencyValidationError},
     domain::portfolio::{NewPortfolio, Portfolio, PortfolioVisibility},
     repositories::portfolios::{PortfolioRepository, PortfolioRepositoryError},
 };
@@ -26,6 +27,13 @@ pub enum PortfolioServiceError {
         code: &'static str,
         message: &'static str,
     },
+    /// Semantic-layer rejection that should surface as HTTP 422 rather than
+    /// 400 (e.g. an unsupported currency code).
+    #[error("unprocessable entity")]
+    UnprocessableEntity {
+        code: &'static str,
+        message: &'static str,
+    },
     #[error("portfolio not found")]
     NotFound,
     #[error("service failure")]
@@ -42,7 +50,7 @@ impl PortfolioService {
         input: CreatePortfolioInput,
     ) -> Result<Portfolio, PortfolioServiceError> {
         validate_name(&input.name)?;
-        validate_base_currency(&input.base_currency)?;
+        let canonical_currency = validate_base_currency(&input.base_currency)?;
 
         let portfolio = self
             .repository
@@ -50,7 +58,7 @@ impl PortfolioService {
                 id_user: input.id_user,
                 name: input.name.trim().to_string(),
                 description: input.description.map(|value| value.trim().to_string()),
-                base_currency: input.base_currency,
+                base_currency: canonical_currency.to_string(),
                 visibility: input.visibility,
             })
             .await
@@ -100,20 +108,30 @@ fn validate_name(name: &str) -> Result<(), PortfolioServiceError> {
     Ok(())
 }
 
-fn validate_base_currency(base_currency: &str) -> Result<(), PortfolioServiceError> {
-    let is_valid = base_currency.len() == 3
-        && base_currency
-            .chars()
-            .all(|character| character.is_ascii_uppercase());
-
-    if !is_valid {
-        return Err(PortfolioServiceError::Validation {
-            code: "invalid_base_currency",
-            message: "base_currency must be exactly 3 uppercase letters",
-        });
+/// Normalizes and validates a portfolio `base_currency` against the canonical
+/// currency catalogue. Returns the canonical uppercase code on success.
+///
+/// Format failures (empty, wrong length, non-letter characters) surface as
+/// HTTP 400 (`invalid_base_currency`) so they remain consistent with prior
+/// behavior. A syntactically valid three-letter code that is not part of the
+/// canonical catalogue surfaces as HTTP 422 (`unsupported_currency`) so the
+/// frontend can distinguish "schema invalid" from "value not supported".
+fn validate_base_currency(base_currency: &str) -> Result<&'static str, PortfolioServiceError> {
+    match currency::normalize_and_validate(base_currency) {
+        Ok(canonical) => Ok(canonical),
+        Err(CurrencyValidationError::Empty | CurrencyValidationError::InvalidFormat) => {
+            Err(PortfolioServiceError::Validation {
+                code: "invalid_base_currency",
+                message: "base_currency must be exactly 3 uppercase letters",
+            })
+        }
+        Err(CurrencyValidationError::Unsupported) => {
+            Err(PortfolioServiceError::UnprocessableEntity {
+                code: "unsupported_currency",
+                message: "base_currency is not part of the supported currency catalogue",
+            })
+        }
     }
-
-    Ok(())
 }
 
 fn map_repository_error(error: PortfolioRepositoryError) -> PortfolioServiceError {

@@ -1,4 +1,5 @@
 pub mod asset;
+pub mod currency;
 pub mod portfolio;
 pub mod portfolio_operation;
 pub mod portfolio_read_model;
