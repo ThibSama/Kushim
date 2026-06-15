@@ -7,13 +7,13 @@ import { Navbar } from "@/mockup/components/Navbar";
 import { I18nProvider } from "@/i18n/context";
 
 export function AuthShell({ children }: { children: ReactNode }) {
-  const [isDark, setIsDark] = useState(true);
-
-  useEffect(() => {
-    const savedTheme = localStorage.getItem("theme");
-    const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-    setIsDark(savedTheme ? savedTheme === "dark" : prefersDark);
-  }, []);
+  // Lazy initializer reads the value the pre-hydration script in layout.tsx
+  // already applied, so React's first render matches the DOM and we don't
+  // briefly overwrite the resolved theme with a hard-coded default.
+  const [isDark, setIsDark] = useState(() => {
+    if (typeof document === "undefined") return true;
+    return document.documentElement.classList.contains("dark");
+  });
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", isDark);
