@@ -4,6 +4,7 @@ import { Card } from "../components/Card";
 import { KPICard } from "../components/KPICard";
 import { Button } from "../components/Button";
 import { Input } from "../components/Input";
+import { RefreshNotice } from "../components/RefreshNotice";
 import { CreateOperationModal } from "../components/CreateOperationModal";
 import {
   XAxis,
@@ -473,6 +474,8 @@ export function Dashboard() {
           <PortfolioSelector />
         </div>
       </div>
+
+      <RefreshNotice />
 
       {/* KPI Row */}
       {(isSummaryLoading || isSummaryUnavailable || summaryError) && (

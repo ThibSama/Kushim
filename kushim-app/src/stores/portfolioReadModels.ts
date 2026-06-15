@@ -29,6 +29,8 @@ type PortfolioReadModelsState = {
   summary: ReadModelSlice<PortfolioSummary | null, "read_model_missing">;
   holdings: ReadModelSlice<PortfolioHolding[], "read_model_missing">;
   holdingsPagination: Pagination | null;
+  lastHoldingsQuery: PortfolioHoldingsQuery | undefined;
+  lastSnapshotsQuery: PortfolioDailySnapshotsQuery | undefined;
   snapshots: ReadModelSlice<PortfolioDailySnapshot[]>;
   snapshotHoldings: Record<
     string,
@@ -55,6 +57,7 @@ type PortfolioReadModelsState = {
     snapshotDate: string,
     query?: PortfolioHoldingsQuery,
   ) => Promise<void>;
+  reloadAll: (portfolioId: string) => Promise<void>;
   clearForPortfolio: (portfolioId: string | null) => void;
   reset: () => void;
 };
@@ -99,6 +102,8 @@ export const usePortfolioReadModelsStore = create<PortfolioReadModelsState>(
     summary: initialSummary,
     holdings: initialHoldings,
     holdingsPagination: null,
+    lastHoldingsQuery: undefined,
+    lastSnapshotsQuery: undefined,
     snapshots: initialSnapshots,
     snapshotHoldings: {},
 
@@ -134,6 +139,7 @@ export const usePortfolioReadModelsStore = create<PortfolioReadModelsState>(
     loadHoldings: async (portfolioId, query) => {
       set({
         portfolioId,
+        lastHoldingsQuery: query,
         holdings: { ...get().holdings, status: "loading", error: null },
       });
 
@@ -203,6 +209,7 @@ export const usePortfolioReadModelsStore = create<PortfolioReadModelsState>(
     loadSnapshots: async (portfolioId, query) => {
       set({
         portfolioId,
+        lastSnapshotsQuery: query,
         snapshots: { ...get().snapshots, status: "loading", error: null },
       });
 
@@ -285,12 +292,27 @@ export const usePortfolioReadModelsStore = create<PortfolioReadModelsState>(
       }
     },
 
+    // Re-load summary, holdings and snapshots after an automatic refresh
+    // completes, preserving the last queries the UI used (instead of replacing
+    // them with unrelated defaults). The loaders keep the previous data visible
+    // while reloading, so no empty placeholders flash.
+    reloadAll: async (portfolioId) => {
+      const { lastHoldingsQuery, lastSnapshotsQuery } = get();
+      await Promise.all([
+        get().loadSummary(portfolioId),
+        get().loadHoldings(portfolioId, lastHoldingsQuery),
+        get().loadSnapshots(portfolioId, lastSnapshotsQuery),
+      ]);
+    },
+
     clearForPortfolio: (portfolioId) => {
       set({
         portfolioId,
         summary: initialSummary,
         holdings: initialHoldings,
         holdingsPagination: null,
+        lastHoldingsQuery: undefined,
+        lastSnapshotsQuery: undefined,
         snapshots: initialSnapshots,
         snapshotHoldings: {},
       });
@@ -302,6 +324,8 @@ export const usePortfolioReadModelsStore = create<PortfolioReadModelsState>(
         summary: initialSummary,
         holdings: initialHoldings,
         holdingsPagination: null,
+        lastHoldingsQuery: undefined,
+        lastSnapshotsQuery: undefined,
         snapshots: initialSnapshots,
         snapshotHoldings: {},
       });
