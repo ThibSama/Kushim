@@ -672,6 +672,9 @@ fn map_service_error(error: PortfolioOperationServiceError) -> ApiError {
         PortfolioOperationServiceError::Validation { code, message } => {
             ApiError::Validation { code, message }
         }
+        PortfolioOperationServiceError::UnprocessableEntity { code, message } => {
+            ApiError::UnprocessableEntity { code, message }
+        }
         PortfolioOperationServiceError::NotFound { code, message } => {
             ApiError::NotFound { code, message }
         }
@@ -1156,6 +1159,328 @@ mod tests {
         assert!(body["refresh_request"]["id_portfolio_refresh_request"].is_string());
         // Operation row AND refresh request row both committed.
         assert_eq!(pending, 1);
+    }
+
+    #[tokio::test]
+    async fn cross_currency_posted_without_fx_is_rejected_and_no_refresh_enqueued() {
+        // P1 contract: a posted operation whose currency differs from the
+        // portfolio base currency MUST carry a positive fx_rate_to_portfolio.
+        // Reject with 422 unsupported_cross_currency; neither the operation
+        // row nor the refresh request must be inserted.
+        let pool = test_pool().await;
+        let handle = format!("xcc{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let id_user = create_user(&pool, &handle).await;
+        let id_portfolio = create_portfolio(&pool, id_user, None).await; // EUR
+
+        let mut payload = posted_deposit_payload();
+        payload["currency"] = json!("USD");
+
+        let (status, body) = post_json(
+            &pool,
+            id_user,
+            &handle,
+            &format!("/v1/portfolios/{id_portfolio}/operations"),
+            payload,
+        )
+        .await;
+
+        let op_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM portfolio_operations WHERE id_portfolio = $1")
+                .bind(id_portfolio)
+                .fetch_one(&pool)
+                .await
+                .expect("count should succeed");
+        let refresh_count = count_all_refresh_requests(&pool, id_portfolio).await;
+
+        cleanup_user_tree(&pool, id_user, &[]).await;
+
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(body["error"]["code"], "unsupported_cross_currency");
+        assert_eq!(op_count, 0, "no operation row must be inserted");
+        assert_eq!(refresh_count, 0, "no refresh request must be enqueued");
+    }
+
+    #[tokio::test]
+    async fn cross_currency_posted_with_valid_fx_is_accepted() {
+        let pool = test_pool().await;
+        let handle = format!("xcf{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let id_user = create_user(&pool, &handle).await;
+        let id_portfolio = create_portfolio(&pool, id_user, None).await; // EUR
+
+        let mut payload = posted_deposit_payload();
+        payload["currency"] = json!("USD");
+        payload["fx_rate_to_portfolio"] = json!("0.92");
+
+        let (status, body) = post_json(
+            &pool,
+            id_user,
+            &handle,
+            &format!("/v1/portfolios/{id_portfolio}/operations"),
+            payload,
+        )
+        .await;
+
+        let pending = count_pending_refresh_requests(&pool, id_portfolio).await;
+        cleanup_refresh_requests(&pool, id_portfolio).await;
+
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(body["operation"]["operation_status"], "posted");
+        assert_eq!(body["operation"]["currency"], "USD");
+        // Postgres NUMERIC pads to its column scale, so the round-tripped
+        // value is e.g. "0.9200000000" rather than the input "0.92". Parse it
+        // numerically to assert equivalence rather than literal string match.
+        let fx_str = body["operation"]["fx_rate_to_portfolio"]
+            .as_str()
+            .expect("fx rate should be a string");
+        let parsed: f64 = fx_str.parse().expect("fx rate should parse");
+        assert!((parsed - 0.92).abs() < 1e-9, "got {fx_str}");
+        assert_eq!(pending, 1);
+    }
+
+    #[tokio::test]
+    async fn posted_cross_currency_transfer_in_without_fx_is_rejected() {
+        // P1.1: transfer_in with a positive monetary leg crosses currencies
+        // exactly like a deposit — the worker applies converted_cash. The
+        // guard must reject before insertion (no operation row, no refresh
+        // request) even though the type is in the "cash" group.
+        let pool = test_pool().await;
+        let handle = format!("xti{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let id_user = create_user(&pool, &handle).await;
+        let id_portfolio = create_portfolio(&pool, id_user, None).await; // EUR
+
+        let payload = json!({
+            "operation_type": "transfer_in",
+            "operation_status": "posted",
+            "executed_at": "2026-06-05T10:00:00Z",
+            "cash_amount_minor": 100000,
+            "currency": "USD",
+            "metadata": {}
+        });
+
+        let (status, body) = post_json(
+            &pool,
+            id_user,
+            &handle,
+            &format!("/v1/portfolios/{id_portfolio}/operations"),
+            payload,
+        )
+        .await;
+
+        let op_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM portfolio_operations WHERE id_portfolio = $1")
+                .bind(id_portfolio)
+                .fetch_one(&pool)
+                .await
+                .expect("count should succeed");
+        let refresh_count = count_all_refresh_requests(&pool, id_portfolio).await;
+        cleanup_user_tree(&pool, id_user, &[]).await;
+
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(body["error"]["code"], "unsupported_cross_currency");
+        assert_eq!(op_count, 0);
+        assert_eq!(refresh_count, 0);
+    }
+
+    #[tokio::test]
+    async fn posted_cross_currency_transfer_out_without_fx_is_rejected() {
+        let pool = test_pool().await;
+        let handle = format!("xto{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let id_user = create_user(&pool, &handle).await;
+        let id_portfolio = create_portfolio(&pool, id_user, None).await; // EUR
+
+        let payload = json!({
+            "operation_type": "transfer_out",
+            "operation_status": "posted",
+            "executed_at": "2026-06-05T10:00:00Z",
+            "cash_amount_minor": 100000,
+            "currency": "USD",
+            "metadata": {}
+        });
+
+        let (status, body) = post_json(
+            &pool,
+            id_user,
+            &handle,
+            &format!("/v1/portfolios/{id_portfolio}/operations"),
+            payload,
+        )
+        .await;
+
+        let op_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM portfolio_operations WHERE id_portfolio = $1")
+                .bind(id_portfolio)
+                .fetch_one(&pool)
+                .await
+                .expect("count should succeed");
+        let refresh_count = count_all_refresh_requests(&pool, id_portfolio).await;
+        cleanup_user_tree(&pool, id_user, &[]).await;
+
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(body["error"]["code"], "unsupported_cross_currency");
+        assert_eq!(op_count, 0);
+        assert_eq!(refresh_count, 0);
+    }
+
+    #[tokio::test]
+    async fn posted_cross_currency_transfer_in_with_valid_fx_is_accepted() {
+        let pool = test_pool().await;
+        let handle = format!("xtf{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let id_user = create_user(&pool, &handle).await;
+        let id_portfolio = create_portfolio(&pool, id_user, None).await; // EUR
+
+        let payload = json!({
+            "operation_type": "transfer_in",
+            "operation_status": "posted",
+            "executed_at": "2026-06-05T10:00:00Z",
+            "cash_amount_minor": 100000,
+            "currency": "USD",
+            "fx_rate_to_portfolio": "0.92",
+            "metadata": {}
+        });
+
+        let (status, body) = post_json(
+            &pool,
+            id_user,
+            &handle,
+            &format!("/v1/portfolios/{id_portfolio}/operations"),
+            payload,
+        )
+        .await;
+
+        let pending = count_pending_refresh_requests(&pool, id_portfolio).await;
+        cleanup_refresh_requests(&pool, id_portfolio).await;
+
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(body["operation"]["operation_status"], "posted");
+        assert_eq!(body["operation"]["currency"], "USD");
+        assert_eq!(pending, 1);
+    }
+
+    #[tokio::test]
+    async fn posted_cross_currency_zero_cash_transfer_does_not_require_fx() {
+        // Worker contract: transfer_in/out with cash_amount_minor = 0 has no
+        // monetary leg to convert, so the cross-currency guard must not
+        // require an fx_rate_to_portfolio. The backend payload validation
+        // already allows zero cash for transfers; the cross-currency guard
+        // must agree.
+        let pool = test_pool().await;
+        let handle = format!("xtz{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let id_user = create_user(&pool, &handle).await;
+        let id_portfolio = create_portfolio(&pool, id_user, None).await; // EUR
+
+        let payload = json!({
+            "operation_type": "transfer_in",
+            "operation_status": "posted",
+            "executed_at": "2026-06-05T10:00:00Z",
+            "cash_amount_minor": 0,
+            "currency": "USD",
+            "metadata": {}
+        });
+
+        let (status, _body) = post_json(
+            &pool,
+            id_user,
+            &handle,
+            &format!("/v1/portfolios/{id_portfolio}/operations"),
+            payload,
+        )
+        .await;
+
+        let pending = count_pending_refresh_requests(&pool, id_portfolio).await;
+        cleanup_refresh_requests(&pool, id_portfolio).await;
+
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(pending, 1);
+    }
+
+    #[tokio::test]
+    async fn unknown_operation_currency_returns_422_unsupported_currency() {
+        let pool = test_pool().await;
+        let handle = format!("uuc{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let id_user = create_user(&pool, &handle).await;
+        let id_portfolio = create_portfolio(&pool, id_user, None).await;
+
+        let mut payload = posted_deposit_payload();
+        payload["currency"] = json!("ZZZ");
+
+        let (status, body) = post_json(
+            &pool,
+            id_user,
+            &handle,
+            &format!("/v1/portfolios/{id_portfolio}/operations"),
+            payload,
+        )
+        .await;
+
+        cleanup_user_tree(&pool, id_user, &[]).await;
+
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(body["error"]["code"], "unsupported_currency");
+    }
+
+    #[tokio::test]
+    async fn lowercase_currency_is_normalized_to_canonical_uppercase() {
+        let pool = test_pool().await;
+        let handle = format!("lnc{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let id_user = create_user(&pool, &handle).await;
+        let id_portfolio = create_portfolio(&pool, id_user, None).await;
+
+        let mut payload = deposit_payload();
+        payload["currency"] = json!(" eur ");
+
+        let (status, body) = post_json(
+            &pool,
+            id_user,
+            &handle,
+            &format!("/v1/portfolios/{id_portfolio}/operations"),
+            payload,
+        )
+        .await;
+
+        cleanup_user_tree(&pool, id_user, &[]).await;
+
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(body["operation"]["currency"], "EUR");
+    }
+
+    #[tokio::test]
+    async fn posting_pending_cross_currency_without_fx_is_rejected_atomically() {
+        // P1 contract: transitioning pending → posted must revalidate the FX
+        // contract. On rejection the row stays pending and no refresh request
+        // is enqueued.
+        let pool = test_pool().await;
+        let handle = format!("ppc{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let id_user = create_user(&pool, &handle).await;
+        let id_portfolio = create_portfolio(&pool, id_user, None).await; // EUR
+
+        let mut pending = deposit_payload();
+        pending["currency"] = json!("USD");
+        let id_operation = insert_operation(&pool, id_portfolio, "pending", pending).await;
+
+        let (status, body) = post_json(
+            &pool,
+            id_user,
+            &handle,
+            &format!("/v1/portfolios/{id_portfolio}/operations/{id_operation}/post"),
+            json!({}),
+        )
+        .await;
+
+        let row_status: String = sqlx::query_scalar(
+            "SELECT operation_status FROM portfolio_operations WHERE id_portfolio_operation = $1",
+        )
+        .bind(id_operation)
+        .fetch_one(&pool)
+        .await
+        .expect("status should be readable");
+        let refresh_count = count_all_refresh_requests(&pool, id_portfolio).await;
+
+        cleanup_user_tree(&pool, id_user, &[]).await;
+
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(body["error"]["code"], "unsupported_cross_currency");
+        assert_eq!(row_status, "pending");
+        assert_eq!(refresh_count, 0);
     }
 
     #[tokio::test]
@@ -2072,13 +2397,17 @@ mod tests {
 
     #[tokio::test]
     async fn reject_invalid_currency() {
+        // P1: lowercase/whitespace input is normalized and (if part of the
+        // catalogue) accepted. To exercise the format-level rejection we use
+        // a malformed code that cannot normalize to 3 ASCII uppercase
+        // letters.
         let pool = test_pool().await;
         let handle = format!("opc{}", &Uuid::new_v4().simple().to_string()[..12]);
         let id_user = create_user(&pool, &handle).await;
         let id_portfolio = create_portfolio(&pool, id_user, None).await;
         let app = crate::http::router(test_state(pool.clone()).await);
         let mut payload = deposit_payload();
-        payload["currency"] = json!("eur");
+        payload["currency"] = json!("EURO");
 
         let response = app
             .oneshot(
@@ -2096,8 +2425,10 @@ mod tests {
             .await
             .expect("response should be built");
 
+        let status = response.status();
         let body = response_json(response).await;
         cleanup_user_tree(&pool, id_user, &[]).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(body["error"]["code"], "invalid_currency");
     }
 
@@ -3260,6 +3591,8 @@ mod tests {
 
     #[tokio::test]
     async fn correction_with_invalid_currency_is_rejected() {
+        // P1: lowercase normalizes to uppercase; to exercise format rejection
+        // we use a malformed code.
         let pool = test_pool().await;
         let handle = format!("ocu{}", &Uuid::new_v4().simple().to_string()[..12]);
         let id_user = create_user(&pool, &handle).await;
@@ -3267,7 +3600,7 @@ mod tests {
         let id_operation = insert_operation(&pool, id_portfolio, "posted", deposit_payload()).await;
         let app = crate::http::router(test_state(pool.clone()).await);
         let mut payload = correction_payload();
-        payload["currency"] = json!("eur");
+        payload["currency"] = json!("EURO");
 
         let response = app
             .oneshot(
