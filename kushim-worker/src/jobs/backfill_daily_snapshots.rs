@@ -266,19 +266,8 @@ mod tests {
             .expect("test database should be reachable")
     }
 
-    async fn ensure_role(pool: &PgPool) {
-        // Race-safe under cargo's parallel test runner; see
-        // `rebuild_current_read_models::ensure_role` notes.
-        sqlx::query(
-            "INSERT INTO roles (id_role, label) VALUES (1, 'user') ON CONFLICT (label) DO NOTHING",
-        )
-        .execute(pool)
-        .await
-        .expect("role should exist");
-    }
-
     async fn create_user(pool: &PgPool, suffix: &str) -> Uuid {
-        ensure_role(pool).await;
+        crate::test_utils::ensure_canonical_user_role(pool).await;
         let id_user = Uuid::new_v4();
         let handle = format!("bck{}", suffix);
 

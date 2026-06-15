@@ -130,25 +130,8 @@ mod tests {
             .expect("test database should be reachable")
     }
 
-    async fn ensure_role(pool: &PgPool) {
-        // Race-safe under cargo's parallel test runner: concurrent helpers
-        // both passing the per-row uniqueness check would otherwise fail at
-        // commit on `uq_roles_label` (CI runs only `001_init.sql`, no role
-        // seed). Conflict-on-label keeps the existing row.
-        sqlx::query(
-            r#"
-            INSERT INTO roles (id_role, label)
-            VALUES (1, 'user')
-            ON CONFLICT (label) DO NOTHING
-            "#,
-        )
-        .execute(pool)
-        .await
-        .expect("role should exist");
-    }
-
     async fn create_user(pool: &PgPool, suffix: &str) -> Uuid {
-        ensure_role(pool).await;
+        crate::test_utils::ensure_canonical_user_role(pool).await;
         let id_user = Uuid::new_v4();
         let handle = format!("wrk{}", suffix);
 
