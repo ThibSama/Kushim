@@ -1,5 +1,5 @@
 use crate::{
-    domain::asset::AssetStatus,
+    domain::asset::{AssetIdentity, AssetStatus},
     domain::currency::{self, CurrencyValidationError},
     domain::portfolio::Portfolio,
     domain::portfolio_operation::{
@@ -23,6 +23,19 @@ use thiserror::Error;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use uuid::Uuid;
 
+/// User-facing view of a portfolio operation: the ledger row plus the compact
+/// identity of its primary and related assets, when present.
+///
+/// The ledger entity (`PortfolioOperation`) remains the immutable source of
+/// truth. This view is built by the service layer using a single batch
+/// asset-identity lookup, and is what every HTTP response now serializes.
+#[derive(Debug, Clone)]
+pub struct PortfolioOperationView {
+    pub operation: PortfolioOperation,
+    pub asset: Option<AssetIdentity>,
+    pub related_asset: Option<AssetIdentity>,
+}
+
 #[derive(Clone)]
 pub struct PortfolioOperationService {
     asset_repository: AssetRepository,
@@ -37,7 +50,7 @@ pub struct PortfolioOperationService {
 /// correction creation). Pending creations carry `None`.
 #[derive(Debug, Clone)]
 pub struct OperationWriteOutcome {
-    pub operation: PortfolioOperation,
+    pub operation: PortfolioOperationView,
     pub refresh_request: Option<PortfolioRefreshRequest>,
 }
 
@@ -143,15 +156,15 @@ pub struct PostPortfolioOperationInput {
 
 #[derive(Debug, Clone)]
 pub struct PortfolioOperationCorrectionsView {
-    pub operation: PortfolioOperation,
-    pub corrections: Vec<PortfolioOperation>,
+    pub operation: PortfolioOperationView,
+    pub corrections: Vec<PortfolioOperationView>,
 }
 
 #[derive(Debug, Clone)]
 pub struct PortfolioOperationAuditView {
-    pub operation: PortfolioOperation,
-    pub corrected_operation: Option<PortfolioOperation>,
-    pub corrections: Vec<PortfolioOperation>,
+    pub operation: PortfolioOperationView,
+    pub corrected_operation: Option<PortfolioOperationView>,
+    pub corrections: Vec<PortfolioOperationView>,
 }
 
 #[derive(Debug, Clone)]
@@ -166,8 +179,8 @@ pub struct PortfolioOperationAuditTimelineInput {
 
 #[derive(Debug, Clone)]
 pub struct PortfolioOperationAuditTimelineItemView {
-    pub operation: PortfolioOperation,
-    pub corrections: Vec<PortfolioOperation>,
+    pub operation: PortfolioOperationView,
+    pub corrections: Vec<PortfolioOperationView>,
 }
 
 #[derive(Debug, Clone)]
@@ -288,6 +301,20 @@ impl PortfolioOperationService {
             )?;
         }
 
+        // Atomicity invariant: resolve asset identities BEFORE the mutation.
+        // If this read fails, the API returns an error without ever inserting
+        // a row. After the commit only the in-memory `build_view` runs, so a
+        // committed mutation always produces a 2xx response — no ambiguous
+        // write that would invite a duplicate-action retry.
+        let identities = self
+            .prefetch_identities(
+                new_operation
+                    .id_asset
+                    .into_iter()
+                    .chain(new_operation.id_related_asset),
+            )
+            .await?;
+
         let (operation, refresh_request) = self
             .portfolio_operation_repository
             .create_with_optional_refresh(&new_operation)
@@ -295,7 +322,7 @@ impl PortfolioOperationService {
             .map_err(map_operation_repository_error)?;
 
         Ok(OperationWriteOutcome {
-            operation,
+            operation: build_view(operation, &identities),
             refresh_request,
         })
     }
@@ -303,11 +330,12 @@ impl PortfolioOperationService {
     pub async fn list_operations(
         &self,
         input: ListPortfolioOperationsInput,
-    ) -> Result<Vec<PortfolioOperation>, PortfolioOperationServiceError> {
+    ) -> Result<Vec<PortfolioOperationView>, PortfolioOperationServiceError> {
         self.assert_owned_portfolio(input.id_portfolio, input.id_user)
             .await?;
 
-        self.portfolio_operation_repository
+        let operations = self
+            .portfolio_operation_repository
             .list_by_portfolio(
                 input.id_portfolio,
                 &PortfolioOperationFilters {
@@ -317,7 +345,9 @@ impl PortfolioOperationService {
                 },
             )
             .await
-            .map_err(map_operation_repository_error)
+            .map_err(map_operation_repository_error)?;
+
+        self.enrich_many(operations).await
     }
 
     pub async fn get_operation(
@@ -325,23 +355,27 @@ impl PortfolioOperationService {
         id_user: Uuid,
         id_portfolio: Uuid,
         id_portfolio_operation: Uuid,
-    ) -> Result<PortfolioOperation, PortfolioOperationServiceError> {
+    ) -> Result<PortfolioOperationView, PortfolioOperationServiceError> {
         self.assert_owned_portfolio(id_portfolio, id_user).await?;
 
-        self.portfolio_operation_repository
+        let operation = self
+            .portfolio_operation_repository
             .find_by_id_and_portfolio(id_portfolio_operation, id_portfolio)
             .await
             .map_err(map_operation_repository_error)?
             .ok_or(PortfolioOperationServiceError::NotFound {
                 code: "operation_not_found",
                 message: "portfolio operation was not found",
-            })
+            })?;
+
+        let mut views = self.enrich_many(vec![operation]).await?;
+        Ok(views.remove(0))
     }
 
     pub async fn update_operation(
         &self,
         input: UpdatePortfolioOperationInput,
-    ) -> Result<PortfolioOperation, PortfolioOperationServiceError> {
+    ) -> Result<PortfolioOperationView, PortfolioOperationServiceError> {
         let _portfolio = self
             .assert_owned_portfolio(input.id_portfolio, input.id_user)
             .await?;
@@ -465,20 +499,33 @@ impl PortfolioOperationService {
         validate_operation_payload(&candidate)?;
         self.validate_asset_references(&candidate).await?;
 
-        self.portfolio_operation_repository
+        // Pre-mutation identity prefetch — see invariant on `create_operation`.
+        let identities = self
+            .prefetch_identities(
+                candidate
+                    .id_asset
+                    .into_iter()
+                    .chain(candidate.id_related_asset),
+            )
+            .await?;
+
+        let updated = self
+            .portfolio_operation_repository
             .update(input.id_portfolio_operation, input.id_portfolio, &update)
             .await
             .map_err(map_operation_repository_error)?
             .ok_or(PortfolioOperationServiceError::NotFound {
                 code: "operation_not_found",
                 message: "portfolio operation was not found",
-            })
+            })?;
+
+        Ok(build_view(updated, &identities))
     }
 
     pub async fn cancel_operation(
         &self,
         input: CancelPortfolioOperationInput,
-    ) -> Result<PortfolioOperation, PortfolioOperationServiceError> {
+    ) -> Result<PortfolioOperationView, PortfolioOperationServiceError> {
         let _portfolio = self
             .assert_owned_portfolio(input.id_portfolio, input.id_user)
             .await?;
@@ -493,7 +540,14 @@ impl PortfolioOperationService {
                 message: "portfolio operation was not found",
             })?;
 
-        match existing.operation_status {
+        // Pre-mutation identity prefetch — see invariant on `create_operation`.
+        // Cancel cannot change `id_asset` / `id_related_asset`, so the ids on
+        // `existing` are exactly the ids of the row after the mutation.
+        let identities = self
+            .prefetch_identities(operation_asset_ids(&existing))
+            .await?;
+
+        let updated = match existing.operation_status {
             OperationStatus::Pending => self
                 .portfolio_operation_repository
                 .set_status(
@@ -506,13 +560,17 @@ impl PortfolioOperationService {
                 .ok_or(PortfolioOperationServiceError::NotFound {
                     code: "operation_not_found",
                     message: "portfolio operation was not found",
-                }),
-            OperationStatus::Cancelled => Ok(existing),
-            OperationStatus::Posted => Err(PortfolioOperationServiceError::Conflict {
-                code: "posted_operation_immutable",
-                message: "posted portfolio operations cannot be cancelled",
-            }),
-        }
+                })?,
+            OperationStatus::Cancelled => existing,
+            OperationStatus::Posted => {
+                return Err(PortfolioOperationServiceError::Conflict {
+                    code: "posted_operation_immutable",
+                    message: "posted portfolio operations cannot be cancelled",
+                });
+            }
+        };
+
+        Ok(build_view(updated, &identities))
     }
 
     pub async fn create_correction(
@@ -598,6 +656,16 @@ impl PortfolioOperationService {
             )?;
         }
 
+        // Pre-mutation identity prefetch — see invariant on `create_operation`.
+        let identities = self
+            .prefetch_identities(
+                new_operation
+                    .id_asset
+                    .into_iter()
+                    .chain(new_operation.id_related_asset),
+            )
+            .await?;
+
         let (operation, refresh_request) = self
             .portfolio_operation_repository
             .create_with_optional_refresh(&new_operation)
@@ -605,7 +673,7 @@ impl PortfolioOperationService {
             .map_err(map_operation_repository_error)?;
 
         Ok(OperationWriteOutcome {
-            operation,
+            operation: build_view(operation, &identities),
             refresh_request,
         })
     }
@@ -661,6 +729,13 @@ impl PortfolioOperationService {
             candidate.fx_rate_to_portfolio.as_deref(),
         )?;
 
+        // Pre-mutation identity prefetch — see invariant on `create_operation`.
+        // Posting cannot change `id_asset` / `id_related_asset`, so the ids on
+        // `existing` are exactly the ids of the row after the status flip.
+        let identities = self
+            .prefetch_identities(operation_asset_ids(&existing))
+            .await?;
+
         let (operation, refresh_request) = self
             .portfolio_operation_repository
             .set_status_posted_with_refresh(input.id_portfolio_operation, input.id_portfolio)
@@ -672,7 +747,7 @@ impl PortfolioOperationService {
             })?;
 
         Ok(OperationWriteOutcome {
-            operation,
+            operation: build_view(operation, &identities),
             refresh_request: Some(refresh_request),
         })
     }
@@ -721,6 +796,15 @@ impl PortfolioOperationService {
             .await
             .map_err(map_operation_repository_error)?;
 
+        let bundle: Vec<PortfolioOperation> =
+            std::iter::once(operation).chain(corrections).collect();
+        let enriched = self.enrich_many(bundle).await?;
+        let mut iter = enriched.into_iter();
+        let operation = iter
+            .next()
+            .expect("primary operation must be retained after enrichment");
+        let corrections = iter.collect();
+
         Ok(PortfolioOperationCorrectionsView {
             operation,
             corrections,
@@ -766,6 +850,21 @@ impl PortfolioOperationService {
                 .await
                 .map_err(map_operation_repository_error)?,
         };
+
+        let mut bundle: Vec<PortfolioOperation> = Vec::with_capacity(2 + corrections.len());
+        bundle.push(operation);
+        let has_corrected = corrected_operation.is_some();
+        if let Some(corrected) = corrected_operation {
+            bundle.push(corrected);
+        }
+        bundle.extend(corrections);
+        let bundle = self.enrich_many(bundle).await?;
+        let mut iter = bundle.into_iter();
+        let operation = iter
+            .next()
+            .expect("primary operation must be retained after enrichment");
+        let corrected_operation = if has_corrected { iter.next() } else { None };
+        let corrections = iter.collect();
 
         Ok(PortfolioOperationAuditView {
             operation,
@@ -826,14 +925,41 @@ impl PortfolioOperationService {
             }
         }
 
+        // Batch-enrich primary operations and corrections in a SINGLE asset
+        // identity lookup, then reassemble the timeline items. This keeps the
+        // query count bounded (one operation list, one corrections list, one
+        // asset identity lookup) regardless of page size.
         let returned = primary_operations.len();
-        let items = primary_operations
+        let mut flat: Vec<PortfolioOperation> = Vec::with_capacity(
+            primary_operations.len()
+                + corrections_by_original
+                    .values()
+                    .map(Vec::len)
+                    .sum::<usize>(),
+        );
+        let mut shape: Vec<(Uuid, usize)> = Vec::with_capacity(primary_operations.len());
+        for primary in &primary_operations {
+            let corrections = corrections_by_original
+                .remove(&primary.id_portfolio_operation)
+                .unwrap_or_default();
+            shape.push((primary.id_portfolio_operation, corrections.len()));
+            flat.push(primary.clone());
+            flat.extend(corrections);
+        }
+
+        let enriched = self.enrich_many(flat).await?;
+        let mut iter = enriched.into_iter();
+        let items = shape
             .into_iter()
-            .map(|operation| PortfolioOperationAuditTimelineItemView {
-                corrections: corrections_by_original
-                    .remove(&operation.id_portfolio_operation)
-                    .unwrap_or_default(),
-                operation,
+            .map(|(_id, count)| {
+                let operation = iter
+                    .next()
+                    .expect("primary operation must be present after enrichment");
+                let corrections = (&mut iter).take(count).collect();
+                PortfolioOperationAuditTimelineItemView {
+                    operation,
+                    corrections,
+                }
             })
             .collect();
 
@@ -846,6 +972,67 @@ impl PortfolioOperationService {
                 has_more,
             },
         })
+    }
+
+    /// Batch-enrich a collection of operations with compact asset identities
+    /// in a single database round trip, regardless of how many operations the
+    /// slice contains. Distinct primary AND related asset ids are deduplicated
+    /// before the lookup; an empty input skips the database entirely.
+    ///
+    /// Operations that reference an asset id which no longer resolves (corrupt
+    /// or legacy row) keep `id_asset` / `id_related_asset` on the underlying
+    /// operation but receive `asset = None` / `related_asset = None` so the
+    /// frontend can apply its defensive fallback without crashing the list.
+    ///
+    /// **Read-path only.** This helper performs the asset SELECT *after*
+    /// it has the operations in hand. Write paths must never call it, or a
+    /// transient SELECT failure could turn a committed mutation into an HTTP
+    /// 500 (an "ambiguous write" that invites a duplicate retry). Writes use
+    /// `prefetch_identities` + `build_view` instead — see those helpers.
+    pub(crate) async fn enrich_many(
+        &self,
+        operations: Vec<PortfolioOperation>,
+    ) -> Result<Vec<PortfolioOperationView>, PortfolioOperationServiceError> {
+        let by_id = self
+            .prefetch_identities(operations.iter().flat_map(operation_asset_ids))
+            .await?;
+
+        Ok(operations
+            .into_iter()
+            .map(|op| build_view(op, &by_id))
+            .collect())
+    }
+
+    /// Resolve the compact identity for a known set of asset ids in a single
+    /// batch SELECT, deduplicating before the round trip and returning an
+    /// empty map if no id is supplied (no database call). Used by all
+    /// **write** paths *before* mutating the database, so the post-mutation
+    /// response can be assembled purely in-memory.
+    ///
+    /// This is the structural invariant that makes write responses
+    /// non-ambiguous: if the asset SELECT fails, it fails *before* the
+    /// `INSERT/UPDATE`. After the commit, no fallible lookup can run, so a
+    /// successful commit always produces a `2xx` response.
+    pub(crate) async fn prefetch_identities(
+        &self,
+        ids: impl IntoIterator<Item = Uuid>,
+    ) -> Result<HashMap<Uuid, AssetIdentity>, PortfolioOperationServiceError> {
+        let mut dedup: Vec<Uuid> = Vec::new();
+        for id in ids {
+            if !dedup.contains(&id) {
+                dedup.push(id);
+            }
+        }
+
+        let identities = self
+            .asset_repository
+            .list_identities_by_ids(&dedup)
+            .await
+            .map_err(map_asset_repository_error)?;
+        Ok(identities
+            .into_iter()
+            .map(|identity| (identity.id_asset, identity))
+            .collect())
     }
 
     /// Loads the portfolio owned by `id_user` or returns `NotFound` (mapped
@@ -937,6 +1124,32 @@ impl PortfolioOperationService {
         }
 
         Ok(())
+    }
+}
+
+/// Yields the asset ids referenced by an operation (primary then related),
+/// skipping `None`. Stable iteration order keeps the deduplicated batch list
+/// deterministic for tests.
+fn operation_asset_ids(op: &PortfolioOperation) -> impl Iterator<Item = Uuid> {
+    op.id_asset.into_iter().chain(op.id_related_asset)
+}
+
+/// In-memory assembly of a `PortfolioOperationView` from a `PortfolioOperation`
+/// and a previously-fetched identity map. Pure function — no I/O, never fails.
+/// Write paths use this *after* a successful commit so the response can be
+/// built without any further fallible database access.
+fn build_view(
+    operation: PortfolioOperation,
+    identities: &HashMap<Uuid, AssetIdentity>,
+) -> PortfolioOperationView {
+    PortfolioOperationView {
+        asset: operation
+            .id_asset
+            .and_then(|id| identities.get(&id).cloned()),
+        related_asset: operation
+            .id_related_asset
+            .and_then(|id| identities.get(&id).cloned()),
+        operation,
     }
 }
 

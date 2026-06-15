@@ -115,6 +115,24 @@ pub struct AssetValidationInfo {
     pub status: AssetStatus,
 }
 
+/// Compact asset identity used to enrich portfolio-operation responses.
+///
+/// Only the fields needed to render an operation row are included:
+/// `id_asset`, the canonical `name`, and the optional `ticker`. The Transactions
+/// UI prefers the ticker when present and falls back to the name, so embedding
+/// this on every operation removes the per-row `GET /v1/assets/{id}` hop.
+///
+/// `status` is preserved because the historical-displayability rule allows
+/// referencing an inactive/delisted asset on an existing operation — surfacing
+/// the status lets callers reason about whether the asset is current.
+#[derive(Debug, Clone)]
+pub struct AssetIdentity {
+    pub id_asset: Uuid,
+    pub name: String,
+    pub ticker: Option<String>,
+    pub status: AssetStatus,
+}
+
 #[derive(Debug, Clone)]
 pub struct AssetMetadata {
     pub country: Option<String>,
