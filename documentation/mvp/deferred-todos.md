@@ -76,12 +76,14 @@ Use these labels:
 - production scheduler
 - partial failure strategy for broader batch jobs
 - queue-based orchestration if scaling later requires it
+- **cross-currency operation contribution** (`kushim-worker/src/domain/portfolio_state.rs::convert_amount_to_base`): a posted operation whose `currency` differs from the portfolio's `base_currency` and that carries no `fx_rate_to_portfolio` currently converts to zero and marks the portfolio as estimated. Consequence: the cash leg of a foreign-currency buy/sell/dividend is silently zero, the invested base cost for that asset is zero, and after the P0.2 estimated-holding fallback the holding's `market_value_minor` also stays at zero — the position is materially undervalued in summary, holdings and snapshots. Must be addressed by either (a) rejecting such operations at API write time with a safe explicit 422 carrying a documented `error_code` (e.g. `unsupported_cross_currency`), or (b) an FX provider that supplies `fx_rate_to_portfolio` before the operation is posted (and a documented restatement policy when historical FX rates land later). Until then, the negative-total rebuild guard remains the only line of defence against accidentally posted foreign-currency operations.
 
 ### Known limitation
 
 - backfill V1 is mono-portfolio only
 - backfill V1 is range-limited to 366 days
 - backfill V1 rejects loop mode
+- **`rm_portfolio_holdings.weight_pct` (and the daily snapshot equivalent) are intentionally holdings-only allocation**: a holding's share of `sum(market_value_minor)` across the portfolio's open holdings, excluding cash. This matches the frontend Dashboard allocation chart denominator (`kushim-app/src/app/pages/Dashboard.tsx:385-401`), satisfies the DDL `CHECK (weight_pct BETWEEN 0 AND 100)` even when cash is negative, and makes the non-null weights sum to 100. Zero-valued holdings (foreign-currency buys with no fx) surface `weight_pct = NULL`. If a future product decision requires net-portfolio weighting (including cash), revise the rebuild calculation, the DDL constraint, the API DTO docs and the frontend Dashboard allocation simultaneously.
 
 ### Needs product/architecture decision
 
