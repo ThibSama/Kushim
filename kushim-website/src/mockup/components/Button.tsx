@@ -7,6 +7,12 @@ interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: 'primary' | 'secondary' | 'ghost' | 'danger';
   icon?: LucideIcon;
   children: React.ReactNode;
+  /**
+   * When provided, the button renders as an anchor (`<a href>`) with identical
+   * styling. Used for navigation CTAs (including cross-origin auth URLs) so we
+   * never nest a `<button>` inside an `<a>` and never accidentally submit a form.
+   */
+  href?: string;
 }
 
 export function Button({
@@ -15,6 +21,8 @@ export function Button({
   children,
   className = '',
   disabled,
+  href,
+  type,
   ...props
 }: ButtonProps) {
   const [hovered, setHovered] = useState(false);
@@ -68,37 +76,65 @@ export function Button({
 
   const borderVariants = ['secondary', 'danger'];
 
+  const sharedStyle: React.CSSProperties = {
+    fontSize: 'clamp(14px, 2.5vw, 15px)',
+    fontWeight: 500,
+    minHeight: '44px',
+    padding: 'clamp(10px, 2vw, 12px) clamp(24px, 4vw, 28px)',
+    gap: 'clamp(6px, 1.5vw, 8px)',
+    border: borderVariants.includes(variant)
+      ? `1px solid ${variantColors[variant].borderColor}`
+      : variant === 'ghost'
+        ? `1px solid ${variantColors[variant].borderColor ?? 'transparent'}`
+        : 'none',
+    ...variantColors[variant],
+    transform: disabled ? `scale(${scale})` : `translateY(${hovered ? '-1px' : '0px'}) scale(${scale})`,
+    transition: pressed
+      ? 'transform 80ms ease, background 150ms ease'
+      : 'transform 150ms ease, background 150ms ease',
+    opacity: disabled ? 0.5 : 1,
+    cursor: disabled ? 'not-allowed' : 'pointer',
+    pointerEvents: disabled ? 'auto' : undefined,
+    textDecoration: 'none',
+  };
+
+  const hoverHandlers = {
+    onMouseEnter: () => setHovered(true),
+    onMouseLeave: () => {
+      setHovered(false);
+      setPressed(false);
+    },
+    onMouseDown: () => setPressed(true),
+    onMouseUp: () => setPressed(false),
+  };
+
+  // Navigation CTA: render a real anchor so cross-origin auth URLs use proper
+  // browser navigation and we never nest interactive elements.
+  if (href) {
+    const { onClick } = props as React.AnchorHTMLAttributes<HTMLAnchorElement>;
+    return (
+      <a
+        href={href}
+        onClick={onClick}
+        className={`${baseStyles} ${className}`}
+        style={sharedStyle}
+        {...hoverHandlers}
+      >
+        {Icon && <Icon size={16} />}
+        {children}
+      </a>
+    );
+  }
+
   return (
     <button
+      // Default to a non-submitting button so a CTA can never submit a stray
+      // form (the previous default `submit` caused `?`-only navigation).
+      type={type ?? 'button'}
       className={`${baseStyles} ${className}`}
       disabled={disabled}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => {
-        setHovered(false);
-        setPressed(false);
-      }}
-      onMouseDown={() => setPressed(true)}
-      onMouseUp={() => setPressed(false)}
-      style={{
-        fontSize: 'clamp(14px, 2.5vw, 15px)',
-        fontWeight: 500,
-        minHeight: '44px',
-        padding: 'clamp(10px, 2vw, 12px) clamp(24px, 4vw, 28px)',
-        gap: 'clamp(6px, 1.5vw, 8px)',
-        border: borderVariants.includes(variant)
-          ? `1px solid ${variantColors[variant].borderColor}`
-          : variant === 'ghost'
-            ? `1px solid ${variantColors[variant].borderColor ?? 'transparent'}`
-            : 'none',
-        ...variantColors[variant],
-        transform: disabled ? `scale(${scale})` : `translateY(${hovered ? '-1px' : '0px'}) scale(${scale})`,
-        transition: pressed
-          ? 'transform 80ms ease, background 150ms ease'
-          : 'transform 150ms ease, background 150ms ease',
-        opacity: disabled ? 0.5 : 1,
-        cursor: disabled ? 'not-allowed' : 'pointer',
-        pointerEvents: disabled ? 'auto' : undefined,
-      }}
+      {...hoverHandlers}
+      style={sharedStyle}
       {...props}
     >
       {Icon && <Icon size={16} />}
