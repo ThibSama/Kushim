@@ -437,6 +437,7 @@ mod tests {
             backfill_date_to: Some(date_to),
             redis_url: None,
             health: None,
+            refresh_consumer: crate::config::RefreshConsumerConfig::default(),
         })
         .expect("backfill config should be valid")
     }
@@ -459,6 +460,7 @@ mod tests {
             backfill_date_to: Some(date_to),
             redis_url: None,
             health: None,
+            refresh_consumer: crate::config::RefreshConsumerConfig::default(),
         };
 
         let job = BackfillDailySnapshotsJob::from_config(&config)

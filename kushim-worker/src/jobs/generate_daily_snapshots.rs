@@ -24,6 +24,15 @@ impl GenerateDailySnapshotsJob {
         }
     }
 
+    /// Build a snapshot job scoped to a single portfolio and date, used by the
+    /// per-request refresh consumer.
+    pub fn for_portfolio_on(id_portfolio: Uuid, snapshot_date: Date) -> Self {
+        Self {
+            target_portfolio_id: Some(id_portfolio),
+            snapshot_date: Some(snapshot_date),
+        }
+    }
+
     pub fn effective_snapshot_date(&self) -> Date {
         self.snapshot_date
             .unwrap_or_else(|| OffsetDateTime::now_utc().date())
@@ -913,6 +922,7 @@ mod tests {
             backfill_date_to: None,
             redis_url: None,
             health: None,
+            refresh_consumer: crate::config::RefreshConsumerConfig::default(),
         };
     }
 }

@@ -19,6 +19,14 @@ impl RebuildCurrentReadModelsJob {
         }
     }
 
+    /// Build a rebuild job scoped to a single portfolio, used by the
+    /// per-request refresh consumer.
+    pub fn for_portfolio(id_portfolio: Uuid) -> Self {
+        Self {
+            target_portfolio_id: Some(id_portfolio),
+        }
+    }
+
     pub fn target_portfolio_id(&self) -> Option<Uuid> {
         self.target_portfolio_id
     }
@@ -733,6 +741,7 @@ mod tests {
             backfill_date_to: None,
             redis_url: None,
             health: None,
+            refresh_consumer: crate::config::RefreshConsumerConfig::default(),
         };
     }
 }

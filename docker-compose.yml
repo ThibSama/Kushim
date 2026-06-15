@@ -158,13 +158,19 @@ services:
       DATABASE_URL: postgresql://kushim:kushim_secret_dev@database:5432/kushim
       APP_ENV: docker
       WORKER_NAME: kushim-worker
-      WORKER_MODE: idle
-      WORKER_JOB: noop
-      WORKER_POLL_INTERVAL_SECONDS: 30
+      # Automatic portfolio refresh consumer (P0): continuously drains the
+      # durable portfolio_refresh_requests queue written by kushim-api.
+      WORKER_MODE: loop
+      WORKER_JOB: process_portfolio_refresh_requests
+      WORKER_POLL_INTERVAL_SECONDS: 5
       WORKER_TARGET_PORTFOLIO_ID: ""
       WORKER_SNAPSHOT_DATE: ""
       WORKER_BACKFILL_DATE_FROM: ""
       WORKER_BACKFILL_DATE_TO: ""
+      WORKER_REFRESH_BATCH_SIZE: 10
+      WORKER_REFRESH_MAX_ATTEMPTS: 5
+      WORKER_REFRESH_RETRY_DELAY_SECONDS: 30
+      WORKER_REFRESH_LOCK_TIMEOUT_SECONDS: 300
       REDIS_URL: redis://redis:6379/0
       WORKER_HEALTH_HOST: 0.0.0.0
       WORKER_HEALTH_PORT: 8081

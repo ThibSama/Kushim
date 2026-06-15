@@ -1,6 +1,7 @@
 pub mod backfill_daily_snapshots;
 pub mod generate_daily_snapshots;
 pub mod noop;
+pub mod process_portfolio_refresh_requests;
 pub mod rebuild_current_read_models;
 pub mod refresh_current_portfolio_state;
 

@@ -26,7 +26,25 @@ Ce qui reste **hors perimetre V1** :
 - `rebuild_current_read_models`
 - `generate_daily_snapshots`
 - `refresh_current_portfolio_state`
+- `process_portfolio_refresh_requests`
 - `backfill_daily_snapshots`
+
+Défaut Docker Compose : `WORKER_MODE=loop` + `WORKER_JOB=process_portfolio_refresh_requests`
+(consommateur de rafraîchissement automatique, intervalle de poll court).
+
+`process_portfolio_refresh_requests` (P0 — rafraîchissement automatique) :
+- file durable PostgreSQL `portfolio_refresh_requests` (pas de Redis/queue externe)
+- réclame les requêtes éligibles via `FOR UPDATE SKIP LOCKED` dans une courte
+  transaction (marque `processing`, enregistre le worker + horodatage, incrémente
+  `attempts`), puis relâche la transaction avant le rebuild lourd
+- exécute `refresh_current_portfolio_state` pour le portefeuille ciblé uniquement
+  (rebuild read models courants + snapshot quotidien courant)
+- marque `completed`, ou planifie un retry borné / `failed` terminal après
+  `WORKER_REFRESH_MAX_ATTEMPTS`
+- récupère les requêtes `processing` abandonnées (worker mort) après
+  `WORKER_REFRESH_LOCK_TIMEOUT_SECONDS`
+- tunables : `WORKER_REFRESH_BATCH_SIZE`, `WORKER_REFRESH_MAX_ATTEMPTS`,
+  `WORKER_REFRESH_RETRY_DELAY_SECONDS`, `WORKER_REFRESH_LOCK_TIMEOUT_SECONDS`
 
 `noop` :
 - log start/end
@@ -165,7 +183,11 @@ Petites passes sures possibles :
 - `RUST_LOG` : niveau de logs
 - `WORKER_NAME` : nom logique du worker
 - `WORKER_MODE` : `idle`, `once`, `loop`
-- `WORKER_JOB` : `noop`, `rebuild_current_read_models`, `generate_daily_snapshots`, `refresh_current_portfolio_state`, `backfill_daily_snapshots`
+- `WORKER_JOB` : `noop`, `rebuild_current_read_models`, `generate_daily_snapshots`, `refresh_current_portfolio_state`, `process_portfolio_refresh_requests`, `backfill_daily_snapshots`
+- `WORKER_REFRESH_BATCH_SIZE` : taille de lot du consommateur (défaut 10)
+- `WORKER_REFRESH_MAX_ATTEMPTS` : tentatives avant `failed` terminal (défaut 5)
+- `WORKER_REFRESH_RETRY_DELAY_SECONDS` : délai de retry (défaut 30)
+- `WORKER_REFRESH_LOCK_TIMEOUT_SECONDS` : délai de récupération d'un verrou périmé (défaut 300)
 - `WORKER_POLL_INTERVAL_SECONDS` : intervalle positif pour `loop`
 - `WORKER_TARGET_PORTFOLIO_ID` : optionnel, limite le job a un portefeuille
 - `WORKER_SNAPSHOT_DATE` : optionnel, date ISO `YYYY-MM-DD` pour `generate_daily_snapshots` et `refresh_current_portfolio_state`

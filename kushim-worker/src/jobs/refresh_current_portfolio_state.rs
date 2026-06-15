@@ -22,6 +22,15 @@ impl RefreshCurrentPortfolioStateJob {
             snapshot_job: GenerateDailySnapshotsJob::from_config(config),
         }
     }
+
+    /// Build a composite refresh scoped to a single portfolio and snapshot
+    /// date. Reuses the existing rebuild + snapshot jobs unchanged.
+    pub fn for_portfolio(id_portfolio: uuid::Uuid, snapshot_date: time::Date) -> Self {
+        Self {
+            rebuild_job: RebuildCurrentReadModelsJob::for_portfolio(id_portfolio),
+            snapshot_job: GenerateDailySnapshotsJob::for_portfolio_on(id_portfolio, snapshot_date),
+        }
+    }
 }
 
 async fn run_composite_steps(
@@ -373,6 +382,7 @@ mod tests {
             backfill_date_to: None,
             redis_url: None,
             health: None,
+            refresh_consumer: crate::config::RefreshConsumerConfig::default(),
         };
 
         let job = RefreshCurrentPortfolioStateJob::from_config(&config);
@@ -496,6 +506,7 @@ mod tests {
             backfill_date_to: None,
             redis_url: None,
             health: None,
+            refresh_consumer: crate::config::RefreshConsumerConfig::default(),
         });
 
         job.run(&test_state(pool.clone()))
@@ -626,6 +637,7 @@ mod tests {
             backfill_date_to: None,
             redis_url: None,
             health: None,
+            refresh_consumer: crate::config::RefreshConsumerConfig::default(),
         });
 
         job.run(&test_state(pool.clone()))

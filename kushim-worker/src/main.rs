@@ -19,6 +19,7 @@ use crate::{
     jobs::{
         Job, backfill_daily_snapshots::BackfillDailySnapshotsJob,
         generate_daily_snapshots::GenerateDailySnapshotsJob, noop::NoopJob,
+        process_portfolio_refresh_requests::ProcessPortfolioRefreshRequestsJob,
         rebuild_current_read_models::RebuildCurrentReadModelsJob,
         refresh_current_portfolio_state::RefreshCurrentPortfolioStateJob,
     },
@@ -157,6 +158,9 @@ fn build_job(config: &Config) -> Result<Arc<dyn Job>, WorkerError> {
         }
         WorkerJob::RefreshCurrentPortfolioState => {
             Arc::new(RefreshCurrentPortfolioStateJob::from_config(config))
+        }
+        WorkerJob::ProcessPortfolioRefreshRequests => {
+            Arc::new(ProcessPortfolioRefreshRequestsJob::from_config(config))
         }
         WorkerJob::BackfillDailySnapshots => {
             Arc::new(BackfillDailySnapshotsJob::from_config(config)?)
