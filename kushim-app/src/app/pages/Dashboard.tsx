@@ -3,9 +3,9 @@ import { Link, useNavigate } from "react-router-dom";
 import { Card } from "../components/Card";
 import { KPICard } from "../components/KPICard";
 import { Button } from "../components/Button";
-import { Input } from "../components/Input";
 import { RefreshNotice } from "../components/RefreshNotice";
 import { CreateOperationModal } from "../components/CreateOperationModal";
+import { CreatePortfolioModal } from "../components/CreatePortfolioModal";
 import {
   XAxis,
   YAxis,
@@ -17,14 +17,12 @@ import {
   Area,
   ComposedChart,
 } from "recharts";
-import { Plus, PlusCircle, Briefcase, AlertCircle } from "lucide-react";
+import { Plus, PlusCircle, Briefcase } from "lucide-react";
 import { formatCurrency, formatSignedPercent } from "../../utils/portfolio";
 import { usePortfolioStore } from "../../stores/portfolio";
 import { useOperationsStore } from "../../stores/operations";
 import { usePortfolioReadModelsStore } from "../../stores/portfolioReadModels";
 import { operationToRow, typeBadgeStyle } from "../../lib/operations";
-import { type CreatePortfolioPayload } from "../../lib/api/businessApi";
-import { ApiRequestError } from "../../lib/api/httpClient";
 
 // Suppress recharts internal null-key warning (known v2 bug with SVG defs)
 const originalConsoleError = console.error;
@@ -92,121 +90,6 @@ function getSnapshotQuery(period: string) {
     limit: 366,
     sort: "asc" as const,
   };
-}
-
-function CreatePortfolioModal({ onClose }: { onClose: () => void }) {
-  const { createPortfolio } = usePortfolioStore();
-  const [name, setName] = useState("");
-  const [baseCurrency, setBaseCurrency] = useState("EUR");
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const handleSubmit = async () => {
-    setError(null);
-    const trimmed = name.trim();
-    if (!trimmed) {
-      setError("Le nom du portefeuille est requis.");
-      return;
-    }
-    if (trimmed.length > 50) {
-      setError("Le nom ne peut pas dépasser 50 caractères.");
-      return;
-    }
-    const currency = baseCurrency.trim().toUpperCase();
-    if (!/^[A-Z]{3}$/.test(currency)) {
-      setError("La devise doit être un code à 3 lettres (ex : EUR, USD).");
-      return;
-    }
-
-    setSubmitting(true);
-    try {
-      const payload: CreatePortfolioPayload = {
-        name: trimmed,
-        base_currency: currency,
-        visibility: "private",
-      };
-      await createPortfolio(payload);
-      onClose();
-    } catch (e) {
-      if (e instanceof ApiRequestError) {
-        setError(`${e.code}: ${e.message}`);
-      } else {
-        setError("Erreur inattendue lors de la création.");
-      }
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  return (
-    <>
-      <div
-        className="fixed inset-0 z-40"
-        style={{
-          background: "rgba(0, 0, 0, 0.40)",
-          backdropFilter: "blur(4px)",
-          WebkitBackdropFilter: "blur(4px)",
-        }}
-        onClick={onClose}
-      />
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-6">
-        <Card level={3} className="w-full max-w-[480px]">
-          <h2
-            className="mb-2"
-            style={{
-              fontSize: "18px",
-              fontWeight: 600,
-              color: "var(--text-primary)",
-            }}>
-            Créer un portefeuille
-          </h2>
-          <p
-            style={{
-              fontSize: "14px",
-              color: "var(--text-secondary)",
-              marginBottom: "20px",
-            }}>
-            Un portefeuille regroupe vos transactions et actifs pour suivre vos performances.
-          </p>
-          <div className="flex flex-col gap-4">
-            <Input
-              label="Nom"
-              placeholder="Mon portefeuille principal"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              maxLength={50}
-            />
-            <Input
-              label="Devise de base"
-              placeholder="EUR"
-              value={baseCurrency}
-              onChange={(e) => setBaseCurrency(e.target.value.toUpperCase())}
-              maxLength={3}
-            />
-          </div>
-          {error && (
-            <div
-              className="flex items-start gap-2 mt-4"
-              style={{
-                fontSize: "13px",
-                color: "var(--color-loss)",
-              }}>
-              <AlertCircle size={16} style={{ flexShrink: 0, marginTop: "1px" }} />
-              <span>{error}</span>
-            </div>
-          )}
-          <div className="flex gap-3 justify-end mt-6">
-            <Button variant="ghost" onClick={onClose} disabled={submitting}>
-              Annuler
-            </Button>
-            <Button variant="primary" onClick={handleSubmit} disabled={submitting}>
-              {submitting ? "Création…" : "Créer"}
-            </Button>
-          </div>
-        </Card>
-      </div>
-    </>
-  );
 }
 
 function EmptyPortfolioState({ onCreate }: { onCreate: () => void }) {

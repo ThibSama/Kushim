@@ -579,3 +579,14 @@ export async function listOperationStatuses(_token?: IgnoredToken): Promise<Refe
   );
   return res.data;
 }
+
+/// Canonical currency catalogue used to populate the CurrencySelect component.
+/// Backed by the backend `GET /v1/reference/currencies` endpoint, which is the
+/// single source of truth shared with backend validation.
+export async function listCurrencies(_token?: IgnoredToken): Promise<ReferenceItem[]> {
+  const res = await authenticatedRequest<{ data: ReferenceItem[] }>(
+    API_URL,
+    "/v1/reference/currencies",
+  );
+  return res.data;
+}
