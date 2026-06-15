@@ -267,8 +267,10 @@ mod tests {
     }
 
     async fn ensure_role(pool: &PgPool) {
+        // Race-safe under cargo's parallel test runner; see
+        // `rebuild_current_read_models::ensure_role` notes.
         sqlx::query(
-            "INSERT INTO roles (id_role, label) VALUES (1, 'user') ON CONFLICT (id_role) DO UPDATE SET label = EXCLUDED.label",
+            "INSERT INTO roles (id_role, label) VALUES (1, 'user') ON CONFLICT (label) DO NOTHING",
         )
         .execute(pool)
         .await
@@ -437,6 +439,7 @@ mod tests {
             backfill_date_to: Some(date_to),
             redis_url: None,
             health: None,
+            refresh_consumer: crate::config::RefreshConsumerConfig::default(),
         })
         .expect("backfill config should be valid")
     }
@@ -459,6 +462,7 @@ mod tests {
             backfill_date_to: Some(date_to),
             redis_url: None,
             health: None,
+            refresh_consumer: crate::config::RefreshConsumerConfig::default(),
         };
 
         let job = BackfillDailySnapshotsJob::from_config(&config)
@@ -689,7 +693,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn backfill_missing_or_wrong_currency_price_marks_estimated() {
+    async fn backfill_missing_or_wrong_currency_price_falls_back_to_invested_cost_and_marks_estimated()
+     {
+        // Day 1: a historical price exists but is denominated in USD while the
+        // portfolio's base is EUR (currency mismatch → cannot value live).
+        // Day 2: no historical price is published at all.
+        //
+        // Both cases must hit the P0.2 valuation fallback:
+        //   market_value_minor = invested_base_minor (trusted ledger)
+        //   is_estimated       = true
+        //
+        // The snapshot stays consistent with cash (deposit 1000 − buy 600 = 400)
+        // and the only open holding (invested 600 → estimated 600 → weight 100).
         let pool = test_pool().await;
         let suffix = Uuid::new_v4().simple().to_string();
         let user = create_user(&pool, &suffix[..8]).await;
@@ -702,6 +717,7 @@ mod tests {
         let d1 = Date::from_calendar_date(2026, Month::June, 1).unwrap();
         let d2 = Date::from_calendar_date(2026, Month::June, 2).unwrap();
 
+        // Wrong-currency price on day 1; nothing for day 2.
         insert_historical_price(&pool, asset, d1, "USD", 999, "default", created_at).await;
         insert_operation(
             &pool,
@@ -745,11 +761,12 @@ mod tests {
         let job = backfill_job(portfolio, d1, d2);
         job.run(&test_state(pool.clone()))
             .await
-            .expect("backfill should succeed with missing historical price");
+            .expect("backfill should succeed with incompatible / missing historical prices");
 
+        // --- Day 1: wrong-currency historical price → fallback. ---
         let day1 = sqlx::query(
             r#"
-            SELECT total_value_minor, is_estimated
+            SELECT total_value_minor, cash_balance_minor, total_invested_minor, is_estimated
             FROM portfolio_snapshots_daily
             WHERE id_portfolio = $1 AND snapshot_date = $2
             "#,
@@ -759,12 +776,15 @@ mod tests {
         .fetch_one(&pool)
         .await
         .expect("day 1 snapshot should exist");
-        assert_eq!(day1.get::<i64, _>("total_value_minor"), 400);
+        assert_eq!(day1.get::<i64, _>("cash_balance_minor"), 400);
+        assert_eq!(day1.get::<i64, _>("total_invested_minor"), 1_000);
+        assert_eq!(day1.get::<i64, _>("total_value_minor"), 1_000);
         assert!(day1.get::<bool, _>("is_estimated"));
 
         let day1_holding = sqlx::query(
             r#"
-            SELECT hs.market_value_minor, hs.is_estimated
+            SELECT hs.market_value_minor, hs.invested_minor, hs.weight_pct::text AS weight_pct,
+                   hs.pnl_minor, hs.is_estimated
             FROM portfolio_holding_snapshot_daily hs
             JOIN portfolio_snapshots_daily s
                 ON s.id_portfolio_snapshot_daily = hs.id_portfolio_snapshot_daily
@@ -776,7 +796,53 @@ mod tests {
         .fetch_one(&pool)
         .await
         .expect("day 1 holding should exist");
-        assert_eq!(day1_holding.get::<i64, _>("market_value_minor"), 0);
+        assert_eq!(day1_holding.get::<i64, _>("invested_minor"), 600);
+        assert_eq!(day1_holding.get::<i64, _>("market_value_minor"), 600);
+        // P&L is coherent with the invested-cost fallback (no gain, no loss
+        // because the estimated value mirrors the cost basis).
+        assert_eq!(day1_holding.get::<i64, _>("pnl_minor"), 0);
+        // Single valued holding → weight_pct must be exactly 100 (holdings-only
+        // allocation contract from P0.2).
+        assert_eq!(day1_holding.get::<String, _>("weight_pct"), "100.0000");
         assert!(day1_holding.get::<bool, _>("is_estimated"));
+
+        // --- Day 2: missing historical price → same fallback. ---
+        let day2 = sqlx::query(
+            r#"
+            SELECT total_value_minor, cash_balance_minor, total_invested_minor, is_estimated
+            FROM portfolio_snapshots_daily
+            WHERE id_portfolio = $1 AND snapshot_date = $2
+            "#,
+        )
+        .bind(portfolio)
+        .bind(d2)
+        .fetch_one(&pool)
+        .await
+        .expect("day 2 snapshot should exist");
+        assert_eq!(day2.get::<i64, _>("cash_balance_minor"), 400);
+        assert_eq!(day2.get::<i64, _>("total_invested_minor"), 1_000);
+        assert_eq!(day2.get::<i64, _>("total_value_minor"), 1_000);
+        assert!(day2.get::<bool, _>("is_estimated"));
+
+        let day2_holding = sqlx::query(
+            r#"
+            SELECT hs.market_value_minor, hs.invested_minor, hs.weight_pct::text AS weight_pct,
+                   hs.pnl_minor, hs.is_estimated
+            FROM portfolio_holding_snapshot_daily hs
+            JOIN portfolio_snapshots_daily s
+                ON s.id_portfolio_snapshot_daily = hs.id_portfolio_snapshot_daily
+            WHERE s.id_portfolio = $1 AND s.snapshot_date = $2
+            "#,
+        )
+        .bind(portfolio)
+        .bind(d2)
+        .fetch_one(&pool)
+        .await
+        .expect("day 2 holding should exist");
+        assert_eq!(day2_holding.get::<i64, _>("invested_minor"), 600);
+        assert_eq!(day2_holding.get::<i64, _>("market_value_minor"), 600);
+        assert_eq!(day2_holding.get::<i64, _>("pnl_minor"), 0);
+        assert_eq!(day2_holding.get::<String, _>("weight_pct"), "100.0000");
+        assert!(day2_holding.get::<bool, _>("is_estimated"));
     }
 }

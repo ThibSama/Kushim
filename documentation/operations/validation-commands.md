@@ -26,6 +26,37 @@ npm run lint
 npm run build
 ```
 
+For `kushim-app` (session/refresh changes since P0.3):
+
+```powershell
+cd E:\Kushim\kushim-app
+npm run test   # vitest run — covers tokenStorage, sessionGate, authenticatedRequest, refreshTracking
+```
+
+### Level 0.5 - Controlled short-TTL auth-api (P0.3 session layer)
+
+The single-flight refresh + retry-at-most-once contract on the `kushim-app`
+side can only be exercised end-to-end when the access token actually expires
+within a manual test window. Use a one-shot Docker override; never commit a
+globally short default.
+
+```powershell
+# 1. Bring up auth-api with a 10-second access TTL.
+$env:ACCESS_TOKEN_TTL_SECONDS = "10"
+docker compose up -d --force-recreate kushim-auth-api
+docker compose exec kushim-auth-api printenv ACCESS_TOKEN_TTL_SECONDS  # -> 10
+
+# 2. Run the Chrome scenarios (see kushim-app/README.md — Session layer (P0.3)).
+
+# 3. Restore the canonical 900-second default and verify.
+Remove-Item Env:ACCESS_TOKEN_TTL_SECONDS
+docker compose up -d --force-recreate kushim-auth-api
+docker compose exec kushim-auth-api printenv ACCESS_TOKEN_TTL_SECONDS  # -> 900 (or unset → service default)
+```
+
+Never shorten `REFRESH_TOKEN_TTL_SECONDS`. The refresh token TTL is what
+makes single-flight + recovery testable across a sustained Chrome session.
+
 For changed Rust services:
 
 ```powershell
@@ -327,6 +358,32 @@ Required discipline:
 - expect plain `cargo audit` to fail while `RUSTSEC-2023-0071` is still present
 - a clean result with `cargo audit --ignore RUSTSEC-2023-0071` means no advisory beyond the currently accepted/monitored one was reported
 - CI must use `cargo audit --ignore RUSTSEC-2023-0071`, not a blanket advisory bypass
+
+## Existing-database upgrade (automatic refresh / P0)
+
+`001_init.sql` only runs on a fresh PostgreSQL volume. For an existing local
+volume, apply the idempotent, non-destructive upgrade scripts (adds
+`portfolio_refresh_requests`):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/dev/apply-db-upgrades.ps1
+```
+
+Safe to run multiple times; never drops/truncates/deletes data.
+
+## Worker default mode (automatic refresh)
+
+Docker Compose now starts `kushim-worker` as the automatic refresh consumer
+(`WORKER_MODE=loop`, `WORKER_JOB=process_portfolio_refresh_requests`). To verify
+the runtime path:
+
+- `docker compose up -d database redis kushim-auth-api kushim-api kushim-worker kushim-market-data`
+- `docker compose logs kushim-worker --tail 20` should show the loop and
+  `process portfolio refresh requests pass` lines
+- post an operation; the API response includes `refresh_request`; poll
+  `GET /v1/portfolios/{id}/refresh-requests/{id}` until `completed`
+- `scripts/demo/backend-e2e.ps1` validates this end-to-end (18 assertions, no
+  manual `rebuild_current_read_models` / `generate_daily_snapshots`)
 
 ## Documentation-only tasks
 

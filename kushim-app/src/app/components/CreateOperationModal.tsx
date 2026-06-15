@@ -6,6 +6,7 @@ import { Input } from "./Input";
 import { AssetSearchSelect } from "./AssetSearchSelect";
 import { usePortfolioStore } from "../../stores/portfolio";
 import { useOperationsStore } from "../../stores/operations";
+import { useRefreshTrackingStore } from "../../stores/refreshTracking";
 import { operationTypeLabel, CASH_OPERATION_TYPES, cacheAssetDisplay } from "../../lib/operations";
 import type { Asset, CreateOperationPayload } from "../../lib/api/businessApi";
 import { ApiRequestError } from "../../lib/api/httpClient";
@@ -37,6 +38,7 @@ type Props = {
 export function CreateOperationModal({ portfolioId, onClose }: Props) {
   const { createOperation, operationTypes, loadReferenceData } =
     useOperationsStore();
+  const trackRefresh = useRefreshTrackingStore((s) => s.track);
   const portfolio = usePortfolioStore(
     (s) => s.portfolios.find((p) => p.id_portfolio === portfolioId) ?? null,
   );
@@ -128,6 +130,10 @@ export function CreateOperationModal({ portfolioId, onClose }: Props) {
 
     const payload: CreateOperationPayload = {
       operation_type: opType,
+      // The normal modal flow records an operation the user wants reflected in
+      // the portfolio: create it directly as posted so the backend finalizes it
+      // and atomically enqueues the portfolio refresh in one transaction.
+      operation_status: "posted",
       executed_at: new Date(executedAt).toISOString(),
       currency: currency.toUpperCase(),
       gross_amount_minor: gross > 0 ? gross : undefined,
@@ -153,7 +159,20 @@ export function CreateOperationModal({ portfolioId, onClose }: Props) {
 
     setSubmitting(true);
     try {
-      await createOperation(portfolioId, payload);
+      const result = await createOperation(portfolioId, payload);
+      // A posted operation must come back with a refresh request; if it does
+      // not, treat it as a backend contract error rather than silently closing.
+      if (!result.refresh_request) {
+        setError(
+          "Opération enregistrée mais la mise à jour du portefeuille n'a pas pu être planifiée (réponse inattendue).",
+        );
+        setSubmitting(false);
+        return;
+      }
+      trackRefresh(
+        portfolioId,
+        result.refresh_request.id_portfolio_refresh_request,
+      );
       onClose();
     } catch (e) {
       if (e instanceof ApiRequestError) {

@@ -9,7 +9,22 @@ type LinkProps = Omit<AnchorHTMLAttributes<HTMLAnchorElement>, "href"> & {
   children: ReactNode;
 };
 
+function isExternalUrl(to: string): boolean {
+  // Absolute cross-origin targets (e.g. http://auth.kushim.localhost/connexion)
+  // and hash-only anchors must use real browser navigation, not the Next.js
+  // client router (which is for internal app routes only).
+  return /^https?:\/\//i.test(to) || to.startsWith("#");
+}
+
 export function Link({ to, children, ...props }: LinkProps) {
+  if (isExternalUrl(to)) {
+    return (
+      <a href={to} {...props}>
+        {children}
+      </a>
+    );
+  }
+
   return (
     <NextLink href={to} {...props}>
       {children}

@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from 'react';
-import { Link } from '@/lib/router-shim';
 import { Terminal, Layers, Calculator, Shield, Check, Lock, ShieldCheck } from 'lucide-react';
 import { Card } from '../components/Card';
 import { Button } from '../components/Button';
@@ -126,23 +125,25 @@ export function Landing() {
               gap: 'clamp(12px, 2vw, 16px)',
             }}
           >
-            <Link to={`${authUrl}/inscription`} className="w-full sm:w-auto">
-              <Button variant="primary" icon={Terminal} className="w-full sm:w-auto min-h-[44px]">
-                Ouvrir mon portefeuille
-              </Button>
-            </Link>
-            <a
+            <Button
+              href={`${authUrl}/inscription`}
+              variant="primary"
+              icon={Terminal}
+              className="w-full sm:w-auto min-h-[44px]"
+            >
+              Ouvrir mon portefeuille
+            </Button>
+            <Button
               href="#securite"
+              variant="ghost"
+              className="w-full sm:w-auto min-h-[44px]"
               onClick={(e) => {
                 e.preventDefault();
                 document.querySelector('#securite')?.scrollIntoView({ behavior: 'smooth' });
               }}
-              className="w-full sm:w-auto"
             >
-              <Button variant="ghost" className="w-full sm:w-auto min-h-[44px]">
-                Notre approche sécurité
-              </Button>
-            </a>
+              Notre approche sécurité
+            </Button>
           </div>
 
           {/* Dashboard preview */}
@@ -531,11 +532,13 @@ export function Landing() {
               ))}
             </div>
 
-            <Link to={`${authUrl}/inscription`} className="block w-full">
-              <Button variant="primary" className="w-full min-h-[44px]">
-                Commencer
-              </Button>
-            </Link>
+            <Button
+              href={`${authUrl}/inscription`}
+              variant="primary"
+              className="w-full min-h-[44px]"
+            >
+              Commencer
+            </Button>
           </Card>
         </div>
       </section>

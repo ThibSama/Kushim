@@ -538,6 +538,55 @@ COMMENT ON COLUMN portfolio_operations.id_corrected_operation IS
 COMMENT ON FUNCTION prevent_posted_operation_mutation() IS
 'Protects posted portfolio_operations from UPDATE and DELETE. Corrections must use new compensating adjustment operations linked through id_corrected_operation.';
 
+CREATE TABLE portfolio_refresh_requests (
+    id_portfolio_refresh_request uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    id_portfolio uuid NOT NULL,
+    id_triggering_operation uuid,
+    status varchar(20) NOT NULL DEFAULT 'pending',
+    attempts integer NOT NULL DEFAULT 0,
+    requested_at timestamptz NOT NULL DEFAULT now(),
+    next_attempt_at timestamptz NOT NULL DEFAULT now(),
+    processing_started_at timestamptz,
+    completed_at timestamptz,
+    locked_by varchar(100),
+    last_error text,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT fk_portfolio_refresh_requests_portfolio_id_portfolio
+        FOREIGN KEY (id_portfolio) REFERENCES portfolios (id_portfolio) ON DELETE CASCADE,
+    CONSTRAINT fk_portfolio_refresh_requests_triggering_operation
+        FOREIGN KEY (id_triggering_operation)
+        REFERENCES portfolio_operations (id_portfolio_operation)
+        ON DELETE SET NULL,
+    CONSTRAINT chk_portfolio_refresh_requests_status
+        CHECK (status IN ('pending', 'processing', 'completed', 'failed')),
+    CONSTRAINT chk_portfolio_refresh_requests_attempts_non_negative
+        CHECK (attempts >= 0),
+    CONSTRAINT chk_portfolio_refresh_requests_processing_after_requested
+        CHECK (processing_started_at IS NULL OR processing_started_at >= requested_at),
+    CONSTRAINT chk_portfolio_refresh_requests_completed_after_requested
+        CHECK (completed_at IS NULL OR completed_at >= requested_at)
+);
+
+COMMENT ON TABLE portfolio_refresh_requests IS
+'Durable PostgreSQL request/outbox queue for portfolio refreshes. kushim-api enqueues a request in the same transaction that posts an operation; kushim-worker consumes it and rebuilds current read models and the current daily snapshot. No calculations run in triggers.';
+
+-- At most one pending refresh request per portfolio (request coalescing). A new
+-- pending row may still be created while an earlier request is already processing,
+-- so an operation posted during processing is never lost.
+CREATE UNIQUE INDEX uq_portfolio_refresh_requests_pending_per_portfolio
+    ON portfolio_refresh_requests (id_portfolio)
+    WHERE status = 'pending';
+
+-- Claiming pending/retryable work ordered by eligibility.
+CREATE INDEX idx_portfolio_refresh_requests_claim
+    ON portfolio_refresh_requests (status, next_attempt_at)
+    WHERE status IN ('pending', 'processing');
+
+-- Recent requests for a portfolio (status lookups and diagnostics).
+CREATE INDEX idx_portfolio_refresh_requests_portfolio_recent
+    ON portfolio_refresh_requests (id_portfolio, requested_at DESC);
+
 CREATE TABLE rm_portfolio_summary (
     id_rm_portfolio_summary uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     id_portfolio uuid NOT NULL,
@@ -730,6 +779,11 @@ CREATE TRIGGER trg_portfolio_operations_prevent_posted_mutation
     BEFORE UPDATE OR DELETE ON portfolio_operations
     FOR EACH ROW
     EXECUTE FUNCTION prevent_posted_operation_mutation();
+
+CREATE TRIGGER trg_portfolio_refresh_requests_set_updated_at
+    BEFORE UPDATE ON portfolio_refresh_requests
+    FOR EACH ROW
+    EXECUTE FUNCTION set_updated_at();
 
 CREATE TRIGGER trg_rm_portfolio_summary_set_updated_at
     BEFORE UPDATE ON rm_portfolio_summary

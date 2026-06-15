@@ -2,8 +2,18 @@ services:
   kushim-website:
     build:
       context: ./kushim-website
+    # Force Webpack dev mode inside Docker. Turbopack 16.2.6 panics intermittently
+    # on HMR chunk loads ("Failed to load chunk [turbopack]/browser/dev/hmr-client"),
+    # making the dev runtime hard-reload the document in a loop. Webpack dev is
+    # officially supported by Next 16 (`--webpack`) and stable in this container.
+    command: ["npm", "run", "dev:docker"]
     env_file:
       - ./kushim-website/.env.local.example
+    # Explicit Docker overrides: the dev server reads NEXT_PUBLIC_* at runtime,
+    # so these canonical nginx URLs reach the browser bundle reliably (the
+    # example env_file documents direct-dev defaults only).
+    environment:
+      NEXT_PUBLIC_AUTH_URL: http://auth.kushim.localhost
     expose:
       - "3000"
     networks:
@@ -12,8 +22,17 @@ services:
   kushim-auth-front:
     build:
       context: ./kushim-auth/front
+    # Force Webpack dev mode inside Docker. Turbopack 16.2.6 panics intermittently
+    # ("Next.js package not found" during HMR of /connexion/page), which makes the
+    # HMR client hard-reload the document in a loop. Webpack dev is officially
+    # supported by Next 16 (`--webpack`) and stable in this container.
+    command: ["npm", "run", "dev:docker"]
     env_file:
       - ./kushim-auth/front/.env.local.example
+    environment:
+      NEXT_PUBLIC_APP_URL: http://app.kushim.localhost
+      NEXT_PUBLIC_WEBSITE_URL: http://kushim.localhost
+      NEXT_PUBLIC_AUTH_API_URL: http://auth-api.kushim.localhost
     expose:
       - "3001"
     networks:
@@ -30,6 +49,11 @@ services:
       REDIS_URL: redis://redis:6379/0
       RATE_LIMIT_ENABLED: "true"
       APP_ENV: docker
+      ACCESS_TOKEN_TTL_SECONDS: "${ACCESS_TOKEN_TTL_SECONDS:-900}"
+      # Browser origins that legitimately call the auth API: the auth frontend
+      # (login/signup/handoff create) and the app (handoff exchange). Direct-dev
+      # origins retained. Explicit allowlist, no wildcard.
+      CORS_ALLOWED_ORIGINS: "http://auth.kushim.localhost,http://app.kushim.localhost,http://localhost:3001,http://localhost:5173"
     depends_on:
       database:
         condition: service_healthy
@@ -52,6 +76,13 @@ services:
       context: ./kushim-app
     env_file:
       - ./kushim-app/.env.example
+    # Explicit Docker overrides: Vite exposes VITE_*-prefixed process env to
+    # import.meta.env at dev-server start, so these canonical nginx URLs reach
+    # the browser bundle reliably.
+    environment:
+      VITE_AUTH_URL: http://auth.kushim.localhost
+      VITE_AUTH_API_URL: http://auth-api.kushim.localhost
+      VITE_API_URL: http://api.kushim.localhost
     expose:
       - "5173"
     networks:
@@ -70,6 +101,9 @@ services:
       KUSHIM_API_PORT: 8080
       AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:-dev_only_change_me_minimum_32_chars}
       JWT_ISSUER: ${JWT_ISSUER:-kushim-auth}
+      # Browser origin that calls the business API: the app. Direct-dev origin
+      # retained. Explicit allowlist, no wildcard.
+      CORS_ALLOWED_ORIGINS: "http://app.kushim.localhost,http://localhost:5173"
     depends_on:
       database:
         condition: service_healthy
@@ -125,13 +159,19 @@ services:
       DATABASE_URL: postgresql://kushim:kushim_secret_dev@database:5432/kushim
       APP_ENV: docker
       WORKER_NAME: kushim-worker
-      WORKER_MODE: idle
-      WORKER_JOB: noop
-      WORKER_POLL_INTERVAL_SECONDS: 30
+      # Automatic portfolio refresh consumer (P0): continuously drains the
+      # durable portfolio_refresh_requests queue written by kushim-api.
+      WORKER_MODE: loop
+      WORKER_JOB: process_portfolio_refresh_requests
+      WORKER_POLL_INTERVAL_SECONDS: 5
       WORKER_TARGET_PORTFOLIO_ID: ""
       WORKER_SNAPSHOT_DATE: ""
       WORKER_BACKFILL_DATE_FROM: ""
       WORKER_BACKFILL_DATE_TO: ""
+      WORKER_REFRESH_BATCH_SIZE: 10
+      WORKER_REFRESH_MAX_ATTEMPTS: 5
+      WORKER_REFRESH_RETRY_DELAY_SECONDS: 30
+      WORKER_REFRESH_LOCK_TIMEOUT_SECONDS: 300
       REDIS_URL: redis://redis:6379/0
       WORKER_HEALTH_HOST: 0.0.0.0
       WORKER_HEALTH_PORT: 8081
@@ -196,6 +236,7 @@ services:
       - kushim-auth-front
       - kushim-app
       - kushim-api
+      - kushim-auth-api
     ports:
       - "80:80"
     volumes:

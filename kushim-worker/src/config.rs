@@ -26,6 +26,7 @@ pub enum WorkerJob {
     RebuildCurrentReadModels,
     GenerateDailySnapshots,
     RefreshCurrentPortfolioState,
+    ProcessPortfolioRefreshRequests,
     BackfillDailySnapshots,
 }
 
@@ -36,6 +37,7 @@ impl WorkerJob {
             Self::RebuildCurrentReadModels => "rebuild_current_read_models",
             Self::GenerateDailySnapshots => "generate_daily_snapshots",
             Self::RefreshCurrentPortfolioState => "refresh_current_portfolio_state",
+            Self::ProcessPortfolioRefreshRequests => "process_portfolio_refresh_requests",
             Self::BackfillDailySnapshots => "backfill_daily_snapshots",
         }
     }
@@ -50,10 +52,32 @@ impl FromStr for WorkerJob {
             "rebuild_current_read_models" => Ok(Self::RebuildCurrentReadModels),
             "generate_daily_snapshots" => Ok(Self::GenerateDailySnapshots),
             "refresh_current_portfolio_state" => Ok(Self::RefreshCurrentPortfolioState),
+            "process_portfolio_refresh_requests" => Ok(Self::ProcessPortfolioRefreshRequests),
             "backfill_daily_snapshots" => Ok(Self::BackfillDailySnapshots),
             _ => Err(WorkerError::Config(format!(
-                "WORKER_JOB must be one of noop, rebuild_current_read_models, generate_daily_snapshots, refresh_current_portfolio_state, backfill_daily_snapshots; got `{value}`"
+                "WORKER_JOB must be one of noop, rebuild_current_read_models, generate_daily_snapshots, refresh_current_portfolio_state, process_portfolio_refresh_requests, backfill_daily_snapshots; got `{value}`"
             ))),
+        }
+    }
+}
+
+/// Tunables for the automatic refresh consumer
+/// (`process_portfolio_refresh_requests`). Conservative MVP defaults.
+#[derive(Debug, Clone, Copy)]
+pub struct RefreshConsumerConfig {
+    pub batch_size: i64,
+    pub max_attempts: i32,
+    pub retry_delay: Duration,
+    pub lock_timeout: Duration,
+}
+
+impl Default for RefreshConsumerConfig {
+    fn default() -> Self {
+        Self {
+            batch_size: 10,
+            max_attempts: 5,
+            retry_delay: Duration::from_secs(30),
+            lock_timeout: Duration::from_secs(300),
         }
     }
 }
@@ -94,6 +118,7 @@ pub struct Config {
     pub backfill_date_to: Option<Date>,
     pub redis_url: Option<String>,
     pub health: Option<HealthConfig>,
+    pub refresh_consumer: RefreshConsumerConfig,
 }
 
 impl Config {
@@ -117,6 +142,19 @@ impl Config {
         let redis_url = env::var("REDIS_URL")
             .ok()
             .filter(|value| !value.trim().is_empty());
+
+        let refresh_consumer = RefreshConsumerConfig {
+            batch_size: parse_positive_u64("WORKER_REFRESH_BATCH_SIZE", 10)? as i64,
+            max_attempts: parse_positive_u64("WORKER_REFRESH_MAX_ATTEMPTS", 5)? as i32,
+            retry_delay: Duration::from_secs(parse_positive_u64(
+                "WORKER_REFRESH_RETRY_DELAY_SECONDS",
+                30,
+            )?),
+            lock_timeout: Duration::from_secs(parse_positive_u64(
+                "WORKER_REFRESH_LOCK_TIMEOUT_SECONDS",
+                300,
+            )?),
+        };
 
         let health = match (
             env::var("WORKER_HEALTH_HOST").ok(),
@@ -158,6 +196,7 @@ impl Config {
             backfill_date_to,
             redis_url,
             health,
+            refresh_consumer,
         };
 
         validate_job_specific_config(&config)?;

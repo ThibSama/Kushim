@@ -2,11 +2,70 @@ use crate::domain::portfolio_operation::{
     NewPortfolioOperation, OperationStatus, OperationType, PortfolioOperation,
     PortfolioOperationFilters, UpdatePortfolioOperation,
 };
+use crate::domain::portfolio_refresh_request::PortfolioRefreshRequest;
+use crate::repositories::portfolio_refresh_requests::enqueue_refresh_request_in_tx;
 use serde_json::Value;
-use sqlx::{PgPool, Row};
+use sqlx::{PgPool, Postgres, Row, Transaction};
 use thiserror::Error;
 use time::OffsetDateTime;
 use uuid::Uuid;
+
+/// Shared INSERT column list / RETURNING projection for portfolio_operations.
+const OPERATION_INSERT_SQL: &str = r#"
+INSERT INTO portfolio_operations (
+    id_portfolio,
+    id_asset,
+    id_related_asset,
+    operation_type,
+    operation_status,
+    executed_at,
+    effective_at,
+    quantity,
+    related_quantity,
+    price_minor,
+    gross_amount_minor,
+    fees_minor,
+    taxes_minor,
+    cash_amount_minor,
+    currency,
+    fx_rate_to_portfolio,
+    external_provider,
+    external_reference,
+    id_corrected_operation,
+    notes,
+    metadata
+)
+VALUES (
+    $1, $2, $3, $4, $5, $6, $7,
+    $8::numeric, $9::numeric, $10, $11, $12, $13, $14, $15,
+    $16::numeric, $17, $18, $19, $20, $21
+)
+RETURNING
+    id_portfolio_operation,
+    id_portfolio,
+    id_asset,
+    id_related_asset,
+    operation_type,
+    operation_status,
+    executed_at,
+    effective_at,
+    quantity::text AS quantity,
+    related_quantity::text AS related_quantity,
+    price_minor,
+    gross_amount_minor,
+    fees_minor,
+    taxes_minor,
+    cash_amount_minor,
+    currency,
+    fx_rate_to_portfolio::text AS fx_rate_to_portfolio,
+    external_provider,
+    external_reference,
+    id_corrected_operation,
+    notes,
+    metadata,
+    created_at,
+    updated_at
+"#;
 
 #[derive(Clone)]
 pub struct PortfolioOperationRepository {
@@ -91,40 +150,73 @@ impl PortfolioOperationRepository {
         Self { pool }
     }
 
+    /// Insert an operation and, when it is created directly as `posted`,
+    /// atomically enqueue a portfolio refresh request in the SAME transaction.
+    /// For non-posted creations no refresh request is enqueued and `None` is
+    /// returned. This is the path used by both direct posted creation and
+    /// posted correction creation.
+    pub async fn create_with_optional_refresh(
+        &self,
+        input: &NewPortfolioOperation,
+    ) -> Result<
+        (PortfolioOperation, Option<PortfolioRefreshRequest>),
+        PortfolioOperationRepositoryError,
+    > {
+        let mut tx: Transaction<'_, Postgres> = self.pool.begin().await?;
+
+        let row = bind_operation_insert(sqlx::query(OPERATION_INSERT_SQL), input)
+            .fetch_one(&mut *tx)
+            .await?;
+        let operation = operation_from_row(&row)?;
+
+        let refresh = if operation.operation_status == OperationStatus::Posted {
+            Some(
+                enqueue_refresh_request_in_tx(
+                    &mut tx,
+                    operation.id_portfolio,
+                    Some(operation.id_portfolio_operation),
+                )
+                .await
+                .map_err(map_refresh_error)?,
+            )
+        } else {
+            None
+        };
+
+        tx.commit().await?;
+        Ok((operation, refresh))
+    }
+
     pub async fn create(
         &self,
         input: &NewPortfolioOperation,
     ) -> Result<PortfolioOperation, PortfolioOperationRepositoryError> {
+        let row = bind_operation_insert(sqlx::query(OPERATION_INSERT_SQL), input)
+            .fetch_one(&self.pool)
+            .await?;
+
+        operation_from_row(&row)
+    }
+
+    /// Transition a pending operation to `posted` and atomically enqueue a
+    /// portfolio refresh request in the SAME transaction. Returns `None` when
+    /// the operation does not exist for the given portfolio.
+    pub async fn set_status_posted_with_refresh(
+        &self,
+        id_portfolio_operation: Uuid,
+        id_portfolio: Uuid,
+    ) -> Result<
+        Option<(PortfolioOperation, PortfolioRefreshRequest)>,
+        PortfolioOperationRepositoryError,
+    > {
+        let mut tx: Transaction<'_, Postgres> = self.pool.begin().await?;
+
         let row = sqlx::query(
             r#"
-            INSERT INTO portfolio_operations (
-                id_portfolio,
-                id_asset,
-                id_related_asset,
-                operation_type,
-                operation_status,
-                executed_at,
-                effective_at,
-                quantity,
-                related_quantity,
-                price_minor,
-                gross_amount_minor,
-                fees_minor,
-                taxes_minor,
-                cash_amount_minor,
-                currency,
-                fx_rate_to_portfolio,
-                external_provider,
-                external_reference,
-                id_corrected_operation,
-                notes,
-                metadata
-            )
-            VALUES (
-                $1, $2, $3, $4, $5, $6, $7,
-                $8::numeric, $9::numeric, $10, $11, $12, $13, $14, $15,
-                $16::numeric, $17, $18, $19, $20, $21
-            )
+            UPDATE portfolio_operations
+            SET operation_status = 'posted'
+            WHERE id_portfolio_operation = $1
+              AND id_portfolio = $2
             RETURNING
                 id_portfolio_operation,
                 id_portfolio,
@@ -152,31 +244,27 @@ impl PortfolioOperationRepository {
                 updated_at
             "#,
         )
-        .bind(input.id_portfolio)
-        .bind(input.id_asset)
-        .bind(input.id_related_asset)
-        .bind(input.operation_type.as_str())
-        .bind(input.operation_status.as_str())
-        .bind(input.executed_at)
-        .bind(input.effective_at)
-        .bind(&input.quantity)
-        .bind(&input.related_quantity)
-        .bind(input.price_minor)
-        .bind(input.gross_amount_minor)
-        .bind(input.fees_minor)
-        .bind(input.taxes_minor)
-        .bind(input.cash_amount_minor)
-        .bind(&input.currency)
-        .bind(&input.fx_rate_to_portfolio)
-        .bind(&input.external_provider)
-        .bind(&input.external_reference)
-        .bind(input.id_corrected_operation)
-        .bind(&input.notes)
-        .bind(&input.metadata)
-        .fetch_one(&self.pool)
+        .bind(id_portfolio_operation)
+        .bind(id_portfolio)
+        .fetch_optional(&mut *tx)
         .await?;
 
-        operation_from_row(&row)
+        let Some(row) = row else {
+            tx.rollback().await?;
+            return Ok(None);
+        };
+
+        let operation = operation_from_row(&row)?;
+        let refresh = enqueue_refresh_request_in_tx(
+            &mut tx,
+            operation.id_portfolio,
+            Some(operation.id_portfolio_operation),
+        )
+        .await
+        .map_err(map_refresh_error)?;
+
+        tx.commit().await?;
+        Ok(Some((operation, refresh)))
     }
 
     pub async fn list_by_portfolio(
@@ -575,6 +663,46 @@ impl PortfolioOperationRepository {
         rows.into_iter()
             .map(|row| operation_from_row(&row))
             .collect()
+    }
+}
+
+/// Bind the shared `OPERATION_INSERT_SQL` parameters in declaration order.
+/// Works against any executor because it returns the bound query unevaluated.
+fn bind_operation_insert<'q>(
+    query: sqlx::query::Query<'q, Postgres, sqlx::postgres::PgArguments>,
+    input: &'q NewPortfolioOperation,
+) -> sqlx::query::Query<'q, Postgres, sqlx::postgres::PgArguments> {
+    query
+        .bind(input.id_portfolio)
+        .bind(input.id_asset)
+        .bind(input.id_related_asset)
+        .bind(input.operation_type.as_str())
+        .bind(input.operation_status.as_str())
+        .bind(input.executed_at)
+        .bind(input.effective_at)
+        .bind(&input.quantity)
+        .bind(&input.related_quantity)
+        .bind(input.price_minor)
+        .bind(input.gross_amount_minor)
+        .bind(input.fees_minor)
+        .bind(input.taxes_minor)
+        .bind(input.cash_amount_minor)
+        .bind(&input.currency)
+        .bind(&input.fx_rate_to_portfolio)
+        .bind(&input.external_provider)
+        .bind(&input.external_reference)
+        .bind(input.id_corrected_operation)
+        .bind(&input.notes)
+        .bind(&input.metadata)
+}
+
+fn map_refresh_error(
+    error: crate::repositories::portfolio_refresh_requests::PortfolioRefreshRequestRepositoryError,
+) -> PortfolioOperationRepositoryError {
+    use crate::repositories::portfolio_refresh_requests::PortfolioRefreshRequestRepositoryError as RefreshError;
+    match error {
+        RefreshError::Database(error) => PortfolioOperationRepositoryError::Database(error),
+        RefreshError::InvalidRow => PortfolioOperationRepositoryError::InvalidRow,
     }
 }
 

@@ -108,6 +108,12 @@ pub struct RebuiltPortfolioHolding {
     pub market_value_minor: i64,
     pub pnl_base_minor: i64,
     pub pnl_pct: Option<String>,
+    /// Holdings-only allocation: this holding's share of the sum of all
+    /// holdings' `market_value_minor`, excluding cash. Always in `[0, 100]`
+    /// (matches `chk_rm_portfolio_holdings_weight_pct_range`) and the non-null
+    /// values across a portfolio sum to 100. NULL when the holding is valued
+    /// at zero (no compatible market data and zero invested cost). The
+    /// frontend Dashboard allocation chart uses the same denominator.
     pub weight_pct: Option<String>,
     pub position_status: &'static str,
     pub is_estimated: bool,
@@ -286,6 +292,17 @@ impl PortfolioState {
                 holding_is_estimated = true;
             }
 
+            // Deterministic fallback when no compatible live price is available:
+            // value the holding at the invested base cost from the trusted ledger
+            // and mark it as estimated. Without this, a portfolio whose holdings
+            // are all in a foreign currency or whose market data is missing would
+            // have its holdings silently valued at zero — and a recent buy whose
+            // cash leg was already deducted would make `total_value_minor` go
+            // negative and abort the entire rebuild.
+            if holding_is_estimated && market_value_minor == 0 {
+                market_value_minor = position.invested_base_minor;
+            }
+
             if holding_is_estimated {
                 self.is_estimated = true;
             }
@@ -329,11 +346,16 @@ impl PortfolioState {
             )));
         }
 
+        // Weights are computed against the sum of holding values rather than
+        // total_value, so they always lie in [0, 100] (the storage constraint)
+        // and sum to 100% across holdings even when cash is negative — which
+        // can happen after a foreign-currency buy with no fx_rate is replayed
+        // with the invested-cost fallback.
         for (_, mut holding) in holding_rows {
-            if total_value_minor > 0 && i128::from(holding.market_value_minor) > 0 {
+            if total_market_value_minor > 0 && i128::from(holding.market_value_minor) > 0 {
                 let weight = percentage_scaled(
                     i128::from(holding.market_value_minor),
-                    total_value_minor,
+                    total_market_value_minor,
                     PCT_SCALE,
                 );
                 holding.weight_pct = Some(format_scaled(weight, PCT_SCALE));
@@ -778,6 +800,255 @@ mod tests {
             .finalize(&Default::default(), OffsetDateTime::now_utc())
             .unwrap();
         assert!(rebuilt.holdings.is_empty());
+    }
+
+    #[test]
+    fn missing_market_data_falls_back_to_invested_cost() {
+        let mut state = portfolio_state();
+        let asset = Uuid::new_v4();
+
+        let mut deposit = operation(OperationType::Deposit);
+        deposit.cash_amount_minor = 1_000;
+        state.apply(&deposit).unwrap();
+
+        let mut buy = operation(OperationType::Buy);
+        buy.id_asset = Some(asset);
+        buy.quantity = Some("2.0000000000".into());
+        buy.cash_amount_minor = 800;
+        state.apply(&buy).unwrap();
+
+        let rebuilt = state
+            .finalize(&Default::default(), OffsetDateTime::now_utc())
+            .unwrap();
+
+        assert_eq!(rebuilt.summary.cash_balance_minor, 200);
+        assert_eq!(rebuilt.holdings.len(), 1);
+        assert_eq!(rebuilt.holdings[0].market_value_minor, 800);
+        assert!(rebuilt.holdings[0].is_estimated);
+        assert!(rebuilt.summary.is_estimated);
+        assert_eq!(rebuilt.summary.total_value_minor, 1_000);
+    }
+
+    #[test]
+    fn currency_mismatched_market_data_falls_back_to_invested_cost() {
+        let mut state = portfolio_state();
+        let asset = Uuid::new_v4();
+
+        let mut deposit = operation(OperationType::Deposit);
+        deposit.cash_amount_minor = 1_000;
+        state.apply(&deposit).unwrap();
+
+        let mut buy = operation(OperationType::Buy);
+        buy.id_asset = Some(asset);
+        buy.quantity = Some("2.0000000000".into());
+        buy.cash_amount_minor = 800;
+        state.apply(&buy).unwrap();
+
+        let mut market_data = HashMap::new();
+        market_data.insert(
+            asset,
+            AssetMarketValue {
+                id_asset: asset,
+                price_minor: 50_000,
+                currency: "USD".into(),
+            },
+        );
+
+        let rebuilt = state
+            .finalize(&market_data, OffsetDateTime::now_utc())
+            .unwrap();
+
+        assert!(rebuilt.holdings[0].is_estimated);
+        assert_eq!(rebuilt.holdings[0].market_value_minor, 800);
+        assert!(rebuilt.summary.is_estimated);
+        assert_eq!(rebuilt.summary.total_value_minor, 1_000);
+    }
+
+    #[test]
+    fn replays_user_failing_history_without_negative_total() {
+        // Reproduces portfolio 9c8e1282-…: EUR base, two assets (AAPL/MSFT)
+        // priced in USD by market-data, plus a foreign-currency buy with no
+        // fx_rate. Before the estimated-fallback fix, all holdings were valued
+        // at zero and the cash leg of the EUR buy drove total < 0 → panic.
+        let mut state = portfolio_state();
+        let aapl = Uuid::new_v4();
+        let msft = Uuid::new_v4();
+
+        // buy AAPL: 4 shares, €1000 (matches user)
+        let mut buy_aapl = operation(OperationType::Buy);
+        buy_aapl.id_asset = Some(aapl);
+        buy_aapl.quantity = Some("4.0000000000".into());
+        buy_aapl.cash_amount_minor = 100_000;
+        state.apply(&buy_aapl).unwrap();
+
+        // dividend AAPL: €412
+        let mut dividend = operation(OperationType::Dividend);
+        dividend.id_asset = Some(aapl);
+        dividend.cash_amount_minor = 41_200;
+        state.apply(&dividend).unwrap();
+
+        // buy MSFT: 25 shares, $6200, no fx_rate -> cash leg estimated to 0
+        let mut buy_msft = operation(OperationType::Buy);
+        buy_msft.id_asset = Some(msft);
+        buy_msft.quantity = Some("25.0000000000".into());
+        buy_msft.cash_amount_minor = 620_000;
+        buy_msft.currency = "USD".into();
+        state.apply(&buy_msft).unwrap();
+
+        // sell AAPL: 1 share, €112
+        let mut sell = operation(OperationType::Sell);
+        sell.id_asset = Some(aapl);
+        sell.quantity = Some("1.0000000000".into());
+        sell.cash_amount_minor = 11_200;
+        state.apply(&sell).unwrap();
+
+        // USD-priced market data for both holdings (mismatch vs EUR base).
+        let mut market_data = HashMap::new();
+        market_data.insert(
+            aapl,
+            AssetMarketValue {
+                id_asset: aapl,
+                price_minor: 19_523,
+                currency: "USD".into(),
+            },
+        );
+        market_data.insert(
+            msft,
+            AssetMarketValue {
+                id_asset: msft,
+                price_minor: 42_150,
+                currency: "USD".into(),
+            },
+        );
+
+        let rebuilt = state
+            .finalize(&market_data, OffsetDateTime::now_utc())
+            .unwrap();
+
+        // Cash: -100000 + 41200 + 0 (USD buy, no fx) + 11200 = -47600.
+        assert_eq!(rebuilt.summary.cash_balance_minor, -47_600);
+        // AAPL: 3 shares remaining, invested = 75000 -> estimated market_value.
+        // MSFT: 25 shares, invested = 0 (USD buy zero-converted) -> estimated 0.
+        assert_eq!(rebuilt.holdings.len(), 2);
+        let aapl_holding = rebuilt
+            .holdings
+            .iter()
+            .find(|h| h.id_asset == aapl)
+            .unwrap();
+        assert_eq!(aapl_holding.market_value_minor, 75_000);
+        assert!(aapl_holding.is_estimated);
+        // Total = cash (-47600) + estimated holdings (75000 + 0) = 27400 >= 0.
+        assert_eq!(rebuilt.summary.total_value_minor, 27_400);
+        assert!(rebuilt.summary.is_estimated);
+    }
+
+    #[test]
+    fn weights_sum_to_one_hundred_across_valued_holdings_and_null_for_zero_holdings() {
+        // Holdings-only allocation contract: weight_pct is a holding's share of
+        // the sum of holdings' market_value_minor (excluding cash). The
+        // frontend's Dashboard allocation uses the same denominator
+        // (`sum(market_value_minor)`), and the storage constraint requires
+        // 0 ≤ weight_pct ≤ 100. Zero-valued holdings must surface as NULL.
+        let mut state = portfolio_state();
+        let asset_a = Uuid::new_v4();
+        let asset_b = Uuid::new_v4();
+        let asset_zero = Uuid::new_v4();
+
+        let mut deposit = operation(OperationType::Deposit);
+        deposit.cash_amount_minor = 5_000;
+        state.apply(&deposit).unwrap();
+
+        let mut buy_a = operation(OperationType::Buy);
+        buy_a.id_asset = Some(asset_a);
+        buy_a.quantity = Some("3.0000000000".into());
+        buy_a.cash_amount_minor = 900;
+        state.apply(&buy_a).unwrap();
+
+        let mut buy_b = operation(OperationType::Buy);
+        buy_b.id_asset = Some(asset_b);
+        buy_b.quantity = Some("1.0000000000".into());
+        buy_b.cash_amount_minor = 300;
+        state.apply(&buy_b).unwrap();
+
+        // Foreign-currency buy with no fx_rate → invested 0 → estimated 0 →
+        // weight_pct must be NULL (zero-valued holding).
+        let mut buy_zero = operation(OperationType::Buy);
+        buy_zero.id_asset = Some(asset_zero);
+        buy_zero.quantity = Some("10.0000000000".into());
+        buy_zero.cash_amount_minor = 400;
+        buy_zero.currency = "USD".into();
+        state.apply(&buy_zero).unwrap();
+
+        let mut market_data = HashMap::new();
+        market_data.insert(
+            asset_a,
+            AssetMarketValue {
+                id_asset: asset_a,
+                price_minor: 400,
+                currency: "EUR".into(),
+            },
+        );
+        market_data.insert(
+            asset_b,
+            AssetMarketValue {
+                id_asset: asset_b,
+                price_minor: 700,
+                currency: "EUR".into(),
+            },
+        );
+
+        let rebuilt = state
+            .finalize(&market_data, OffsetDateTime::now_utc())
+            .unwrap();
+
+        assert_eq!(rebuilt.holdings.len(), 3);
+        let weights: Vec<(Uuid, Option<String>)> = rebuilt
+            .holdings
+            .iter()
+            .map(|h| (h.id_asset, h.weight_pct.clone()))
+            .collect();
+
+        let zero_weight = weights
+            .iter()
+            .find(|(id, _)| *id == asset_zero)
+            .expect("zero-valued holding present");
+        assert!(
+            zero_weight.1.is_none(),
+            "zero-valued estimated holding must have NULL weight"
+        );
+
+        // Sum the non-null weights; expect exactly 100.0000 (in PCT_SCALE).
+        let total_scaled: i128 = rebuilt
+            .holdings
+            .iter()
+            .filter_map(|h| {
+                h.weight_pct
+                    .as_ref()
+                    .map(|s| super::parse_scaled(s, 4).unwrap())
+            })
+            .sum();
+        assert_eq!(total_scaled, 100 * 10_000);
+    }
+
+    #[test]
+    fn negative_cash_with_no_holding_fallback_is_still_rejected() {
+        // The fallback must not silently mask a real cash overdraw: when no
+        // holdings exist (e.g. cash-only ledger after a withdrawal beyond
+        // deposits), the negative-total guard must still trip.
+        let mut state = portfolio_state();
+
+        let mut deposit = operation(OperationType::Deposit);
+        deposit.cash_amount_minor = 100;
+        state.apply(&deposit).unwrap();
+
+        let mut withdrawal = operation(OperationType::Withdrawal);
+        withdrawal.cash_amount_minor = 500;
+        state.apply(&withdrawal).unwrap();
+
+        let err = state
+            .finalize(&Default::default(), OffsetDateTime::now_utc())
+            .expect_err("negative-total guard must reject");
+        assert!(err.to_string().contains("negative total_value_minor"));
     }
 
     #[test]

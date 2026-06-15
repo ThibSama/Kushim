@@ -177,6 +177,7 @@ export function Navbar({
             className="flex items-center shrink-0"
             style={{ gap: "clamp(2px, 0.75vw, 4px)" }}>
             <button
+              type="button"
               onClick={onThemeToggle}
               className="rounded-full flex items-center justify-center shrink-0 transition-all duration-200"
               style={{
@@ -198,6 +199,7 @@ export function Navbar({
             </button>
 
             <button
+              type="button"
               className="rounded-full flex items-center justify-center shrink-0 transition-all duration-200"
               style={{
                 color: "var(--text-secondary)",
@@ -303,6 +305,7 @@ export function Navbar({
             </div>
 
             <button
+              type="button"
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
               className="md:hidden rounded-full flex items-center justify-center transition-all duration-200"
               style={{
@@ -348,6 +351,7 @@ export function Navbar({
                 KUSHIM
               </span>
               <button
+                type="button"
                 onClick={() => setMobileMenuOpen(false)}
                 className="rounded-full flex items-center justify-center"
                 style={{

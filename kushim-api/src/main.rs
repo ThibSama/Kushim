@@ -6,6 +6,7 @@ use kushim_api::{
     repositories::{
         assets::AssetRepository, portfolio_operations::PortfolioOperationRepository,
         portfolio_read_models::PortfolioReadModelRepository,
+        portfolio_refresh_requests::PortfolioRefreshRequestRepository,
         portfolio_snapshots::PortfolioSnapshotRepository, portfolios::PortfolioRepository,
     },
     services::{
@@ -45,6 +46,7 @@ async fn main() -> Result<()> {
         AssetRepository::new(db_pool.clone()),
         portfolio_repository,
         PortfolioOperationRepository::new(db_pool.clone()),
+        PortfolioRefreshRequestRepository::new(db_pool.clone()),
     );
     let portfolio_read_model_service = PortfolioReadModelService::new(
         PortfolioRepository::new(db_pool.clone()),

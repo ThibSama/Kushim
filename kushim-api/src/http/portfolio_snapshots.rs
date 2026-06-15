@@ -358,6 +358,7 @@ mod tests {
         repositories::{
             assets::AssetRepository, portfolio_operations::PortfolioOperationRepository,
             portfolio_read_models::PortfolioReadModelRepository,
+            portfolio_refresh_requests::PortfolioRefreshRequestRepository,
             portfolio_snapshots::PortfolioSnapshotRepository, portfolios::PortfolioRepository,
         },
         services::{
@@ -389,12 +390,12 @@ mod tests {
     }
 
     async fn ensure_role(pool: &PgPool, id_role: i16, label: &str) {
+        // Race-safe under cargo's parallel test runner; see assets.rs notes.
         sqlx::query(
             r#"
             INSERT INTO roles (id_role, label)
             VALUES ($1, $2)
-            ON CONFLICT (id_role) DO UPDATE
-            SET label = EXCLUDED.label
+            ON CONFLICT (label) DO NOTHING
             "#,
         )
         .bind(id_role)
@@ -631,6 +632,7 @@ mod tests {
             AssetRepository::new(pool.clone()),
             portfolio_repository.clone(),
             PortfolioOperationRepository::new(pool.clone()),
+            PortfolioRefreshRequestRepository::new(pool.clone()),
         );
         let portfolio_read_model_service = PortfolioReadModelService::new(
             portfolio_repository.clone(),

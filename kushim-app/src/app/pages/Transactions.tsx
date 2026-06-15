@@ -16,6 +16,7 @@ import {
 import { Card } from "../components/Card";
 import { Button } from "../components/Button";
 import { CreateOperationModal } from "../components/CreateOperationModal";
+import { RefreshNotice } from "../components/RefreshNotice";
 import { formatCurrency } from "../../utils/portfolio";
 import { usePortfolioStore } from "../../stores/portfolio";
 import { useOperationsStore } from "../../stores/operations";
@@ -271,6 +272,8 @@ export function Transactions() {
           Ajouter une opération
         </button>
       </div>
+
+      <RefreshNotice />
 
       {operations.length === 0 ? (
         <EmptyOperationsState onCreate={() => setIsModalOpen(true)} />

@@ -29,6 +29,96 @@ Canonical localStorage keys:
 
 Legacy key `kushim_token` is read for migration fallback and removed on next token write.
 
+**Security caveat:** localStorage is an MVP-only choice. It is readable by any
+script that runs in the page (including injected ones) and survives across
+tabs. Production-grade browser session security (HttpOnly cookies + CSRF
+defence, or worker-isolated storage) is not in scope for this MVP. This
+limitation is tracked in `documentation/mvp/deferred-todos.md` (Frontend).
+
+## Session layer (P0.3)
+
+Layering (no circular imports):
+
+1. `src/lib/api/httpClient.ts` — raw `apiRequest`; no interception.
+2. `src/lib/api/tokenStorage.ts` — single source of truth for the localStorage
+   keys. `readAccessToken / readRefreshToken / writeTokens / clearStoredTokens`.
+3. `src/lib/api/sessionGate.ts` — refresh coordinator.
+   - Single-flight: N concurrent 401s share **one** `POST /auth/refresh`.
+   - Session generation: bumped on `setTokens`, `clearSession`. A refresh
+     response that lands on an obsolete generation is discarded — a logout
+     mid-refresh cannot silently recreate a session.
+   - `onTokensRotated(accessToken)` notifies the auth store so
+     `useAuthStore.getState().token` mirrors the rotated value immediately.
+4. `src/lib/api/authenticatedRequest.ts` — wraps `apiRequest` with the
+   **retry-at-most-once** rule:
+   - request once → on 401, await the gate's single-flight refresh → retry
+     **exactly once** with the rotated token.
+   - second 401 → `clearSession("retry_unauthorized")` and the original error
+     propagates. **No infinite loop.**
+5. `src/lib/api/authApi.ts` — public endpoints only (login / signup / handoff /
+   refresh / logout) using raw `apiRequest`. **Never** routed through the
+   authenticated wrapper; the refresh endpoint must not recursively try to
+   refresh itself.
+6. `src/lib/api/businessApi.ts` — every authenticated business endpoint goes
+   through `authenticatedRequest`. The historic `accessToken` parameter is
+   accepted and ignored; the wrapper is the single bearer-token authority.
+
+### Logout race protection
+
+The session gate stamps each refresh with the generation that was current
+when refresh started. If `clearSession("logout")` runs while a refresh is
+in flight:
+
+- the generation is bumped → the late refresh response's
+  `if (generation !== startedAtGeneration) return null` guard discards it;
+- `writeTokens` and `onTokensRotated` are skipped;
+- callers awaiting that refresh receive `null` and propagate the original
+  `ApiRequestError`. The user remains logged out.
+
+Test coverage: `src/lib/api/sessionGate.test.ts` —
+`logout during in-flight refresh prevents late re-authentication` and
+`onTokensRotated does not fire when logout races the refresh response`.
+
+## Refresh-tracking persistence (P0.3)
+
+Active automatic portfolio-refresh requests survive a full-page reload.
+
+- **sessionStorage key:** `kushim_active_portfolio_refresh`
+- **Payload (only):**
+  ```json
+  { "portfolioId": "<uuid>", "refreshRequestId": "<uuid>", "startedAt": 1234567890 }
+  ```
+  Tokens, raw worker errors (`last_error`), and financial values are
+  **never** persisted.
+- **Polling budget:** 40 polls × 1.5 s = **60 s** active wait per cycle.
+- **Recovery TTL:** **15 minutes** — entries older than this are discarded
+  on read, slot cleared. Defined in
+  `src/lib/api/refreshTrackingStorage.ts::REFRESH_TRACKING_RECOVERY_TTL_MS`.
+- **Cleared on:** `completed` / `failed` / 404 ownership / `logout` /
+  TTL expiry.
+- **Kept on:** `timed_out` (frontend stopped waiting; the worker may still
+  finish — one F5 within the TTL resumes polling).
+- **Resume hook:** `routes.tsx::RequireAuth` calls
+  `useRefreshTrackingStore.getState().resumeFromStorage()` once after
+  successful session validation. Idempotent under React Strict Mode (returns
+  early if the store already tracks the persisted ID).
+
+## Test suite
+
+```
+cd kushim-app
+npm run test
+```
+
+Vitest (jsdom) covers the session/refresh critical surface:
+
+| File | Tests |
+|---|---|
+| `src/lib/api/sessionGate.test.ts` | 13 — single-flight, retry, logout race, header preservation, `onTokensRotated`. |
+| `src/lib/api/refreshTrackingStorage.test.ts` | 6 — serialization, TTL boundary, malformed payload discard. |
+| `src/stores/refreshTracking.test.ts` | 11 — track persists IDs, completed clears + reloads once, failed clears safely, 404 ownership clears, reset cancels timers, resume restarts + idempotent, stale-generation discard, expired TTL no-op, `timed_out` retains. |
+| `src/stores/auth.test.ts` | 2 — Zustand token mirrors rotated value after refresh; failed refresh clears Zustand token. |
+
 ## Authentication flow
 
 1. User logs in via `kushim-auth/front` at `VITE_AUTH_URL`.
@@ -91,6 +181,27 @@ Falls back to the first portfolio if the persisted ID no longer exists.
 4. Validation errors from the backend are displayed in the modal.
 
 **Logout:** Portfolio state is reset when the user logs out.
+
+## Automatic portfolio refresh (P0)
+
+The normal `CreateOperationModal` flow creates a **posted** operation
+(`operation_status: "posted"`). The API write returns a `refresh_request`
+alongside the operation. The frontend then tracks the asynchronous worker
+refresh via `src/stores/refreshTracking.ts`:
+
+- bounded, non-overlapping polling of
+  `GET /v1/portfolios/{id}/refresh-requests/{id}` (generation guard ignores
+  stale responses from a previous request/portfolio);
+- a compact non-blocking notice (`src/app/components/RefreshNotice.tsx`) shows
+  `pending` / `processing` / `completed` / `failed` / `timed_out` on the
+  Dashboard and Transactions pages, following the glassmorphism style;
+- on `completed`, summary / holdings / snapshots / operations reload via
+  `portfolioReadModels.reloadAll` (which preserves `lastHoldingsQuery` /
+  `lastSnapshotsQuery`) and `operations.reloadOperations`, with no full page
+  reload and no placeholder flashing;
+- a failed refresh is never presented as a failed financial operation (the
+  posted operation is recorded regardless); raw worker errors are never shown;
+- logout clears refresh tracking and its timers.
 
 ## Operations integration (Pass 3)
 

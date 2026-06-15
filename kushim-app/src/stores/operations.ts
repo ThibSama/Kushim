@@ -2,6 +2,7 @@ import { create } from "zustand";
 import {
   type PortfolioOperation,
   type CreateOperationPayload,
+  type CreateOperationResult,
   type ReferenceItem,
   listOperations,
   createOperation as apiCreateOperation,
@@ -24,7 +25,8 @@ type OperationsState = {
   createOperation: (
     portfolioId: string,
     payload: CreateOperationPayload,
-  ) => Promise<PortfolioOperation>;
+  ) => Promise<CreateOperationResult>;
+  reloadOperations: (portfolioId: string) => Promise<void>;
   loadReferenceData: () => Promise<void>;
   reset: () => void;
 };
@@ -62,9 +64,27 @@ export const useOperationsStore = create<OperationsState>((set, get) => ({
     const token = useAuthStore.getState().token;
     if (!token) throw new Error("no_session");
 
-    const operation = await apiCreateOperation(token, portfolioId, payload);
-    set({ operations: [operation, ...get().operations] });
-    return operation;
+    const result = await apiCreateOperation(token, portfolioId, payload);
+    // The created operation appears immediately in the list with its real
+    // status (posted for the normal flow). The asynchronous portfolio refresh
+    // is tracked separately via the refresh store; we do NOT fake a refresh.
+    set({ operations: [result.operation, ...get().operations] });
+    return result;
+  },
+
+  // Quiet reload (no loading flicker) used after an automatic refresh completes.
+  reloadOperations: async (portfolioId) => {
+    const token = useAuthStore.getState().token;
+    if (!token) return;
+    try {
+      const operations = await listOperations(token, portfolioId);
+      set({ operations, status: "success" });
+      hydrateAssetDisplayCache(operations, token, () => {
+        set({ operations: [...get().operations] });
+      });
+    } catch {
+      // Non-blocking: keep the previously displayed operations on failure.
+    }
   },
 
   loadReferenceData: async () => {

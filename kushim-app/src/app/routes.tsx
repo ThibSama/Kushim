@@ -10,6 +10,7 @@ import {
 import { getWebsiteLoginUrl, useAuthStore } from "../stores/auth";
 import { exchangeHandoffCode } from "../lib/api/authApi";
 import { getBusinessMe } from "../lib/api/businessApi";
+import { useRefreshTrackingStore } from "../stores/refreshTracking";
 import { Root } from "./Root";
 import { Dashboard } from "./pages/Dashboard";
 import { Assets } from "./pages/Assets";
@@ -72,6 +73,11 @@ function RequireAuth() {
           window.location.href = getWebsiteLoginUrl();
         } else {
           smokeTestBusinessApi();
+          // Reload-recovery hook: if a previous tab session had an active
+          // portfolio refresh request when it was reloaded, pick the polling
+          // back up without creating a new request. Idempotent under Strict
+          // Mode and a no-op when nothing is persisted.
+          useRefreshTrackingStore.getState().resumeFromStorage();
         }
       });
     }

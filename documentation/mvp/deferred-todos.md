@@ -67,6 +67,18 @@ Use these labels:
 
 ## Worker
 
+### Resolved
+
+- automatic portfolio refresh after an operation is posted (P0): `kushim-api`
+  enqueues a durable `portfolio_refresh_requests` row in the same transaction
+  that posts the operation, and `kushim-worker` runs
+  `process_portfolio_refresh_requests` in loop mode to rebuild current read
+  models + the current daily snapshot automatically. The manual
+  `rebuild_current_read_models` / `generate_daily_snapshots` invocation after an
+  operation is no longer required (validated end-to-end via
+  `scripts/demo/backend-e2e.ps1`). Uses PostgreSQL `FOR UPDATE SKIP LOCKED` as a
+  durable queue — no Redis/queue infrastructure.
+
 ### Deferred
 
 - multi-portfolio backfill orchestration
@@ -76,12 +88,14 @@ Use these labels:
 - production scheduler
 - partial failure strategy for broader batch jobs
 - queue-based orchestration if scaling later requires it
+- **cross-currency operation contribution** (`kushim-worker/src/domain/portfolio_state.rs::convert_amount_to_base`): a posted operation whose `currency` differs from the portfolio's `base_currency` and that carries no `fx_rate_to_portfolio` currently converts to zero and marks the portfolio as estimated. Consequence: the cash leg of a foreign-currency buy/sell/dividend is silently zero, the invested base cost for that asset is zero, and after the P0.2 estimated-holding fallback the holding's `market_value_minor` also stays at zero — the position is materially undervalued in summary, holdings and snapshots. Must be addressed by either (a) rejecting such operations at API write time with a safe explicit 422 carrying a documented `error_code` (e.g. `unsupported_cross_currency`), or (b) an FX provider that supplies `fx_rate_to_portfolio` before the operation is posted (and a documented restatement policy when historical FX rates land later). Until then, the negative-total rebuild guard remains the only line of defence against accidentally posted foreign-currency operations.
 
 ### Known limitation
 
 - backfill V1 is mono-portfolio only
 - backfill V1 is range-limited to 366 days
 - backfill V1 rejects loop mode
+- **`rm_portfolio_holdings.weight_pct` (and the daily snapshot equivalent) are intentionally holdings-only allocation**: a holding's share of `sum(market_value_minor)` across the portfolio's open holdings, excluding cash. This matches the frontend Dashboard allocation chart denominator (`kushim-app/src/app/pages/Dashboard.tsx:385-401`), satisfies the DDL `CHECK (weight_pct BETWEEN 0 AND 100)` even when cash is negative, and makes the non-null weights sum to 100. Zero-valued holdings (foreign-currency buys with no fx) surface `weight_pct = NULL`. If a future product decision requires net-portfolio weighting (including cash), revise the rebuild calculation, the DDL constraint, the API DTO docs and the frontend Dashboard allocation simultaneously.
 
 ### Needs product/architecture decision
 
@@ -160,6 +174,8 @@ Use these labels:
 - the swap quick action has been removed; no fake conversion flow remains
 - the Settings page only exposes profile information and logout — preference, password and delete forms are no longer shown as if they were near-functional
 - asset display in Transactions table falls back to truncated UUID after page refresh (in-memory cache only)
+- **browser token storage uses `localStorage`** (`kushim_access_token`, `kushim_refresh_token`). It is readable by any script that runs in the page and survives cross-tab. The P0.3 session layer (`tokenStorage.ts` / `sessionGate.ts` / `authenticatedRequest.ts`) centralizes the access pattern (single source of truth, single-flight refresh, retry-at-most-once, logout race protection) but does **not** upgrade the storage primitive. Production-grade browser session security (HttpOnly cookie + CSRF defence, or a service-worker-isolated token vault) requires an auth-API protocol change (cookie issuance, OPTIONS/CORS for credentials, CSRF token endpoint) and is out of scope for the MVP.
+- **Refresh tracking sessionStorage** (`kushim_active_portfolio_refresh`) persists `portfolioId` + `refreshRequestId` + `startedAt` only — no token, no `last_error`, no financial values. Recovery TTL: 15 minutes. Frontend polling budget: 60 s per cycle. Both constants live in `kushim-app/src/lib/api/refreshTrackingStorage.ts` and `kushim-app/src/stores/refreshTracking.ts`.
 
 ## Infra / DevOps
 

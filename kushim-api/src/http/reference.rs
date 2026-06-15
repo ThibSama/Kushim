@@ -137,6 +137,7 @@ mod tests {
         repositories::{
             assets::AssetRepository, portfolio_operations::PortfolioOperationRepository,
             portfolio_read_models::PortfolioReadModelRepository,
+            portfolio_refresh_requests::PortfolioRefreshRequestRepository,
             portfolio_snapshots::PortfolioSnapshotRepository, portfolios::PortfolioRepository,
         },
         services::{
@@ -168,6 +169,7 @@ mod tests {
             AssetRepository::new(db_pool.clone()),
             portfolio_repository.clone(),
             PortfolioOperationRepository::new(db_pool.clone()),
+            PortfolioRefreshRequestRepository::new(db_pool.clone()),
         );
         let portfolio_read_model_service = PortfolioReadModelService::new(
             portfolio_repository.clone(),

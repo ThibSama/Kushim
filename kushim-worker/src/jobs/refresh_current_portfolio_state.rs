@@ -22,6 +22,15 @@ impl RefreshCurrentPortfolioStateJob {
             snapshot_job: GenerateDailySnapshotsJob::from_config(config),
         }
     }
+
+    /// Build a composite refresh scoped to a single portfolio and snapshot
+    /// date. Reuses the existing rebuild + snapshot jobs unchanged.
+    pub fn for_portfolio(id_portfolio: uuid::Uuid, snapshot_date: time::Date) -> Self {
+        Self {
+            rebuild_job: RebuildCurrentReadModelsJob::for_portfolio(id_portfolio),
+            snapshot_job: GenerateDailySnapshotsJob::for_portfolio_on(id_portfolio, snapshot_date),
+        }
+    }
 }
 
 async fn run_composite_steps(
@@ -155,11 +164,13 @@ mod tests {
     }
 
     async fn ensure_role(pool: &PgPool) {
+        // Race-safe under cargo's parallel test runner; see
+        // `rebuild_current_read_models::ensure_role` notes.
         sqlx::query(
             r#"
             INSERT INTO roles (id_role, label)
             VALUES (1, 'user')
-            ON CONFLICT (id_role) DO UPDATE SET label = EXCLUDED.label
+            ON CONFLICT (label) DO NOTHING
             "#,
         )
         .execute(pool)
@@ -373,6 +384,7 @@ mod tests {
             backfill_date_to: None,
             redis_url: None,
             health: None,
+            refresh_consumer: crate::config::RefreshConsumerConfig::default(),
         };
 
         let job = RefreshCurrentPortfolioStateJob::from_config(&config);
@@ -496,6 +508,7 @@ mod tests {
             backfill_date_to: None,
             redis_url: None,
             health: None,
+            refresh_consumer: crate::config::RefreshConsumerConfig::default(),
         });
 
         job.run(&test_state(pool.clone()))
@@ -626,6 +639,7 @@ mod tests {
             backfill_date_to: None,
             redis_url: None,
             health: None,
+            refresh_consumer: crate::config::RefreshConsumerConfig::default(),
         });
 
         job.run(&test_state(pool.clone()))

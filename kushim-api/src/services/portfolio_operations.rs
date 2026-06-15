@@ -4,9 +4,13 @@ use crate::{
         NewPortfolioOperation, OperationStatus, OperationType, PortfolioOperation,
         PortfolioOperationFilters, UpdatePortfolioOperation,
     },
+    domain::portfolio_refresh_request::PortfolioRefreshRequest,
     repositories::{
         assets::{AssetRepository, AssetRepositoryError},
         portfolio_operations::{PortfolioOperationRepository, PortfolioOperationRepositoryError},
+        portfolio_refresh_requests::{
+            PortfolioRefreshRequestRepository, PortfolioRefreshRequestRepositoryError,
+        },
         portfolios::{PortfolioRepository, PortfolioRepositoryError},
     },
 };
@@ -22,6 +26,17 @@ pub struct PortfolioOperationService {
     asset_repository: AssetRepository,
     portfolio_repository: PortfolioRepository,
     portfolio_operation_repository: PortfolioOperationRepository,
+    portfolio_refresh_request_repository: PortfolioRefreshRequestRepository,
+}
+
+/// Result of a write that may have enqueued a portfolio refresh request.
+/// `refresh_request` is `Some` exactly when the write produced a `posted`
+/// operation (direct posted creation, posting a pending operation, or posted
+/// correction creation). Pending creations carry `None`.
+#[derive(Debug, Clone)]
+pub struct OperationWriteOutcome {
+    pub operation: PortfolioOperation,
+    pub refresh_request: Option<PortfolioRefreshRequest>,
 }
 
 #[derive(Debug, Clone)]
@@ -193,18 +208,20 @@ impl PortfolioOperationService {
         asset_repository: AssetRepository,
         portfolio_repository: PortfolioRepository,
         portfolio_operation_repository: PortfolioOperationRepository,
+        portfolio_refresh_request_repository: PortfolioRefreshRequestRepository,
     ) -> Self {
         Self {
             asset_repository,
             portfolio_repository,
             portfolio_operation_repository,
+            portfolio_refresh_request_repository,
         }
     }
 
     pub async fn create_operation(
         &self,
         input: CreatePortfolioOperationInput,
-    ) -> Result<PortfolioOperation, PortfolioOperationServiceError> {
+    ) -> Result<OperationWriteOutcome, PortfolioOperationServiceError> {
         self.assert_owned_portfolio(input.id_portfolio, input.id_user)
             .await?;
 
@@ -243,10 +260,16 @@ impl PortfolioOperationService {
         validate_operation_payload(&new_operation)?;
         self.validate_asset_references(&new_operation).await?;
 
-        self.portfolio_operation_repository
-            .create(&new_operation)
+        let (operation, refresh_request) = self
+            .portfolio_operation_repository
+            .create_with_optional_refresh(&new_operation)
             .await
-            .map_err(map_operation_repository_error)
+            .map_err(map_operation_repository_error)?;
+
+        Ok(OperationWriteOutcome {
+            operation,
+            refresh_request,
+        })
     }
 
     pub async fn list_operations(
@@ -465,7 +488,7 @@ impl PortfolioOperationService {
     pub async fn create_correction(
         &self,
         input: CreatePortfolioOperationCorrectionInput,
-    ) -> Result<PortfolioOperation, PortfolioOperationServiceError> {
+    ) -> Result<OperationWriteOutcome, PortfolioOperationServiceError> {
         self.assert_owned_portfolio(input.id_portfolio, input.id_user)
             .await?;
 
@@ -534,16 +557,22 @@ impl PortfolioOperationService {
         validate_operation_payload(&new_operation)?;
         self.validate_asset_references(&new_operation).await?;
 
-        self.portfolio_operation_repository
-            .create(&new_operation)
+        let (operation, refresh_request) = self
+            .portfolio_operation_repository
+            .create_with_optional_refresh(&new_operation)
             .await
-            .map_err(map_operation_repository_error)
+            .map_err(map_operation_repository_error)?;
+
+        Ok(OperationWriteOutcome {
+            operation,
+            refresh_request,
+        })
     }
 
     pub async fn post_operation(
         &self,
         input: PostPortfolioOperationInput,
-    ) -> Result<PortfolioOperation, PortfolioOperationServiceError> {
+    ) -> Result<OperationWriteOutcome, PortfolioOperationServiceError> {
         self.assert_owned_portfolio(input.id_portfolio, input.id_user)
             .await?;
 
@@ -580,17 +609,39 @@ impl PortfolioOperationService {
         validate_operation_payload(&candidate)?;
         self.validate_asset_references(&candidate).await?;
 
-        self.portfolio_operation_repository
-            .set_status(
-                input.id_portfolio_operation,
-                input.id_portfolio,
-                OperationStatus::Posted,
-            )
+        let (operation, refresh_request) = self
+            .portfolio_operation_repository
+            .set_status_posted_with_refresh(input.id_portfolio_operation, input.id_portfolio)
             .await
             .map_err(map_operation_repository_error)?
             .ok_or(PortfolioOperationServiceError::NotFound {
                 code: "operation_not_found",
                 message: "portfolio operation was not found",
+            })?;
+
+        Ok(OperationWriteOutcome {
+            operation,
+            refresh_request: Some(refresh_request),
+        })
+    }
+
+    /// Look up a refresh request for the authenticated user, enforcing both
+    /// portfolio ownership and that the request belongs to the portfolio.
+    pub async fn get_refresh_request(
+        &self,
+        id_user: Uuid,
+        id_portfolio: Uuid,
+        id_refresh_request: Uuid,
+    ) -> Result<PortfolioRefreshRequest, PortfolioOperationServiceError> {
+        self.assert_owned_portfolio(id_portfolio, id_user).await?;
+
+        self.portfolio_refresh_request_repository
+            .find_by_id_and_portfolio(id_refresh_request, id_portfolio)
+            .await
+            .map_err(map_refresh_repository_error)?
+            .ok_or(PortfolioOperationServiceError::NotFound {
+                code: "refresh_request_not_found",
+                message: "portfolio refresh request was not found",
             })
     }
 
@@ -1323,6 +1374,21 @@ fn map_portfolio_repository_error(
         }
         PortfolioRepositoryError::InvalidRow => {
             tracing::error!("portfolio repository returned an invalid row");
+            PortfolioOperationServiceError::Internal
+        }
+    }
+}
+
+fn map_refresh_repository_error(
+    error: PortfolioRefreshRequestRepositoryError,
+) -> PortfolioOperationServiceError {
+    match error {
+        PortfolioRefreshRequestRepositoryError::Database(error) => {
+            tracing::error!(error = %error, "portfolio refresh request repository database error");
+            PortfolioOperationServiceError::Internal
+        }
+        PortfolioRefreshRequestRepositoryError::InvalidRow => {
+            tracing::error!("portfolio refresh request repository returned an invalid row");
             PortfolioOperationServiceError::Internal
         }
     }

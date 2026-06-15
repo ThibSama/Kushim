@@ -100,13 +100,14 @@ $script:Warnings  = [System.Collections.Generic.List[string]]::new()
 $script:Passed    = [System.Collections.Generic.List[string]]::new()
 $script:Failed    = [System.Collections.Generic.List[string]]::new()
 $script:DemoState = @{
-    Username      = ""
-    UserId        = ""
-    PortfolioId   = ""
-    AssetId       = ""
-    DepositOpId   = ""
-    BuyOpId       = ""
-    AccessToken   = ""
+    Username         = ""
+    UserId           = ""
+    PortfolioId      = ""
+    AssetId          = ""
+    DepositOpId      = ""
+    BuyOpId          = ""
+    AccessToken      = ""
+    RefreshRequestId = ""
 }
 
 # Compute backfill end date: one day before snapshot date if not provided
@@ -465,6 +466,98 @@ $script:DemoState.AssetId = $rows[0].Trim()
 Write-Success "Canonical AAPL resolved: id=$($script:DemoState.AssetId) (reused, not created)"
 
 # ---------------------------------------------------------------------------
+# Docker job helper (defined before first use)
+# ---------------------------------------------------------------------------
+function Invoke-DockerJob {
+    param(
+        [string]$ServiceName,
+        [string]$JobDescription,
+        [string[]]$EnvArgs
+    )
+
+    Write-Info "Running: $JobDescription"
+
+    $dockerArgs = @("compose", "run", "--rm")
+    foreach ($envArg in $EnvArgs) {
+        $dockerArgs += "-e"
+        $dockerArgs += $envArg
+    }
+    $dockerArgs += $ServiceName
+
+    Write-Info "Command: docker $($dockerArgs -join ' ')"
+
+    $prevEAP = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $stderrFile = [System.IO.Path]::GetTempFileName()
+    try {
+        $stdoutLines = & docker @dockerArgs 2>$stderrFile
+        $exitCode = $LASTEXITCODE
+        $stderrContent = Get-Content $stderrFile -Raw -ErrorAction SilentlyContinue
+    } finally {
+        Remove-Item $stderrFile -Force -ErrorAction SilentlyContinue
+        $ErrorActionPreference = $prevEAP
+    }
+
+    if ($VerboseJson) {
+        if ($stdoutLines) {
+            $stdoutLines | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
+        }
+        if ($stderrContent) {
+            $stderrContent -split "`n" | ForEach-Object {
+                $line = $_.Trim()
+                if ($line) { Write-Host "  [stderr] $line" -ForegroundColor DarkGray }
+            }
+        }
+    }
+
+    if ($exitCode -ne 0) {
+        Write-Err "Docker job failed with exit code $exitCode"
+        if ($stdoutLines) { $stdoutLines | ForEach-Object { Write-Host "  $_" -ForegroundColor Red } }
+        if ($stderrContent) {
+            $stderrContent -split "`n" | ForEach-Object {
+                $line = $_.Trim()
+                if ($line) { Write-Host "  [stderr] $line" -ForegroundColor Red }
+            }
+        }
+        throw "$JobDescription failed (exit code $exitCode)"
+    }
+
+    Write-Success "$JobDescription completed"
+}
+
+# ---------------------------------------------------------------------------
+# Step E2: Prepare market data BEFORE posting operations
+#
+# Current market data must exist before the automatic refresh runs, so the
+# worker prices holdings deterministically (no race). This is legitimate
+# market-data preparation and is intentionally kept. It is NOT the manual
+# portfolio rebuild/snapshot orchestration (which has been removed).
+# ---------------------------------------------------------------------------
+if (-not $SkipDockerJobs) {
+    Write-Step "E2. Market-data: refresh current + fill history (mock provider)"
+    try {
+        Invoke-DockerJob -ServiceName "kushim-market-data" -JobDescription "refresh_current_market_data" -EnvArgs @(
+            "MARKET_DATA_MODE=once",
+            "MARKET_DATA_JOB=refresh_current_market_data",
+            "MARKET_DATA_PROVIDER=mock"
+        )
+        Invoke-DockerJob -ServiceName "kushim-market-data" -JobDescription "fill_missing_price_history_cache" -EnvArgs @(
+            "MARKET_DATA_MODE=once",
+            "MARKET_DATA_JOB=fill_missing_price_history_cache",
+            "MARKET_DATA_PROVIDER=mock",
+            "MARKET_DATA_HISTORY_DATE_FROM=$HistoryDateFrom",
+            "MARKET_DATA_HISTORY_DATE_TO=$HistoryDateTo"
+        )
+    } catch {
+        Write-Err "$_"
+        exit 1
+    }
+} else {
+    Write-Step "E2. Market-data preparation SKIPPED (-SkipDockerJobs)"
+    $script:Warnings.Add("Market-data preparation skipped; holdings may be estimated.")
+}
+
+# ---------------------------------------------------------------------------
 # Step F: Create and post deposit
 # ---------------------------------------------------------------------------
 Write-Step "F. Create and post deposit (10,000.00 USD)"
@@ -524,139 +617,70 @@ try {
 try {
     $postResponse = Invoke-ApiPostNoBody -Url "$BaseUrlApi/v1/portfolios/$($script:DemoState.PortfolioId)/operations/$($script:DemoState.BuyOpId)/post" -Headers (Get-AuthHeaders)
     Write-Success "Buy posted: status=$($postResponse.operation.operation_status)"
+    if ($postResponse.refresh_request -and $postResponse.refresh_request.id_portfolio_refresh_request) {
+        $script:DemoState.RefreshRequestId = $postResponse.refresh_request.id_portfolio_refresh_request
+        Write-Success "Refresh request enqueued by API: id=$($script:DemoState.RefreshRequestId) (status=$($postResponse.refresh_request.status))"
+    } else {
+        Write-Err "Posting the buy did not return a refresh_request - automatic refresh contract violated."
+        exit 1
+    }
 } catch {
     Write-Err "Buy post failed: $_"
     exit 1
 }
 
 # ---------------------------------------------------------------------------
-# Docker job helper
-# ---------------------------------------------------------------------------
-function Invoke-DockerJob {
-    param(
-        [string]$ServiceName,
-        [string]$JobDescription,
-        [string[]]$EnvArgs
-    )
-
-    Write-Info "Running: $JobDescription"
-
-    $dockerArgs = @("compose", "run", "--rm")
-    foreach ($envArg in $EnvArgs) {
-        $dockerArgs += "-e"
-        $dockerArgs += $envArg
-    }
-    $dockerArgs += $ServiceName
-
-    Write-Info "Command: docker $($dockerArgs -join ' ')"
-
-    # Run docker compose run and capture output.
-    # Temporarily relax ErrorActionPreference because docker writes informational
-    # messages (dependency status) to stderr, which PowerShell 5.1 treats as errors.
-    $prevEAP = $ErrorActionPreference
-    $ErrorActionPreference = "Continue"
-    $stderrFile = [System.IO.Path]::GetTempFileName()
-    try {
-        $stdoutLines = & docker @dockerArgs 2>$stderrFile
-        $exitCode = $LASTEXITCODE
-        $stderrContent = Get-Content $stderrFile -Raw -ErrorAction SilentlyContinue
-    } finally {
-        Remove-Item $stderrFile -Force -ErrorAction SilentlyContinue
-        $ErrorActionPreference = $prevEAP
-    }
-
-    if ($VerboseJson) {
-        if ($stdoutLines) {
-            $stdoutLines | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
-        }
-        if ($stderrContent) {
-            $stderrContent -split "`n" | ForEach-Object {
-                $line = $_.Trim()
-                if ($line) { Write-Host "  [stderr] $line" -ForegroundColor DarkGray }
-            }
-        }
-    }
-
-    if ($exitCode -ne 0) {
-        Write-Err "Docker job failed with exit code $exitCode"
-        if ($stdoutLines) { $stdoutLines | ForEach-Object { Write-Host "  $_" -ForegroundColor Red } }
-        if ($stderrContent) {
-            $stderrContent -split "`n" | ForEach-Object {
-                $line = $_.Trim()
-                if ($line) { Write-Host "  [stderr] $line" -ForegroundColor Red }
-            }
-        }
-        throw "$JobDescription failed (exit code $exitCode)"
-    }
-
-    Write-Success "$JobDescription completed"
-}
-
-# ---------------------------------------------------------------------------
-# Steps H-L: Docker jobs (market-data and worker)
+# Step H: Automatic refresh — poll the durable refresh request until completed
+#
+# The kushim-worker service runs in loop mode with
+# WORKER_JOB=process_portfolio_refresh_requests and consumes the request the
+# API enqueued atomically when the operation was posted. There is NO manual
+# rebuild_current_read_models or generate_daily_snapshots invocation here.
 # ---------------------------------------------------------------------------
 if ($SkipDockerJobs) {
-    Write-Step "H-L. Docker jobs SKIPPED (-SkipDockerJobs)"
-    $script:Warnings.Add("Docker jobs were skipped. Read models and snapshots may not be available.")
+    Write-Step "H. Automatic refresh polling SKIPPED (-SkipDockerJobs)"
+    $script:Warnings.Add("Automatic refresh polling skipped; read models/snapshots may not be available.")
 } else {
+    Write-Step "H. Automatic refresh: poll refresh request until completed"
 
-    # Step H: Refresh current market data
-    Write-Step "H. Market-data: refresh current market data"
-    try {
-        Invoke-DockerJob -ServiceName "kushim-market-data" -JobDescription "refresh_current_market_data" -EnvArgs @(
-            "MARKET_DATA_MODE=once",
-            "MARKET_DATA_JOB=refresh_current_market_data",
-            "MARKET_DATA_PROVIDER=mock"
-        )
-    } catch {
-        Write-Err "$_"
+    $refreshId = $script:DemoState.RefreshRequestId
+    $deadline = (Get-Date).AddSeconds(90)
+    $lastStatus = "unknown"
+    $refreshCompleted = $false
+
+    while ((Get-Date) -lt $deadline) {
+        try {
+            $statusResponse = Invoke-ApiGet -Url "$BaseUrlApi/v1/portfolios/$($script:DemoState.PortfolioId)/refresh-requests/$refreshId" -Headers (Get-AuthHeaders)
+            $lastStatus = $statusResponse.refresh_request.status
+        } catch {
+            $lastStatus = "poll_error"
+        }
+
+        Write-Info "refresh request status: $lastStatus"
+
+        if ($lastStatus -eq "completed") {
+            $refreshCompleted = $true
+            break
+        }
+        if ($lastStatus -eq "failed") {
+            Write-Err "Refresh request reached terminal 'failed' status (error_code=$($statusResponse.refresh_request.error_code))."
+            exit 1
+        }
+
+        Start-Sleep -Seconds 3
+    }
+
+    if (-not $refreshCompleted) {
+        Write-Err "Refresh request did not complete within the timeout. Last observed status: $lastStatus"
         exit 1
     }
 
-    # Step I: Fill missing price history cache
-    Write-Step "I. Market-data: fill missing price history cache"
-    try {
-        Invoke-DockerJob -ServiceName "kushim-market-data" -JobDescription "fill_missing_price_history_cache" -EnvArgs @(
-            "MARKET_DATA_MODE=once",
-            "MARKET_DATA_JOB=fill_missing_price_history_cache",
-            "MARKET_DATA_PROVIDER=mock",
-            "MARKET_DATA_HISTORY_DATE_FROM=$HistoryDateFrom",
-            "MARKET_DATA_HISTORY_DATE_TO=$HistoryDateTo"
-        )
-    } catch {
-        Write-Err "$_"
-        exit 1
-    }
+    Write-Success "Automatic refresh completed (no manual rebuild/snapshot invocation was used)"
 
-    # Step J: Rebuild current read models
-    Write-Step "J. Worker: rebuild current read models"
-    try {
-        Invoke-DockerJob -ServiceName "kushim-worker" -JobDescription "rebuild_current_read_models" -EnvArgs @(
-            "WORKER_MODE=once",
-            "WORKER_JOB=rebuild_current_read_models",
-            "WORKER_TARGET_PORTFOLIO_ID=$($script:DemoState.PortfolioId)"
-        )
-    } catch {
-        Write-Err "$_"
-        exit 1
-    }
-
-    # Step K: Generate daily snapshot
-    Write-Step "K. Worker: generate daily snapshot ($SnapshotDate)"
-    try {
-        Invoke-DockerJob -ServiceName "kushim-worker" -JobDescription "generate_daily_snapshots" -EnvArgs @(
-            "WORKER_MODE=once",
-            "WORKER_JOB=generate_daily_snapshots",
-            "WORKER_TARGET_PORTFOLIO_ID=$($script:DemoState.PortfolioId)",
-            "WORKER_SNAPSHOT_DATE=$SnapshotDate"
-        )
-    } catch {
-        Write-Err "$_"
-        exit 1
-    }
-
-    # Step L: Backfill daily snapshots
-    Write-Step "L. Worker: backfill daily snapshots ($HistoryDateFrom to $BackfillDateTo)"
+    # Optional: historical backfill remains a separate worker capability and is
+    # NOT part of the per-operation automatic refresh. Kept to demonstrate
+    # historical snapshots.
+    Write-Step "I. Worker: backfill historical daily snapshots ($HistoryDateFrom to $BackfillDateTo)"
     try {
         Invoke-DockerJob -ServiceName "kushim-worker" -JobDescription "backfill_daily_snapshots" -EnvArgs @(
             "WORKER_MODE=once",
@@ -768,10 +792,13 @@ try {
     $script:Failed.Add("snapshots/daily endpoint")
 }
 
-# --- M.4: Snapshot holdings for snapshot date ---
-Write-Info "Verifying: GET /v1/portfolios/$portfolioId/snapshots/daily/$SnapshotDate/holdings"
+# --- M.4: Snapshot holdings for the automatic-refresh snapshot date (today) ---
+# The automatic refresh generates the CURRENT daily snapshot, dated today (UTC),
+# not the historical $SnapshotDate (which is covered by backfill).
+$AutoSnapshotDate = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd")
+Write-Info "Verifying: GET /v1/portfolios/$portfolioId/snapshots/daily/$AutoSnapshotDate/holdings"
 try {
-    $snapshotHoldings = Invoke-ApiGet -Url "$BaseUrlApi/v1/portfolios/$portfolioId/snapshots/daily/$SnapshotDate/holdings" -Headers $authHeaders
+    $snapshotHoldings = Invoke-ApiGet -Url "$BaseUrlApi/v1/portfolios/$portfolioId/snapshots/daily/$AutoSnapshotDate/holdings" -Headers $authHeaders
     if ($VerboseJson) { Write-Host ($snapshotHoldings | ConvertTo-Json -Depth 10) -ForegroundColor DarkGray }
 
     Assert-True "snapshot_holdings.data_available = true" ($snapshotHoldings.data_available -eq $true) "got: $($snapshotHoldings.data_available)"
@@ -781,7 +808,7 @@ try {
     }
 } catch {
     Write-Err "Snapshot holdings verification failed: $_"
-    $script:Failed.Add("snapshots/daily/$SnapshotDate/holdings endpoint")
+    $script:Failed.Add("snapshots/daily/$AutoSnapshotDate/holdings endpoint")
 }
 
 # --- M.5: Operations list ---

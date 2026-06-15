@@ -20,6 +20,21 @@ The full chain proves:
 - historical snapshot backfill from operations and price history cache;
 - API consumption of derived data (summary, holdings, snapshots).
 
+### Automatic refresh (P0)
+
+`scripts/demo/backend-e2e.ps1` now validates the **automatic** refresh path:
+posting an operation enqueues a durable `portfolio_refresh_requests` row
+(returned in the API response as `refresh_request`), and the `kushim-worker`
+service — running in loop mode with
+`WORKER_JOB=process_portfolio_refresh_requests` — consumes it and rebuilds the
+current read models and the current daily snapshot. The script polls
+`GET /v1/portfolios/{id}/refresh-requests/{id}` (bounded timeout, prints the last
+status on failure) until `completed`. It no longer invokes
+`rebuild_current_read_models` or `generate_daily_snapshots` manually. Market-data
+preparation is run *before* the operations so the automatic refresh prices
+holdings deterministically. The per-step manual worker commands below remain
+valid for one-off operational debugging.
+
 ## What this does not prove
 
 - **No frontend is involved.** All interactions are via HTTP requests in PowerShell.

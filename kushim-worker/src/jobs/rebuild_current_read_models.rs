@@ -19,6 +19,14 @@ impl RebuildCurrentReadModelsJob {
         }
     }
 
+    /// Build a rebuild job scoped to a single portfolio, used by the
+    /// per-request refresh consumer.
+    pub fn for_portfolio(id_portfolio: Uuid) -> Self {
+        Self {
+            target_portfolio_id: Some(id_portfolio),
+        }
+    }
+
     pub fn target_portfolio_id(&self) -> Option<Uuid> {
         self.target_portfolio_id
     }
@@ -123,11 +131,15 @@ mod tests {
     }
 
     async fn ensure_role(pool: &PgPool) {
+        // Race-safe under cargo's parallel test runner: concurrent helpers
+        // both passing the per-row uniqueness check would otherwise fail at
+        // commit on `uq_roles_label` (CI runs only `001_init.sql`, no role
+        // seed). Conflict-on-label keeps the existing row.
         sqlx::query(
             r#"
             INSERT INTO roles (id_role, label)
             VALUES (1, 'user')
-            ON CONFLICT (id_role) DO UPDATE SET label = EXCLUDED.label
+            ON CONFLICT (label) DO NOTHING
             "#,
         )
         .execute(pool)
@@ -733,6 +745,7 @@ mod tests {
             backfill_date_to: None,
             redis_url: None,
             health: None,
+            refresh_consumer: crate::config::RefreshConsumerConfig::default(),
         };
     }
 }
