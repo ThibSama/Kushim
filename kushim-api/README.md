@@ -985,6 +985,46 @@ Tri :
 
 - `executed_at DESC, created_at DESC`
 
+#### Contrat d'identité d'actif (P2)
+
+Chaque opération sérialisée par `kushim-api` — liste, get, create, update,
+cancel, post, correction, audit, audit timeline — inclut deux champs additifs :
+
+- `asset` : identité compacte de `id_asset` (`{id_asset, name, ticker, status}`)
+  ou `null` ;
+- `related_asset` : même contrat pour `id_related_asset`.
+
+`id_asset` et `id_related_asset` restent présents pour la compatibilité
+ascendante. Une opération de trésorerie (deposit, withdrawal, …) renvoie
+`asset = null`. Une opération dont l'`id_asset` ne peut pas être résolu
+(donnée historique corrompue) renvoie également `asset = null` ; la liste ne
+plante pas et le frontend applique son fallback défensif.
+
+**Pas de N+1 backend** : pour une liste d'opérations, le service collecte les
+`id_asset`/`id_related_asset` distincts et résout leurs identités via un seul
+appel `AssetRepository::list_identities_by_ids` (un `WHERE id_asset = ANY($1)`).
+Le nombre de requêtes SQL ne dépend pas du nombre d'opérations retournées.
+
+**Identité canonique, pas snapshot historique** : `asset.name` et
+`asset.ticker` sont l'**identité canonique courante** lue dans `assets`. Aucun
+nom ou ticker n'est dénormalisé sur la ligne `portfolio_operations`. Une
+opération passée référence donc toujours le libellé courant de l'actif ; si la
+fiche `assets` est renommée plus tard, toutes les opérations historiques
+afficheront le nouveau libellé. C'est volontaire pour le MVP : un snapshot
+point-in-time du libellé sur la ligne de ledger nécessiterait une colonne
+dénormalisée + une politique de réécriture (mergers, symbol_change, splits)
+hors scope P2.
+
+**Atomicité de la réponse d'écriture** : chaque mutation
+(create/update/cancel/post/correction) **prefetch** les identités d'actif
+*avant* la mutation. Si la requête `SELECT … FROM assets` échoue, l'API
+répond une erreur sans que la ligne `portfolio_operations` n'ait été insérée
+— donc pas de retry client risquant un doublon. Après le commit, seul un
+`build_view` purement en mémoire s'exécute, garantissant qu'un commit réussi
+produit toujours une réponse `2xx`. Cette invariante est verrouillée par
+deux tests structurels (`p2_writes_prefetch_identities_before_mutation` et
+`p2_service_uses_batch_identity_lookup_not_per_row_find`).
+
 ### `GET /v1/portfolios/{id_portfolio}/operations/{id_portfolio_operation}`
 
 But :

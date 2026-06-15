@@ -371,7 +371,14 @@ monetary operations require a user-supplied rate. Provider selection and
 historical-restatement policy remain tracked in
 `documentation/mvp/deferred-todos.md` (Market-data / Still deferred).
 
-**Asset display in Transactions table:** Operations show asset ticker when available via local display cache. Falls back to truncated UUID if asset was created in a prior session.
+**Asset display in Transactions table (P2):** Every operation response now
+embeds a compact `asset` / `related_asset` reference (`{id_asset, name,
+ticker, status}` or `null` for cash-only operations). `operationAssetLabel`
+prefers the ticker, then the name, then "—" for cash, and falls back to a
+truncated UUID only when the backend returned an `id_asset` it could not
+resolve (legacy/corrupt data). The previous module-level
+`assetDisplayCache` / `hydrateAssetDisplayCache` path has been deleted, so
+labels survive a full reload without any per-row `GET /v1/assets/{id}` call.
 
 **Asset seed dependency:** Asset-linked operations (buy/sell/dividend) require assets to be seeded in the database. If no assets exist, the asset selector shows "Aucun actif disponible."
 
@@ -508,7 +515,8 @@ npm run build
 - Asset search/select component: **implemented** (Pass 4)
 - Asset-linked operations (buy/sell/dividend): **implemented** (Pass 4)
 - Dashboard add transaction uses real modal: **implemented** (Pass 4)
-- Operation DTO mapping + French labels + asset display cache: **implemented** (Pass 3+4)
+- Operation DTO mapping + French labels: **implemented** (Pass 3+4)
+- Operation asset identity embedded in every operation response (no per-row asset fetch): **implemented and validated** (P2)
 - Dashboard KPIs (valeur nette, investi, gain/perte): **connected** to `/summary` read model (Pass 5)
 - Dashboard evolution chart: **connected** to `/snapshots/daily` (Pass 5)
 - Dashboard allocation (pie chart): **connected** to `/holdings` read model, derived by asset class (Pass 5)

@@ -1,6 +1,7 @@
 use crate::{
     auth::AuthenticatedUser,
-    domain::portfolio_operation::{OperationStatus, OperationType, PortfolioOperation},
+    domain::asset::AssetIdentity,
+    domain::portfolio_operation::{OperationStatus, OperationType},
     domain::portfolio_refresh_request::{PortfolioRefreshRequest, RefreshRequestStatus},
     errors::ApiError,
     http::extractors::{ApiJson, ApiPath, ApiQuery},
@@ -9,7 +10,7 @@ use crate::{
         CreatePortfolioOperationInput, ListPortfolioOperationsInput, OperationWriteOutcome,
         PortfolioOperationAuditTimelineInput, PortfolioOperationAuditTimelineItemView,
         PortfolioOperationAuditTimelineView, PortfolioOperationAuditView,
-        PortfolioOperationCorrectionsView, PortfolioOperationServiceError,
+        PortfolioOperationCorrectionsView, PortfolioOperationServiceError, PortfolioOperationView,
         PostPortfolioOperationInput, UpdatePortfolioOperationInput,
     },
     state::AppState,
@@ -107,12 +108,43 @@ pub struct CreateCorrectionRequest {
     pub metadata: Option<Value>,
 }
 
+/// Compact asset identity embedded on every operation response.
+///
+/// Only the fields the Transactions UI needs to render a row are surfaced:
+/// `id_asset`, the canonical `name`, the optional `ticker`, and `status` so
+/// callers can reason about whether the referenced asset is current. The
+/// frontend prefers the ticker, then the name, then a safe fallback.
+#[derive(Debug, Serialize)]
+pub struct AssetIdentityResponse {
+    pub id_asset: Uuid,
+    pub name: String,
+    pub ticker: Option<String>,
+    pub status: String,
+}
+
+impl From<AssetIdentity> for AssetIdentityResponse {
+    fn from(value: AssetIdentity) -> Self {
+        Self {
+            id_asset: value.id_asset,
+            name: value.name,
+            ticker: value.ticker,
+            status: value.status.as_str().to_string(),
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub struct PortfolioOperationResponse {
     pub id_portfolio_operation: Uuid,
     pub id_portfolio: Uuid,
     pub id_asset: Option<Uuid>,
     pub id_related_asset: Option<Uuid>,
+    /// Compact identity for `id_asset`, or `null` for cash-only operations and
+    /// for operations whose referenced asset row could not be resolved (legacy
+    /// or corrupt data). Backward-compatible: `id_asset` remains populated.
+    pub asset: Option<AssetIdentityResponse>,
+    /// Compact identity for `id_related_asset`, with the same semantics.
+    pub related_asset: Option<AssetIdentityResponse>,
     pub operation_type: String,
     pub operation_status: String,
     pub executed_at: String,
@@ -538,33 +570,40 @@ pub async fn get_portfolio_operations_audit_timeline(
     Ok(Json(PortfolioOperationAuditTimelineResponse::from(view)))
 }
 
-impl From<PortfolioOperation> for PortfolioOperationResponse {
-    fn from(value: PortfolioOperation) -> Self {
+impl From<PortfolioOperationView> for PortfolioOperationResponse {
+    fn from(value: PortfolioOperationView) -> Self {
+        let PortfolioOperationView {
+            operation,
+            asset,
+            related_asset,
+        } = value;
         Self {
-            id_portfolio_operation: value.id_portfolio_operation,
-            id_portfolio: value.id_portfolio,
-            id_asset: value.id_asset,
-            id_related_asset: value.id_related_asset,
-            operation_type: value.operation_type.as_str().to_string(),
-            operation_status: value.operation_status.as_str().to_string(),
-            executed_at: format_datetime(value.executed_at),
-            effective_at: value.effective_at.map(format_datetime),
-            quantity: value.quantity,
-            related_quantity: value.related_quantity,
-            price_minor: value.price_minor,
-            gross_amount_minor: value.gross_amount_minor,
-            fees_minor: value.fees_minor,
-            taxes_minor: value.taxes_minor,
-            cash_amount_minor: value.cash_amount_minor,
-            currency: value.currency,
-            fx_rate_to_portfolio: value.fx_rate_to_portfolio,
-            external_provider: value.external_provider,
-            external_reference: value.external_reference,
-            id_corrected_operation: value.id_corrected_operation,
-            notes: value.notes,
-            metadata: value.metadata,
-            created_at: format_datetime(value.created_at),
-            updated_at: format_datetime(value.updated_at),
+            id_portfolio_operation: operation.id_portfolio_operation,
+            id_portfolio: operation.id_portfolio,
+            id_asset: operation.id_asset,
+            id_related_asset: operation.id_related_asset,
+            asset: asset.map(AssetIdentityResponse::from),
+            related_asset: related_asset.map(AssetIdentityResponse::from),
+            operation_type: operation.operation_type.as_str().to_string(),
+            operation_status: operation.operation_status.as_str().to_string(),
+            executed_at: format_datetime(operation.executed_at),
+            effective_at: operation.effective_at.map(format_datetime),
+            quantity: operation.quantity,
+            related_quantity: operation.related_quantity,
+            price_minor: operation.price_minor,
+            gross_amount_minor: operation.gross_amount_minor,
+            fees_minor: operation.fees_minor,
+            taxes_minor: operation.taxes_minor,
+            cash_amount_minor: operation.cash_amount_minor,
+            currency: operation.currency,
+            fx_rate_to_portfolio: operation.fx_rate_to_portfolio,
+            external_provider: operation.external_provider,
+            external_reference: operation.external_reference,
+            id_corrected_operation: operation.id_corrected_operation,
+            notes: operation.notes,
+            metadata: operation.metadata,
+            created_at: format_datetime(operation.created_at),
+            updated_at: format_datetime(operation.updated_at),
         }
     }
 }
@@ -5501,6 +5540,738 @@ mod tests {
 
         cleanup_user_tree(&pool, id_user, &[]).await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    // ---------------------------------------------------------------------
+    // P2 — Durable asset identity in operation responses
+    // ---------------------------------------------------------------------
+
+    /// Seeds an active equity with both a canonical `ticker` and a populated
+    /// `symbol`. The existing `create_asset` helper only sets `symbol`, but the
+    /// P2 identity contract exposes `ticker`, so P2 tests need a fixture that
+    /// matches the production shape.
+    async fn create_asset_with_ticker(pool: &PgPool, ticker: &str) -> Uuid {
+        let id_asset = Uuid::new_v4();
+        sqlx::query(
+            r#"
+            INSERT INTO assets (id_asset, asset_class, status, name, native_currency, symbol, ticker)
+            VALUES ($1, 'equity', 'active', $2, 'EUR', $3, $3)
+            "#,
+        )
+        .bind(id_asset)
+        .bind(format!("Asset {ticker}"))
+        .bind(ticker)
+        .execute(pool)
+        .await
+        .expect("ticker asset should be inserted");
+        id_asset
+    }
+
+    async fn list_operations(
+        pool: &PgPool,
+        id_user: Uuid,
+        handle: &str,
+        id_portfolio: Uuid,
+    ) -> (StatusCode, Value) {
+        let app = crate::http::router(test_state(pool.clone()).await);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/v1/portfolios/{id_portfolio}/operations"))
+                    .header(
+                        AUTHORIZATION,
+                        format!("Bearer {}", build_access_token(id_user, handle)),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("response should be built");
+        let status = response.status();
+        (status, response_json(response).await)
+    }
+
+    #[tokio::test]
+    async fn p2_cash_operation_response_has_null_asset_refs() {
+        let pool = test_pool().await;
+        let handle = format!("p2c{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let id_user = create_user(&pool, &handle).await;
+        let id_portfolio = create_portfolio(&pool, id_user, None).await;
+
+        let (status, body) = post_json(
+            &pool,
+            id_user,
+            &handle,
+            &format!("/v1/portfolios/{id_portfolio}/operations"),
+            deposit_payload(),
+        )
+        .await;
+
+        cleanup_user_tree(&pool, id_user, &[]).await;
+
+        assert_eq!(status, StatusCode::CREATED);
+        assert!(body["operation"]["asset"].is_null());
+        assert!(body["operation"]["related_asset"].is_null());
+        assert!(body["operation"]["id_asset"].is_null());
+    }
+
+    #[tokio::test]
+    async fn p2_asset_linked_operation_response_carries_identity() {
+        let pool = test_pool().await;
+        let handle = format!("p2a{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let id_user = create_user(&pool, &handle).await;
+        let id_portfolio = create_portfolio(&pool, id_user, None).await;
+        let id_asset = create_asset_with_ticker(&pool, "AAPL").await;
+
+        let (status, body) = post_json(
+            &pool,
+            id_user,
+            &handle,
+            &format!("/v1/portfolios/{id_portfolio}/operations"),
+            buy_payload(id_asset),
+        )
+        .await;
+
+        cleanup_user_tree(&pool, id_user, &[id_asset]).await;
+
+        assert_eq!(status, StatusCode::CREATED);
+        let asset = &body["operation"]["asset"];
+        assert_eq!(asset["id_asset"], id_asset.to_string());
+        assert_eq!(asset["ticker"], "AAPL");
+        assert_eq!(asset["name"], "Asset AAPL");
+        assert_eq!(asset["status"], "active");
+        assert!(body["operation"]["related_asset"].is_null());
+    }
+
+    #[tokio::test]
+    async fn p2_list_response_enriches_every_operation_with_identity() {
+        let pool = test_pool().await;
+        let handle = format!("p2l{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let id_user = create_user(&pool, &handle).await;
+        let id_portfolio = create_portfolio(&pool, id_user, None).await;
+        let id_aapl = create_asset_with_ticker(&pool, "AAPL").await;
+        let id_msft = create_asset_with_ticker(&pool, "MSFT").await;
+
+        insert_operation(&pool, id_portfolio, "pending", deposit_payload()).await;
+        insert_operation(&pool, id_portfolio, "pending", buy_payload(id_aapl)).await;
+        // Repeated reference to the same asset must still resolve consistently.
+        insert_operation(&pool, id_portfolio, "pending", buy_payload(id_aapl)).await;
+        insert_operation(&pool, id_portfolio, "pending", buy_payload(id_msft)).await;
+
+        let (status, body) = list_operations(&pool, id_user, &handle, id_portfolio).await;
+
+        cleanup_user_tree(&pool, id_user, &[id_aapl, id_msft]).await;
+
+        assert_eq!(status, StatusCode::OK);
+        let ops = body["operations"]
+            .as_array()
+            .expect("operations should be an array");
+        assert_eq!(ops.len(), 4);
+
+        let mut deposit_seen = false;
+        let mut aapl_count = 0;
+        let mut msft_seen = false;
+        for op in ops {
+            match op["operation_type"].as_str() {
+                Some("deposit") => {
+                    deposit_seen = true;
+                    assert!(op["asset"].is_null());
+                }
+                Some("buy") => {
+                    let id = op["id_asset"].as_str().unwrap();
+                    if id == id_aapl.to_string() {
+                        assert_eq!(op["asset"]["ticker"], "AAPL");
+                        aapl_count += 1;
+                    } else if id == id_msft.to_string() {
+                        assert_eq!(op["asset"]["ticker"], "MSFT");
+                        msft_seen = true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        assert!(deposit_seen);
+        assert_eq!(aapl_count, 2);
+        assert!(msft_seen);
+    }
+
+    #[tokio::test]
+    async fn p2_inactive_asset_referenced_by_existing_operation_stays_displayable() {
+        let pool = test_pool().await;
+        let handle = format!("p2i{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let id_user = create_user(&pool, &handle).await;
+        let id_portfolio = create_portfolio(&pool, id_user, None).await;
+        let id_asset = create_asset_with_ticker(&pool, "OLDX").await;
+
+        // Insert a historical operation pointing to the asset, then mark the
+        // asset inactive. The response must still expose the compact identity.
+        insert_operation(&pool, id_portfolio, "pending", buy_payload(id_asset)).await;
+        set_asset_status(&pool, id_asset, "inactive").await;
+
+        let (status, body) = list_operations(&pool, id_user, &handle, id_portfolio).await;
+
+        cleanup_user_tree(&pool, id_user, &[id_asset]).await;
+
+        assert_eq!(status, StatusCode::OK);
+        let asset = &body["operations"][0]["asset"];
+        assert_eq!(asset["id_asset"], id_asset.to_string());
+        assert_eq!(asset["ticker"], "OLDX");
+        assert_eq!(asset["status"], "inactive");
+    }
+
+    #[tokio::test]
+    async fn p2_cross_user_operation_access_returns_404() {
+        let pool = test_pool().await;
+        let owner_handle = format!("p2o{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let intruder_handle = format!("p2x{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let owner = create_user(&pool, &owner_handle).await;
+        let intruder = create_user(&pool, &intruder_handle).await;
+        let id_portfolio = create_portfolio(&pool, owner, None).await;
+
+        let (status, _) = list_operations(&pool, intruder, &intruder_handle, id_portfolio).await;
+
+        cleanup_user_tree(&pool, owner, &[]).await;
+        cleanup_user_tree(&pool, intruder, &[]).await;
+
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn p2_list_endpoint_with_refresh_token_is_rejected() {
+        let pool = test_pool().await;
+        let handle = format!("p2r{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let id_user = create_user(&pool, &handle).await;
+        let id_portfolio = create_portfolio(&pool, id_user, None).await;
+
+        let app = crate::http::router(test_state(pool.clone()).await);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/v1/portfolios/{id_portfolio}/operations"))
+                    .header(
+                        AUTHORIZATION,
+                        format!("Bearer {}", build_refresh_token(id_user, &handle)),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("response should be built");
+
+        cleanup_user_tree(&pool, id_user, &[]).await;
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    /// Source-level guard: the operation service must batch asset-identity
+    /// lookups via `list_identities_by_ids` rather than fall back to per-row
+    /// `find_by_id` calls inside the enrichment path. Static regression
+    /// against re-introducing a backend N+1.
+    #[test]
+    fn p2_service_uses_batch_identity_lookup_not_per_row_find() {
+        let service_source = include_str!("../services/portfolio_operations.rs");
+        assert!(
+            service_source.contains("list_identities_by_ids"),
+            "service must use the batch identity lookup",
+        );
+        // Extract the body of `enrich_many` (used by all read paths).
+        let after_enrich_many = service_source
+            .split("pub(crate) async fn enrich_many")
+            .nth(1)
+            .expect("enrich_many should exist");
+        // Stop at the next service-level helper definition.
+        let enrich_body = after_enrich_many
+            .split("pub(crate) async fn prefetch_identities")
+            .next()
+            .unwrap_or(after_enrich_many);
+        assert!(
+            !enrich_body.contains("find_by_id"),
+            "enrichment must not call asset_repository.find_by_id per operation",
+        );
+        // The read path must reach the repository through `prefetch_identities`
+        // — i.e. it must NOT call `list_identities_by_ids` more than once and
+        // must NOT call it directly without going through the dedup helper.
+        assert!(
+            !enrich_body.contains("list_identities_by_ids"),
+            "enrich_many must delegate to prefetch_identities (one dedup point), \
+             not call list_identities_by_ids directly",
+        );
+        // And `prefetch_identities` itself must invoke the repository exactly
+        // once — guarantees one batch lookup per call site, not per id.
+        let prefetch_body = service_source
+            .split("pub(crate) async fn prefetch_identities")
+            .nth(1)
+            .expect("prefetch_identities should exist")
+            .split("\n    }\n")
+            .next()
+            .unwrap_or("");
+        let calls = prefetch_body.matches("list_identities_by_ids").count();
+        assert_eq!(
+            calls, 1,
+            "prefetch_identities must call list_identities_by_ids exactly once \
+             (got {calls})",
+        );
+    }
+
+    /// Atomicity guard: every write path must call `prefetch_identities`
+    /// BEFORE its mutating repository call so a failing identity SELECT
+    /// cannot turn a committed mutation into an HTTP 500. The check is
+    /// structural — we scan each `pub async fn <write>()` body and require
+    /// the prefetch token to appear before the mutation token.
+    #[test]
+    fn p2_writes_prefetch_identities_before_mutation() {
+        let service_source = include_str!("../services/portfolio_operations.rs");
+
+        let cases: &[(&str, &str)] = &[
+            (
+                "pub async fn create_operation",
+                "create_with_optional_refresh",
+            ),
+            ("pub async fn update_operation", ".update("),
+            ("pub async fn cancel_operation", ".set_status("),
+            (
+                "pub async fn post_operation",
+                "set_status_posted_with_refresh",
+            ),
+            (
+                "pub async fn create_correction",
+                "create_with_optional_refresh",
+            ),
+        ];
+
+        for (signature, mutation) in cases {
+            let body = service_source
+                .split(signature)
+                .nth(1)
+                .unwrap_or_else(|| panic!("{signature} must exist"));
+            // Bound the search at the next pub async fn marker so we look at
+            // this method only.
+            let body = body.split("\n    pub async fn ").next().unwrap_or(body);
+            let prefetch_pos = body
+                .find("prefetch_identities")
+                .unwrap_or_else(|| panic!("{signature} must call prefetch_identities"));
+            let mutation_pos = body
+                .find(mutation)
+                .unwrap_or_else(|| panic!("{signature} must perform mutation {mutation}"));
+            assert!(
+                prefetch_pos < mutation_pos,
+                "{signature}: prefetch_identities must appear BEFORE {mutation} \
+                 to preserve write-response atomicity",
+            );
+            // No post-commit fallible asset lookup is allowed inside the
+            // write body — only the in-memory `build_view` helper.
+            let tail = &body[mutation_pos..];
+            assert!(
+                !tail.contains("list_identities_by_ids"),
+                "{signature}: must not perform an asset SELECT after the mutation",
+            );
+            assert!(
+                !tail.contains("enrich_many"),
+                "{signature}: must not call enrich_many (read-path helper) after the mutation",
+            );
+        }
+    }
+
+    // ---------- Endpoint-level additive contract assertions ----------
+
+    /// Helper: GET an operation by id and return (status, json).
+    async fn get_operation(
+        pool: &PgPool,
+        id_user: Uuid,
+        handle: &str,
+        id_portfolio: Uuid,
+        id_operation: Uuid,
+    ) -> (StatusCode, Value) {
+        let app = crate::http::router(test_state(pool.clone()).await);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!(
+                        "/v1/portfolios/{id_portfolio}/operations/{id_operation}"
+                    ))
+                    .header(
+                        AUTHORIZATION,
+                        format!("Bearer {}", build_access_token(id_user, handle)),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("response should be built");
+        let status = response.status();
+        (status, response_json(response).await)
+    }
+
+    fn assert_identity_matches(node: &Value, id: Uuid, ticker: &str) {
+        assert_eq!(node["id_asset"], id.to_string(), "id_asset mismatch");
+        assert_eq!(node["ticker"], ticker, "ticker mismatch");
+        assert_eq!(node["name"], format!("Asset {ticker}"), "name mismatch");
+        assert_eq!(node["status"], "active", "status mismatch");
+    }
+
+    #[tokio::test]
+    async fn p2_get_endpoint_carries_asset_identity() {
+        let pool = test_pool().await;
+        let handle = format!("p2g{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let id_user = create_user(&pool, &handle).await;
+        let id_portfolio = create_portfolio(&pool, id_user, None).await;
+        let id_asset = create_asset_with_ticker(&pool, "GETX").await;
+        let id_op = insert_operation(&pool, id_portfolio, "pending", buy_payload(id_asset)).await;
+
+        let (status, body) = get_operation(&pool, id_user, &handle, id_portfolio, id_op).await;
+        cleanup_user_tree(&pool, id_user, &[id_asset]).await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["operation"]["id_asset"], id_asset.to_string());
+        assert_identity_matches(&body["operation"]["asset"], id_asset, "GETX");
+        assert!(body["operation"]["related_asset"].is_null());
+    }
+
+    #[tokio::test]
+    async fn p2_update_response_carries_asset_identity_after_changing_id_asset() {
+        let pool = test_pool().await;
+        let handle = format!("p2u{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let id_user = create_user(&pool, &handle).await;
+        let id_portfolio = create_portfolio(&pool, id_user, None).await;
+        let id_old = create_asset_with_ticker(&pool, "UPDA").await;
+        let id_new = create_asset_with_ticker(&pool, "UPDB").await;
+        let id_op = insert_operation(&pool, id_portfolio, "pending", buy_payload(id_old)).await;
+
+        let app = crate::http::router(test_state(pool.clone()).await);
+        let payload = json!({ "id_asset": id_new });
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri(format!("/v1/portfolios/{id_portfolio}/operations/{id_op}"))
+                    .header(
+                        AUTHORIZATION,
+                        format!("Bearer {}", build_access_token(id_user, &handle)),
+                    )
+                    .header("content-type", "application/json")
+                    .body(Body::from(payload.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .expect("response should be built");
+        let status = response.status();
+        let body = response_json(response).await;
+        cleanup_user_tree(&pool, id_user, &[id_old, id_new]).await;
+
+        assert_eq!(status, StatusCode::OK);
+        // PATCH update merges id_asset with existing — both old and new are
+        // valid candidates the service prefetched. Whichever the merge applied
+        // must match the embedded asset identity.
+        let returned_id = body["operation"]["id_asset"]
+            .as_str()
+            .expect("id_asset should be a string");
+        let asset = &body["operation"]["asset"];
+        assert_eq!(asset["id_asset"], returned_id);
+        assert!(
+            asset["ticker"] == "UPDA" || asset["ticker"] == "UPDB",
+            "ticker must match the merged id_asset, got {}",
+            asset["ticker"],
+        );
+    }
+
+    #[tokio::test]
+    async fn p2_cancel_response_preserves_asset_identity() {
+        let pool = test_pool().await;
+        let handle = format!("p2x{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let id_user = create_user(&pool, &handle).await;
+        let id_portfolio = create_portfolio(&pool, id_user, None).await;
+        let id_asset = create_asset_with_ticker(&pool, "CXLA").await;
+        let id_op = insert_operation(&pool, id_portfolio, "pending", buy_payload(id_asset)).await;
+
+        let app = crate::http::router(test_state(pool.clone()).await);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/v1/portfolios/{id_portfolio}/operations/{id_op}/cancel"
+                    ))
+                    .header(
+                        AUTHORIZATION,
+                        format!("Bearer {}", build_access_token(id_user, &handle)),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("response should be built");
+        let body = response_json(response).await;
+        cleanup_user_tree(&pool, id_user, &[id_asset]).await;
+
+        assert_eq!(body["operation"]["operation_status"], "cancelled");
+        assert_identity_matches(&body["operation"]["asset"], id_asset, "CXLA");
+    }
+
+    #[tokio::test]
+    async fn p2_post_pending_response_carries_asset_identity() {
+        let pool = test_pool().await;
+        let handle = format!("p2p{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let id_user = create_user(&pool, &handle).await;
+        let id_portfolio = create_portfolio(&pool, id_user, None).await; // EUR
+        let id_asset = create_asset_with_ticker(&pool, "PSTA").await;
+        let id_op = insert_operation(&pool, id_portfolio, "pending", buy_payload(id_asset)).await;
+
+        let (status, body) = post_json(
+            &pool,
+            id_user,
+            &handle,
+            &format!("/v1/portfolios/{id_portfolio}/operations/{id_op}/post"),
+            json!({}),
+        )
+        .await;
+
+        cleanup_refresh_requests(&pool, id_portfolio).await;
+        // Posted rows are immutable so we can't delete operations rows; only
+        // clean the asset row that is still safe to delete (no posted row
+        // links to it after refresh requests are cleared — but the operation
+        // row does, so leave the asset alone too). The user-tree cleanup will
+        // skip the posted operation rows, which is the same pattern as the
+        // existing posted tests.
+        sqlx::query("DELETE FROM portfolio_refresh_requests WHERE id_portfolio = $1")
+            .bind(id_portfolio)
+            .execute(&pool)
+            .await
+            .ok();
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["operation"]["operation_status"], "posted");
+        assert_identity_matches(&body["operation"]["asset"], id_asset, "PSTA");
+    }
+
+    #[tokio::test]
+    async fn p2_correction_response_carries_asset_identity() {
+        let pool = test_pool().await;
+        let handle = format!("p2k{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let id_user = create_user(&pool, &handle).await;
+        let id_portfolio = create_portfolio(&pool, id_user, None).await;
+        let id_original = insert_operation(&pool, id_portfolio, "posted", deposit_payload()).await;
+        let id_asset = create_asset_with_ticker(&pool, "CRRA").await;
+
+        let payload = json!({
+            "executed_at": "2026-06-06T10:00:00Z",
+            "id_asset": id_asset,
+            "quantity": "1.0000000000",
+            "cash_amount_minor": 5000,
+            "currency": "EUR",
+            "metadata": { "reason": "asset_adjustment" }
+        });
+        let (status, body) = post_json(
+            &pool,
+            id_user,
+            &handle,
+            &format!("/v1/portfolios/{id_portfolio}/operations/{id_original}/corrections"),
+            payload,
+        )
+        .await;
+
+        // Best-effort cleanup; original posted row is immutable.
+        sqlx::query("DELETE FROM portfolio_refresh_requests WHERE id_portfolio = $1")
+            .bind(id_portfolio)
+            .execute(&pool)
+            .await
+            .ok();
+
+        assert_eq!(status, StatusCode::CREATED);
+        assert_identity_matches(&body["operation"]["asset"], id_asset, "CRRA");
+    }
+
+    #[tokio::test]
+    async fn p2_corrections_list_endpoint_enriches_every_entry() {
+        let pool = test_pool().await;
+        let handle = format!("p2y{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let id_user = create_user(&pool, &handle).await;
+        let id_portfolio = create_portfolio(&pool, id_user, None).await;
+        let id_asset = create_asset_with_ticker(&pool, "LCRR").await;
+
+        let id_original =
+            insert_operation(&pool, id_portfolio, "posted", buy_payload(id_asset)).await;
+        // Two adjustment rows correcting the original.
+        let mut adj = empty_adjustment_payload();
+        adj["id_asset"] = json!(id_asset);
+        adj["quantity"] = json!("1.0000000000");
+        adj["cash_amount_minor"] = json!(1000);
+        adj["id_corrected_operation"] = json!(id_original);
+        insert_operation(&pool, id_portfolio, "pending", adj.clone()).await;
+        insert_operation(&pool, id_portfolio, "pending", adj).await;
+
+        let app = crate::http::router(test_state(pool.clone()).await);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!(
+                        "/v1/portfolios/{id_portfolio}/operations/{id_original}/corrections"
+                    ))
+                    .header(
+                        AUTHORIZATION,
+                        format!("Bearer {}", build_access_token(id_user, &handle)),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("response should be built");
+        let status = response.status();
+        let body = response_json(response).await;
+
+        // Posted original is immutable — best-effort cleanup like other posted tests.
+        sqlx::query("DELETE FROM portfolio_refresh_requests WHERE id_portfolio = $1")
+            .bind(id_portfolio)
+            .execute(&pool)
+            .await
+            .ok();
+
+        assert_eq!(status, StatusCode::OK);
+        assert_identity_matches(&body["operation"]["asset"], id_asset, "LCRR");
+        let corrections = body["corrections"]
+            .as_array()
+            .expect("corrections must be an array");
+        assert_eq!(corrections.len(), 2);
+        for c in corrections {
+            assert_identity_matches(&c["asset"], id_asset, "LCRR");
+        }
+    }
+
+    #[tokio::test]
+    async fn p2_audit_timeline_enriches_primaries_and_corrections() {
+        let pool = test_pool().await;
+        let handle = format!("p2t{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let id_user = create_user(&pool, &handle).await;
+        let id_portfolio = create_portfolio(&pool, id_user, None).await;
+        let id_asset = create_asset_with_ticker(&pool, "TMLA").await;
+
+        let id_primary =
+            insert_operation(&pool, id_portfolio, "posted", buy_payload(id_asset)).await;
+        let mut adj = empty_adjustment_payload();
+        adj["id_asset"] = json!(id_asset);
+        adj["quantity"] = json!("1.0000000000");
+        adj["cash_amount_minor"] = json!(2000);
+        adj["id_corrected_operation"] = json!(id_primary);
+        insert_operation(&pool, id_portfolio, "pending", adj).await;
+
+        let app = crate::http::router(test_state(pool.clone()).await);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/v1/portfolios/{id_portfolio}/operations/audit"))
+                    .header(
+                        AUTHORIZATION,
+                        format!("Bearer {}", build_access_token(id_user, &handle)),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("response should be built");
+        let status = response.status();
+        let body = response_json(response).await;
+
+        sqlx::query("DELETE FROM portfolio_refresh_requests WHERE id_portfolio = $1")
+            .bind(id_portfolio)
+            .execute(&pool)
+            .await
+            .ok();
+
+        assert_eq!(status, StatusCode::OK);
+        let items = body["items"].as_array().expect("items must be array");
+        assert!(!items.is_empty());
+        let first = &items[0];
+        assert_identity_matches(&first["operation"]["asset"], id_asset, "TMLA");
+        let corrections = first["corrections"].as_array().expect("corrections array");
+        assert_eq!(corrections.len(), 1);
+        assert_identity_matches(&corrections[0]["asset"], id_asset, "TMLA");
+    }
+
+    #[tokio::test]
+    async fn p2_audit_endpoint_enriches_operation_and_corrections() {
+        let pool = test_pool().await;
+        let handle = format!("p2d{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let id_user = create_user(&pool, &handle).await;
+        let id_portfolio = create_portfolio(&pool, id_user, None).await;
+        let id_asset = create_asset_with_ticker(&pool, "AUDA").await;
+
+        let id_primary =
+            insert_operation(&pool, id_portfolio, "posted", buy_payload(id_asset)).await;
+        let mut adj = empty_adjustment_payload();
+        adj["id_asset"] = json!(id_asset);
+        adj["quantity"] = json!("1.0000000000");
+        adj["cash_amount_minor"] = json!(1500);
+        adj["id_corrected_operation"] = json!(id_primary);
+        insert_operation(&pool, id_portfolio, "pending", adj).await;
+
+        let app = crate::http::router(test_state(pool.clone()).await);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!(
+                        "/v1/portfolios/{id_portfolio}/operations/{id_primary}/audit"
+                    ))
+                    .header(
+                        AUTHORIZATION,
+                        format!("Bearer {}", build_access_token(id_user, &handle)),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("response should be built");
+        let status = response.status();
+        let body = response_json(response).await;
+        sqlx::query("DELETE FROM portfolio_refresh_requests WHERE id_portfolio = $1")
+            .bind(id_portfolio)
+            .execute(&pool)
+            .await
+            .ok();
+
+        assert_eq!(status, StatusCode::OK);
+        assert_identity_matches(&body["operation"]["asset"], id_asset, "AUDA");
+        let corrections = body["corrections"].as_array().expect("corrections array");
+        assert!(!corrections.is_empty());
+        for c in corrections {
+            assert_identity_matches(&c["asset"], id_asset, "AUDA");
+        }
+    }
+
+    #[tokio::test]
+    async fn p2_related_asset_is_enriched_on_an_operation_carrying_one() {
+        // A spin_off operation carries both id_asset and id_related_asset.
+        // The list endpoint must enrich both compact references.
+        let pool = test_pool().await;
+        let handle = format!("p2s{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let id_user = create_user(&pool, &handle).await;
+        let id_portfolio = create_portfolio(&pool, id_user, None).await;
+        let id_parent = create_asset_with_ticker(&pool, "SPNA").await;
+        let id_child = create_asset_with_ticker(&pool, "SPNB").await;
+
+        let payload = json!({
+            "operation_type": "spin_off",
+            "executed_at": "2026-06-05T10:00:00Z",
+            "id_asset": id_parent,
+            "id_related_asset": id_child,
+            "quantity": "1.0000000000",
+            "related_quantity": "0.5000000000",
+            "currency": "EUR",
+            "metadata": {}
+        });
+        insert_operation(&pool, id_portfolio, "pending", payload).await;
+
+        let (status, body) = list_operations(&pool, id_user, &handle, id_portfolio).await;
+        cleanup_user_tree(&pool, id_user, &[id_parent, id_child]).await;
+
+        assert_eq!(status, StatusCode::OK);
+        let op = &body["operations"][0];
+        assert_identity_matches(&op["asset"], id_parent, "SPNA");
+        assert_identity_matches(&op["related_asset"], id_child, "SPNB");
     }
 
     #[test]

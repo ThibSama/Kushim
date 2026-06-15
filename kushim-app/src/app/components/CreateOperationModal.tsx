@@ -8,7 +8,7 @@ import { CurrencySelect } from "./CurrencySelect";
 import { usePortfolioStore } from "../../stores/portfolio";
 import { useOperationsStore } from "../../stores/operations";
 import { useRefreshTrackingStore } from "../../stores/refreshTracking";
-import { operationTypeLabel, CASH_OPERATION_TYPES, cacheAssetDisplay } from "../../lib/operations";
+import { operationTypeLabel, CASH_OPERATION_TYPES } from "../../lib/operations";
 import type { Asset, CreateOperationPayload } from "../../lib/api/businessApi";
 import { ApiRequestError } from "../../lib/api/httpClient";
 
@@ -248,10 +248,6 @@ export function CreateOperationModal({ portfolioId, onClose }: Props) {
     }
     if (needsPrice(opType) && priceMinor != null && priceMinor > 0) {
       payload.price_minor = priceMinor;
-    }
-
-    if (selectedAsset) {
-      cacheAssetDisplay(selectedAsset);
     }
 
     setSubmitting(true);

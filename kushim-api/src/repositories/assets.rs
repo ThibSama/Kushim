@@ -1,5 +1,5 @@
 use crate::domain::asset::{
-    Asset, AssetAlias, AssetClass, AssetDetails, AssetMarketData, AssetMetadata,
+    Asset, AssetAlias, AssetClass, AssetDetails, AssetIdentity, AssetMarketData, AssetMetadata,
     AssetSearchFilters, AssetStatus, AssetValidationInfo,
 };
 use sqlx::{PgPool, Row};
@@ -303,6 +303,55 @@ impl AssetRepository {
             })
         })
         .transpose()
+    }
+
+    /// Batch lookup of compact asset identities by id.
+    ///
+    /// Used by the portfolio-operation enrichment path (P2) to resolve the
+    /// `asset` / `related_asset` references for an operation list (or a single
+    /// operation) in **one** database round trip, regardless of how many
+    /// operations are returned. Duplicate ids in the input are deduplicated by
+    /// PostgreSQL's `= ANY` operator; an empty input short-circuits without
+    /// touching the database.
+    ///
+    /// Returns identities for whatever ids resolve — missing rows are not an
+    /// error. The status column is preserved so callers can keep historical
+    /// references displayable even when the asset is no longer active.
+    pub async fn list_identities_by_ids(
+        &self,
+        ids: &[Uuid],
+    ) -> Result<Vec<AssetIdentity>, AssetRepositoryError> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let rows = sqlx::query(
+            r#"
+            SELECT
+                id_asset,
+                name,
+                ticker,
+                status
+            FROM assets
+            WHERE id_asset = ANY($1)
+            "#,
+        )
+        .bind(ids)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter()
+            .map(|row| {
+                let status_str: String = row.try_get("status")?;
+                Ok(AssetIdentity {
+                    id_asset: row.try_get("id_asset")?,
+                    name: row.try_get("name")?,
+                    ticker: row.try_get("ticker")?,
+                    status: AssetStatus::try_from(status_str.as_str())
+                        .map_err(|_| AssetRepositoryError::InvalidRow)?,
+                })
+            })
+            .collect()
     }
 
     pub async fn list_aliases_for_asset(
