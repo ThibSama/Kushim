@@ -164,11 +164,13 @@ mod tests {
     }
 
     async fn ensure_role(pool: &PgPool) {
+        // Race-safe under cargo's parallel test runner; see
+        // `rebuild_current_read_models::ensure_role` notes.
         sqlx::query(
             r#"
             INSERT INTO roles (id_role, label)
             VALUES (1, 'user')
-            ON CONFLICT (id_role) DO UPDATE SET label = EXCLUDED.label
+            ON CONFLICT (label) DO NOTHING
             "#,
         )
         .execute(pool)

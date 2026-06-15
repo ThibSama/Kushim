@@ -131,11 +131,15 @@ mod tests {
     }
 
     async fn ensure_role(pool: &PgPool) {
+        // Race-safe under cargo's parallel test runner: concurrent helpers
+        // both passing the per-row uniqueness check would otherwise fail at
+        // commit on `uq_roles_label` (CI runs only `001_init.sql`, no role
+        // seed). Conflict-on-label keeps the existing row.
         sqlx::query(
             r#"
             INSERT INTO roles (id_role, label)
             VALUES (1, 'user')
-            ON CONFLICT (id_role) DO UPDATE SET label = EXCLUDED.label
+            ON CONFLICT (label) DO NOTHING
             "#,
         )
         .execute(pool)
