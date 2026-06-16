@@ -330,6 +330,90 @@ jobs:
             exit 1
           fi
 
+      # P3 schema assertions: a fresh database must already carry the durable
+      # idempotency table with its unique key, all five FKs (each with the
+      # documented ON DELETE action) and the two CHECKs that enforce the
+      # request_kind / corrected-operation coherence.
+      - name: Assert portfolio_operation_idempotency table exists
+        run: |
+          set -euo pipefail
+          present=$(psql "$DATABASE_URL" -t -A -c "SELECT to_regclass('public.portfolio_operation_idempotency') IS NOT NULL;")
+          if [ "$present" != "t" ]; then
+            echo "portfolio_operation_idempotency table missing from fresh schema" >&2
+            exit 1
+          fi
+
+      - name: Assert P3 unique (id_user, idempotency_key) index exists
+        run: |
+          set -euo pipefail
+          present=$(psql "$DATABASE_URL" -t -A -c "SELECT EXISTS(SELECT 1 FROM pg_indexes WHERE indexname = 'uq_portfolio_operation_idempotency_user_key');")
+          if [ "$present" != "t" ]; then
+            echo "uq_portfolio_operation_idempotency_user_key missing — P3 contract cannot be enforced" >&2
+            exit 1
+          fi
+
+      - name: Assert P3 foreign keys with documented ON DELETE actions
+        run: |
+          set -euo pipefail
+          # confdeltype: 'r' RESTRICT, 'n' SET NULL.
+          declare -A expected=(
+            [fk_portfolio_operation_idempotency_user]=r
+            [fk_portfolio_operation_idempotency_portfolio]=r
+            [fk_portfolio_operation_idempotency_operation]=r
+            [fk_portfolio_operation_idempotency_corrected_operation]=n
+            [fk_portfolio_operation_idempotency_refresh_request]=n
+          )
+          for name in "${!expected[@]}"; do
+            want=${expected[$name]}
+            got=$(psql "$DATABASE_URL" -t -A -c "SELECT confdeltype FROM pg_constraint WHERE conname = '$name' AND contype = 'f';")
+            if [ -z "$got" ]; then
+              echo "FK $name missing" >&2
+              exit 1
+            fi
+            if [ "$got" != "$want" ]; then
+              echo "FK $name has wrong ON DELETE: got=$got want=$want" >&2
+              exit 1
+            fi
+          done
+
+      - name: Assert P3 request_kind and correction-link CHECKs
+        run: |
+          set -euo pipefail
+          for name in chk_portfolio_operation_idempotency_request_kind chk_portfolio_operation_idempotency_correction_link; do
+            present=$(psql "$DATABASE_URL" -t -A -c "SELECT EXISTS(SELECT 1 FROM pg_constraint WHERE conname = '$name' AND contype = 'c');")
+            if [ "$present" != "t" ]; then
+              echo "CHECK constraint $name missing" >&2
+              exit 1
+            fi
+          done
+
+      - name: Apply forward upgrade 002 (first run — idempotent on fresh DB)
+        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f infra/postgres/upgrades/002_portfolio_operation_idempotency.sql
+
+      - name: Apply forward upgrade 002 (second run — must remain a no-op)
+        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f infra/postgres/upgrades/002_portfolio_operation_idempotency.sql
+
+      - name: Assert P3 schema still consistent after running upgrade 002 twice
+        run: |
+          set -euo pipefail
+          present=$(psql "$DATABASE_URL" -t -A -c "SELECT to_regclass('public.portfolio_operation_idempotency') IS NOT NULL;")
+          if [ "$present" != "t" ]; then
+            echo "Upgrade 002 dropped portfolio_operation_idempotency" >&2
+            exit 1
+          fi
+          # FK delete actions must still be the documented ones after the
+          # idempotent upgrade pass — guards against a future regression in
+          # the ALTER block.
+          for pair in fk_portfolio_operation_idempotency_user:r fk_portfolio_operation_idempotency_portfolio:r fk_portfolio_operation_idempotency_operation:r fk_portfolio_operation_idempotency_corrected_operation:n fk_portfolio_operation_idempotency_refresh_request:n; do
+            name=${pair%%:*}
+            want=${pair##*:}
+            got=$(psql "$DATABASE_URL" -t -A -c "SELECT confdeltype FROM pg_constraint WHERE conname = '$name' AND contype = 'f';")
+            if [ "$got" != "$want" ]; then
+              echo "After upgrade 002 twice: FK $name has wrong ON DELETE: got=$got want=$want" >&2
+              exit 1
+            fi
+          done
+
   rust-audit:
     name: "Rust advisory audit"
     runs-on: ubuntu-latest
