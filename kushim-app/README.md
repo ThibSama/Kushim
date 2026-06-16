@@ -204,6 +204,37 @@ refresh via `src/stores/refreshTracking.ts`:
   posted operation is recorded regardless); raw worker errors are never shown;
 - logout clears refresh tracking and its timers.
 
+## Durable operation idempotency (P3)
+
+Every call to `POST /v1/portfolios/{id}/operations` and to
+`POST /v1/portfolios/{id}/operations/{op}/corrections` carries a required
+`Idempotency-Key: <UUID>` header. The key lifecycle is owned by the UI
+layer (`CreateOperationModal`), not by `businessApi` or
+`authenticatedRequest`:
+
+- one logical submission attempt = one UUID generated with
+  `crypto.randomUUID()`
+- the same UUID is reused when the user retries the SAME payload after an
+  ambiguous network/server failure → the backend replays the original
+  write instead of creating a duplicate ledger row
+- the UUID rotates as soon as the user edits the payload materially
+  (amount, asset, currency, FX rate, etc.)
+- the UUID is cleared on confirmed success and on modal close/reset, so a
+  successful key is never reused for a new operation
+- `authenticatedRequest` preserves caller-provided `Idempotency-Key`
+  headers across the single 401 → refresh → retry path (regression test:
+  `sessionGate.test.ts`)
+- backend error codes mapped to safe French messages:
+  - `missing_idempotency_key` / `invalid_idempotency_key`
+    → "La requête ne peut pas être sécurisée. Veuillez réessayer."
+  - `idempotency_key_conflict`
+    → "Cette tentative correspond à une opération différente. Vérifiez
+       les données puis recommencez."
+
+Browser storage (localStorage / sessionStorage) is intentionally NOT used
+for the idempotency key in P3: a key survives only for the duration of an
+in-flight submission attempt within the same modal instance.
+
 ## Operations integration (Pass 3)
 
 After portfolio selection, the Transactions page and Dashboard load operations via `GET /v1/portfolios/{id}/operations`.

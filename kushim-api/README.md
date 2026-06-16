@@ -887,6 +887,19 @@ Auth :
 
 - `Authorization: Bearer <access_token>`
 
+Idempotency (P3) :
+
+- en-tête requis : `Idempotency-Key: <UUID v4>`
+- en-tête manquant → `400 missing_idempotency_key`
+- en-tête mal formé → `400 invalid_idempotency_key`
+- même clé réutilisée avec une requête normalisée différente → `409 idempotency_key_conflict`
+- la clé est portée par l'utilisateur authentifié : la même UUID utilisée par un autre utilisateur ne collisionne jamais et ne révèle rien
+- la première exécution répond `201 Created` avec `Idempotency-Replayed: false`
+- un rejeu exact répond `200 OK` avec `Idempotency-Replayed: true` et la **même** `id_portfolio_operation` (et la même `id_portfolio_refresh_request` quand applicable) ; aucune nouvelle opération ni nouvelle refresh-request n'est insérée
+- la comparaison s'effectue sur une empreinte JSONB canonique calculée après application des défauts serveur (statut par défaut `pending`, devise canonique normalisée, métadonnées `{}`), pas sur les octets bruts du JSON entrant
+- une requête rejetée AVANT la persistance (validation, FX manquant cross-currency, asset inactif, etc.) ne consomme PAS la clé : un retry corrigé peut réutiliser la même UUID
+- la clé d'idempotence est durable dans `portfolio_operation_idempotency` et reste indépendante du couple `(external_provider, external_reference)` qui conserve sa propre dédup unique
+
 Statut :
 
 - si `operation_status` est omis, la valeur appliquee est `pending`
@@ -1079,6 +1092,12 @@ Regles :
 - si `id_asset` ou `id_related_asset` sont fournis, ils doivent exister et etre `active`
 - aucune mise a jour directe de l'operation `posted`
 - aucune ecriture dans read models ou snapshots
+
+Idempotency (P3) :
+
+- en-tête requis : `Idempotency-Key: <UUID v4>` (mêmes règles que `POST /v1/portfolios/{id}/operations`)
+- la clé est scopée à `(id_user, id_corrected_operation)` via l'empreinte canonique : réutiliser la même clé pour corriger une opération **différente** retourne `409 idempotency_key_conflict`
+- un rejeu exact retourne `200 OK` et la même ligne d'adjustment ; aucune seconde correction n'est créée
 
 Exemple de requete :
 
