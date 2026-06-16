@@ -52,6 +52,13 @@ pub enum ApiError {
     },
 }
 
+/// Header name surfaced on every successful write covered by the P3
+/// idempotency contract. `false` on the first execution, `true` on every exact
+/// replay.
+pub const IDEMPOTENCY_REPLAYED_HEADER: &str = "Idempotency-Replayed";
+/// Lowercase form required by `axum::http::HeaderName::from_static`.
+pub const IDEMPOTENCY_REPLAYED_HEADER_LOWER: &str = "idempotency-replayed";
+
 #[derive(Serialize)]
 struct ApiErrorBody<'a> {
     error: ApiErrorPayload<'a>,

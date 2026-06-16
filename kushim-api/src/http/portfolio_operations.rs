@@ -3,19 +3,26 @@ use crate::{
     domain::asset::AssetIdentity,
     domain::portfolio_operation::{OperationStatus, OperationType},
     domain::portfolio_refresh_request::{PortfolioRefreshRequest, RefreshRequestStatus},
-    errors::ApiError,
+    errors::{ApiError, IDEMPOTENCY_REPLAYED_HEADER_LOWER},
     http::extractors::{ApiJson, ApiPath, ApiQuery},
+    http::idempotency::IdempotencyKey,
     services::portfolio_operations::{
         CancelPortfolioOperationInput, CreatePortfolioOperationCorrectionInput,
-        CreatePortfolioOperationInput, ListPortfolioOperationsInput, OperationWriteOutcome,
-        PortfolioOperationAuditTimelineInput, PortfolioOperationAuditTimelineItemView,
-        PortfolioOperationAuditTimelineView, PortfolioOperationAuditView,
-        PortfolioOperationCorrectionsView, PortfolioOperationServiceError, PortfolioOperationView,
-        PostPortfolioOperationInput, UpdatePortfolioOperationInput,
+        CreatePortfolioOperationInput, IdempotentOperationWriteOutcome,
+        ListPortfolioOperationsInput, OperationWriteOutcome, PortfolioOperationAuditTimelineInput,
+        PortfolioOperationAuditTimelineItemView, PortfolioOperationAuditTimelineView,
+        PortfolioOperationAuditView, PortfolioOperationCorrectionsView,
+        PortfolioOperationServiceError, PortfolioOperationView, PostPortfolioOperationInput,
+        UpdatePortfolioOperationInput,
     },
     state::AppState,
 };
-use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
+use axum::{
+    Json,
+    extract::State,
+    http::{HeaderValue, StatusCode},
+    response::IntoResponse,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
@@ -294,42 +301,43 @@ pub struct PortfolioOperationAuditTimelineResponse {
 pub async fn create_portfolio_operation(
     State(state): State<AppState>,
     authenticated: AuthenticatedUser,
+    IdempotencyKey(idempotency_key): IdempotencyKey,
     ApiPath(id_portfolio): ApiPath<Uuid>,
     ApiJson(request): ApiJson<CreatePortfolioOperationRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let outcome = state
+    let result = state
         .portfolio_operation_service
-        .create_operation(CreatePortfolioOperationInput {
-            id_user: authenticated.claims.sub,
-            id_portfolio,
-            id_asset: request.id_asset,
-            id_related_asset: request.id_related_asset,
-            operation_type: request.operation_type,
-            operation_status: request.operation_status,
-            executed_at: request.executed_at,
-            effective_at: request.effective_at,
-            quantity: request.quantity,
-            related_quantity: request.related_quantity,
-            price_minor: request.price_minor,
-            gross_amount_minor: request.gross_amount_minor,
-            fees_minor: request.fees_minor,
-            taxes_minor: request.taxes_minor,
-            cash_amount_minor: request.cash_amount_minor,
-            currency: request.currency,
-            fx_rate_to_portfolio: request.fx_rate_to_portfolio,
-            external_provider: request.external_provider,
-            external_reference: request.external_reference,
-            id_corrected_operation: request.id_corrected_operation,
-            notes: request.notes,
-            metadata: request.metadata,
-        })
+        .create_operation_idempotent(
+            CreatePortfolioOperationInput {
+                id_user: authenticated.claims.sub,
+                id_portfolio,
+                id_asset: request.id_asset,
+                id_related_asset: request.id_related_asset,
+                operation_type: request.operation_type,
+                operation_status: request.operation_status,
+                executed_at: request.executed_at,
+                effective_at: request.effective_at,
+                quantity: request.quantity,
+                related_quantity: request.related_quantity,
+                price_minor: request.price_minor,
+                gross_amount_minor: request.gross_amount_minor,
+                fees_minor: request.fees_minor,
+                taxes_minor: request.taxes_minor,
+                cash_amount_minor: request.cash_amount_minor,
+                currency: request.currency,
+                fx_rate_to_portfolio: request.fx_rate_to_portfolio,
+                external_provider: request.external_provider,
+                external_reference: request.external_reference,
+                id_corrected_operation: request.id_corrected_operation,
+                notes: request.notes,
+                metadata: request.metadata,
+            },
+            idempotency_key,
+        )
         .await
         .map_err(map_service_error)?;
 
-    Ok((
-        StatusCode::CREATED,
-        Json(PortfolioOperationWriteEnvelope::from(outcome)),
-    ))
+    Ok(build_idempotent_write_response(result))
 }
 
 pub async fn list_portfolio_operations(
@@ -441,41 +449,70 @@ pub async fn cancel_portfolio_operation(
 pub async fn create_portfolio_operation_correction(
     State(state): State<AppState>,
     authenticated: AuthenticatedUser,
+    IdempotencyKey(idempotency_key): IdempotencyKey,
     ApiPath((id_portfolio, id_portfolio_operation)): ApiPath<(Uuid, Uuid)>,
     ApiJson(request): ApiJson<CreateCorrectionRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let outcome = state
+    let result = state
         .portfolio_operation_service
-        .create_correction(CreatePortfolioOperationCorrectionInput {
-            id_user: authenticated.claims.sub,
-            id_portfolio,
-            id_portfolio_operation,
-            operation_status: request.operation_status,
-            executed_at: request.executed_at,
-            effective_at: request.effective_at,
-            id_asset: request.id_asset,
-            id_related_asset: request.id_related_asset,
-            quantity: request.quantity,
-            related_quantity: request.related_quantity,
-            price_minor: request.price_minor,
-            gross_amount_minor: request.gross_amount_minor,
-            fees_minor: request.fees_minor,
-            taxes_minor: request.taxes_minor,
-            cash_amount_minor: request.cash_amount_minor,
-            currency: request.currency,
-            fx_rate_to_portfolio: request.fx_rate_to_portfolio,
-            external_provider: request.external_provider,
-            external_reference: request.external_reference,
-            notes: request.notes,
-            metadata: request.metadata,
-        })
+        .create_correction_idempotent(
+            CreatePortfolioOperationCorrectionInput {
+                id_user: authenticated.claims.sub,
+                id_portfolio,
+                id_portfolio_operation,
+                operation_status: request.operation_status,
+                executed_at: request.executed_at,
+                effective_at: request.effective_at,
+                id_asset: request.id_asset,
+                id_related_asset: request.id_related_asset,
+                quantity: request.quantity,
+                related_quantity: request.related_quantity,
+                price_minor: request.price_minor,
+                gross_amount_minor: request.gross_amount_minor,
+                fees_minor: request.fees_minor,
+                taxes_minor: request.taxes_minor,
+                cash_amount_minor: request.cash_amount_minor,
+                currency: request.currency,
+                fx_rate_to_portfolio: request.fx_rate_to_portfolio,
+                external_provider: request.external_provider,
+                external_reference: request.external_reference,
+                notes: request.notes,
+                metadata: request.metadata,
+            },
+            idempotency_key,
+        )
         .await
         .map_err(map_service_error)?;
 
-    Ok((
-        StatusCode::CREATED,
-        Json(PortfolioOperationWriteEnvelope::from(outcome)),
-    ))
+    Ok(build_idempotent_write_response(result))
+}
+
+/// Render an idempotent write outcome as an HTTP response.
+///
+/// First execution returns `HTTP 201 Created` with `Idempotency-Replayed: false`.
+/// Exact replays return `HTTP 200 OK` with `Idempotency-Replayed: true` and
+/// the SAME operation/refresh identity as the original write.
+fn build_idempotent_write_response(
+    result: IdempotentOperationWriteOutcome,
+) -> axum::response::Response {
+    let IdempotentOperationWriteOutcome { outcome, replayed } = result;
+    let status = if replayed {
+        StatusCode::OK
+    } else {
+        StatusCode::CREATED
+    };
+    let header_value = if replayed {
+        HeaderValue::from_static("true")
+    } else {
+        HeaderValue::from_static("false")
+    };
+    let mut response =
+        (status, Json(PortfolioOperationWriteEnvelope::from(outcome))).into_response();
+    response.headers_mut().insert(
+        axum::http::HeaderName::from_static(IDEMPOTENCY_REPLAYED_HEADER_LOWER),
+        header_value,
+    );
+    response
 }
 
 pub async fn post_portfolio_operation(
@@ -735,7 +772,9 @@ mod tests {
             claims::{AuthClaims, TokenType, UserRole},
         },
         repositories::{
-            assets::AssetRepository, portfolio_operations::PortfolioOperationRepository,
+            assets::AssetRepository,
+            portfolio_operation_idempotency::PortfolioOperationIdempotencyRepository,
+            portfolio_operations::PortfolioOperationRepository,
             portfolio_read_models::PortfolioReadModelRepository,
             portfolio_refresh_requests::PortfolioRefreshRequestRepository,
             portfolio_snapshots::PortfolioSnapshotRepository, portfolios::PortfolioRepository,
@@ -937,6 +976,33 @@ mod tests {
     }
 
     async fn cleanup_user_tree(pool: &PgPool, id_user: Uuid, asset_ids: &[Uuid]) {
+        // P3 audit FKs use ON DELETE RESTRICT for user/portfolio/operation,
+        // so the idempotency rows must be cleaned up BEFORE the operations
+        // they reference. Refresh requests are likewise blocked by the
+        // idempotency FK (SET NULL means we just need to clear the
+        // idempotency table first to free the refresh rows).
+        sqlx::query(
+            r#"
+            DELETE FROM portfolio_operation_idempotency
+            WHERE id_user = $1
+            "#,
+        )
+        .bind(id_user)
+        .execute(pool)
+        .await
+        .expect("idempotency records should be deleted");
+
+        sqlx::query(
+            r#"
+            DELETE FROM portfolio_refresh_requests
+            WHERE id_portfolio IN (SELECT id_portfolio FROM portfolios WHERE id_user = $1)
+            "#,
+        )
+        .bind(id_user)
+        .execute(pool)
+        .await
+        .expect("refresh requests should be deleted");
+
         sqlx::query(
             r#"
             DELETE FROM portfolio_operations
@@ -1007,6 +1073,7 @@ mod tests {
             portfolio_repository.clone(),
             PortfolioOperationRepository::new(pool.clone()),
             PortfolioRefreshRequestRepository::new(pool.clone()),
+            PortfolioOperationIdempotencyRepository::new(pool.clone()),
         );
         let portfolio_read_model_service = PortfolioReadModelService::new(
             portfolio_repository.clone(),
@@ -1131,6 +1198,19 @@ mod tests {
         .expect("count should succeed")
     }
 
+    /// Whether a POST URI targets a P3 idempotent endpoint. Used by the
+    /// generic `post_json` helper to inject a random `Idempotency-Key` for
+    /// the existing legacy test bodies; tests that exercise the idempotency
+    /// contract itself use `post_json_with_headers` to control the header.
+    fn requires_idempotency_key(uri: &str) -> bool {
+        let path = uri.split('?').next().unwrap_or(uri);
+        if path.contains("/operations/") {
+            // /operations/{id}/corrections is idempotent; /post and /cancel are not.
+            return path.ends_with("/corrections");
+        }
+        path.ends_with("/operations")
+    }
+
     async fn post_json(
         pool: &PgPool,
         id_user: Uuid,
@@ -1138,24 +1218,56 @@ mod tests {
         uri: &str,
         body: Value,
     ) -> (StatusCode, Value) {
+        let mut headers: Vec<(&'static str, String)> = Vec::new();
+        if requires_idempotency_key(uri) {
+            headers.push(("idempotency-key", Uuid::new_v4().to_string()));
+        }
+        post_json_with_headers(pool, id_user, handle, uri, body, &headers).await
+    }
+
+    async fn post_json_with_headers(
+        pool: &PgPool,
+        id_user: Uuid,
+        handle: &str,
+        uri: &str,
+        body: Value,
+        extra_headers: &[(&'static str, String)],
+    ) -> (StatusCode, Value) {
+        let (status, _, value) =
+            post_json_full(pool, id_user, handle, uri, body, extra_headers).await;
+        (status, value)
+    }
+
+    async fn post_json_full(
+        pool: &PgPool,
+        id_user: Uuid,
+        handle: &str,
+        uri: &str,
+        body: Value,
+        extra_headers: &[(&'static str, String)],
+    ) -> (StatusCode, axum::http::HeaderMap, Value) {
         let app = crate::http::router(test_state(pool.clone()).await);
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(uri)
-                    .header(
-                        AUTHORIZATION,
-                        format!("Bearer {}", build_access_token(id_user, handle)),
-                    )
-                    .header("content-type", "application/json")
-                    .body(Body::from(body.to_string()))
-                    .unwrap(),
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri(uri)
+            .header(
+                AUTHORIZATION,
+                format!("Bearer {}", build_access_token(id_user, handle)),
             )
+            // Distinct from inline test content-type lines so the bulk
+            // idempotency-key injection regex below does not touch this
+            // shared helper.
+            .header(axum::http::header::CONTENT_TYPE, "application/json");
+        for (name, value) in extra_headers {
+            builder = builder.header(*name, value.clone());
+        }
+        let response = app
+            .oneshot(builder.body(Body::from(body.to_string())).unwrap())
             .await
             .expect("response should be built");
         let status = response.status();
-        (status, response_json(response).await)
+        let headers = response.headers().clone();
+        (status, headers, response_json(response).await)
     }
 
     #[tokio::test]
@@ -1744,6 +1856,7 @@ mod tests {
                         format!("Bearer {}", build_access_token(id_user, &handle)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::from(deposit_payload().to_string()))
                     .unwrap(),
             )
@@ -1785,6 +1898,7 @@ mod tests {
                         format!("Bearer {}", build_access_token(id_user, &handle)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::from(buy_payload(id_asset).to_string()))
                     .unwrap(),
             )
@@ -1819,6 +1933,7 @@ mod tests {
                         format!("Bearer {}", build_access_token(id_user, &handle)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::from(payload.to_string()))
                     .unwrap(),
             )
@@ -1856,6 +1971,7 @@ mod tests {
                         format!("Bearer {}", build_access_token(id_user, &handle)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::from(buy_payload(id_asset).to_string()))
                     .unwrap(),
             )
@@ -1896,6 +2012,7 @@ mod tests {
                         format!("Bearer {}", build_access_token(id_user, &handle)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::from(payload.to_string()))
                     .unwrap(),
             )
@@ -1943,6 +2060,7 @@ mod tests {
                         format!("Bearer {}", build_access_token(id_user, &handle)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::from(payload.to_string()))
                     .unwrap(),
             )
@@ -1989,6 +2107,7 @@ mod tests {
                         format!("Bearer {}", build_access_token(id_user, &handle)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::from(payload.to_string()))
                     .unwrap(),
             )
@@ -2020,6 +2139,7 @@ mod tests {
                         format!("Bearer {}", build_access_token(id_user, &handle)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::from(deposit_payload().to_string()))
                     .unwrap(),
             )
@@ -2049,6 +2169,7 @@ mod tests {
                         format!("Bearer {}", build_access_token(id_user, &handle)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::from(
                         json!({
                             "operation_type": "unknown",
@@ -2090,6 +2211,7 @@ mod tests {
                         format!("Bearer {}", build_access_token(id_user, &handle)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::from(r#"{"operation_type":"deposit""#))
                     .unwrap(),
             )
@@ -2124,6 +2246,7 @@ mod tests {
                         format!("Bearer {}", build_access_token(id_user, &handle)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::from(
                         r#"{"executed_at":"2026-06-05T10:00:00Z","currency":"EUR"}"#,
                     ))
@@ -2158,6 +2281,7 @@ mod tests {
                         format!("Bearer {}", build_access_token(id_user, &handle)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::from(
                         r#"{"operation_type":"deposit","executed_at":"2026-06-05T10:00:00Z","cash_amount_minor":"abc","currency":"EUR"}"#,
                     ))
@@ -2192,6 +2316,7 @@ mod tests {
                         format!("Bearer {}", build_access_token(id_user, &handle)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::from(
                         r#"{"operation_type":"deposit","executed_at":"2026-06-05T10:00:00Z","cash_amount_minor":1000,"currency":"EUR","unexpected":true}"#,
                     ))
@@ -2230,6 +2355,7 @@ mod tests {
                         format!("Bearer {}", build_access_token(id_user, &handle)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::from(r#"{"price_minor":"broken"}"#))
                     .unwrap(),
             )
@@ -2266,6 +2392,7 @@ mod tests {
                         format!("Bearer {}", build_access_token(id_user, &handle)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::from(r#"{"unknown_field":true}"#))
                     .unwrap(),
             )
@@ -2301,6 +2428,7 @@ mod tests {
                         format!("Bearer {}", build_access_token(id_user, &handle)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::from(r#"{"executed_at":"2026-06-06T10:00:00Z""#))
                     .unwrap(),
             )
@@ -2335,6 +2463,7 @@ mod tests {
                         format!("Bearer {}", build_access_token(id_user, &handle)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -2369,6 +2498,7 @@ mod tests {
                         format!("Bearer {}", build_access_token(id_user, &handle)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::from(
                         r#"{"executed_at":"2026-06-06T10:00:00Z","cash_amount_minor":"oops"}"#,
                     ))
@@ -2405,6 +2535,7 @@ mod tests {
                         format!("Bearer {}", build_access_token(id_user, &handle)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::from(
                         r#"{"executed_at":"2026-06-06T10:00:00Z","cash_amount_minor":1000,"currency":"EUR","unknown":true}"#,
                     ))
@@ -2444,6 +2575,7 @@ mod tests {
                         format!("Bearer {}", build_access_token(id_user, &handle)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::from(payload.to_string()))
                     .unwrap(),
             )
@@ -2477,6 +2609,7 @@ mod tests {
                         format!("Bearer {}", build_access_token(user_a, &handle_a)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::from(deposit_payload().to_string()))
                     .unwrap(),
             )
@@ -2507,6 +2640,7 @@ mod tests {
                         format!("Bearer {}", build_access_token(id_user, &handle)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::from(deposit_payload().to_string()))
                     .unwrap(),
             )
@@ -2535,6 +2669,7 @@ mod tests {
                         format!("Bearer {}", build_refresh_token(id_user, &handle)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::from(deposit_payload().to_string()))
                     .unwrap(),
             )
@@ -2792,6 +2927,7 @@ mod tests {
                         format!("Bearer {}", build_access_token(id_user, &handle)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::from(
                         json!({
                             "notes": "updated note",
@@ -2838,6 +2974,7 @@ mod tests {
                         format!("Bearer {}", build_access_token(id_user, &handle)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::from(
                         json!({ "id_asset": Uuid::new_v4() }).to_string(),
                     ))
@@ -2891,6 +3028,7 @@ mod tests {
                         format!("Bearer {}", build_access_token(id_user, &handle)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::from(
                         json!({ "id_asset": id_inactive_asset }).to_string(),
                     ))
@@ -2943,6 +3081,7 @@ mod tests {
                         format!("Bearer {}", build_access_token(id_user, &handle)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::from(json!({ "id_asset": id_new_asset }).to_string()))
                     .unwrap(),
             )
@@ -2977,6 +3116,7 @@ mod tests {
                         format!("Bearer {}", build_access_token(id_user, &handle)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::from(json!({ "notes": "forbidden" }).to_string()))
                     .unwrap(),
             )
@@ -3011,6 +3151,7 @@ mod tests {
                         format!("Bearer {}", build_access_token(id_user, &handle)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::from(json!({ "notes": "forbidden" }).to_string()))
                     .unwrap(),
             )
@@ -3044,6 +3185,7 @@ mod tests {
                         format!("Bearer {}", build_access_token(user_a, &handle_a)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::from(json!({ "notes": "forbidden" }).to_string()))
                     .unwrap(),
             )
@@ -3205,6 +3347,7 @@ mod tests {
                         format!("Bearer {}", build_access_token(id_user, &handle)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::from(correction_payload().to_string()))
                     .unwrap(),
             )
@@ -3285,6 +3428,7 @@ mod tests {
                         format!("Bearer {}", build_access_token(id_user, &handle)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::from(payload.to_string()))
                     .unwrap(),
             )
@@ -3327,6 +3471,7 @@ mod tests {
                         format!("Bearer {}", build_access_token(id_user, &handle)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::from(payload.to_string()))
                     .unwrap(),
             )
@@ -3374,6 +3519,7 @@ mod tests {
                         format!("Bearer {}", build_access_token(id_user, &handle)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::from(payload.to_string()))
                     .unwrap(),
             )
@@ -3408,6 +3554,7 @@ mod tests {
                         format!("Bearer {}", build_access_token(id_user, &handle)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::from(correction_payload().to_string()))
                     .unwrap(),
             )
@@ -3466,6 +3613,7 @@ mod tests {
                         format!("Bearer {}", build_access_token(id_user, &handle)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::from(correction_payload().to_string()))
                     .unwrap(),
             )
@@ -3504,6 +3652,7 @@ mod tests {
                         format!("Bearer {}", build_access_token(id_user, &handle)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::from(correction_payload().to_string()))
                     .unwrap(),
             )
@@ -3543,6 +3692,7 @@ mod tests {
                         format!("Bearer {}", build_access_token(user_a, &handle_a)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::from(correction_payload().to_string()))
                     .unwrap(),
             )
@@ -3575,6 +3725,7 @@ mod tests {
                         format!("Bearer {}", build_access_token(id_user, &handle)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::from(correction_payload().to_string()))
                     .unwrap(),
             )
@@ -3605,6 +3756,7 @@ mod tests {
                         format!("Bearer {}", build_refresh_token(id_user, &handle)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::from(correction_payload().to_string()))
                     .unwrap(),
             )
@@ -3639,6 +3791,7 @@ mod tests {
                         format!("Bearer {}", build_access_token(id_user, &handle)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::from(payload.to_string()))
                     .unwrap(),
             )
@@ -3672,6 +3825,7 @@ mod tests {
                         format!("Bearer {}", build_access_token(id_user, &handle)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::from(payload.to_string()))
                     .unwrap(),
             )
@@ -3705,6 +3859,7 @@ mod tests {
                         format!("Bearer {}", build_access_token(id_user, &handle)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::from(payload.to_string()))
                     .unwrap(),
             )
@@ -3740,6 +3895,7 @@ mod tests {
                         format!("Bearer {}", build_access_token(id_user, &handle)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::from(payload.to_string()))
                     .unwrap(),
             )
@@ -3908,6 +4064,7 @@ mod tests {
                         format!("Bearer {}", build_access_token(id_user, &handle)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::from(json!({ "notes": "forbidden" }).to_string()))
                     .unwrap(),
             )
@@ -4220,6 +4377,7 @@ mod tests {
                         format!("Bearer {}", build_access_token(id_user, &handle)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::from(payload.to_string()))
                     .unwrap(),
             )
@@ -4312,6 +4470,7 @@ mod tests {
                         format!("Bearer {}", build_access_token(id_user, &handle)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::from(correction_payload().to_string()))
                     .unwrap(),
             )
@@ -4413,6 +4572,7 @@ mod tests {
                         format!("Bearer {}", build_access_token(id_user, &handle)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::from(correction_a.to_string()))
                     .unwrap(),
             )
@@ -4432,6 +4592,7 @@ mod tests {
                         format!("Bearer {}", build_access_token(id_user, &handle)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::from(correction_b.to_string()))
                     .unwrap(),
             )
@@ -4571,6 +4732,7 @@ mod tests {
                         format!("Bearer {}", build_access_token(id_user, &handle)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::from(correction_payload().to_string()))
                     .unwrap(),
             )
@@ -4625,6 +4787,7 @@ mod tests {
                         format!("Bearer {}", build_access_token(id_user, &handle)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::from(correction_payload().to_string()))
                     .unwrap(),
             )
@@ -4744,6 +4907,7 @@ mod tests {
                         format!("Bearer {}", build_access_token(id_user, &handle)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::from(correction_payload().to_string()))
                     .unwrap(),
             )
@@ -4840,6 +5004,7 @@ mod tests {
                         format!("Bearer {}", build_access_token(id_user, &handle)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::from(correction_payload().to_string()))
                     .unwrap(),
             )
@@ -4967,6 +5132,7 @@ mod tests {
                         format!("Bearer {}", build_access_token(id_user, &handle)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::from(late.to_string()))
                     .unwrap(),
             )
@@ -4986,6 +5152,7 @@ mod tests {
                         format!("Bearer {}", build_access_token(id_user, &handle)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::from(early.to_string()))
                     .unwrap(),
             )
@@ -5319,6 +5486,7 @@ mod tests {
                         format!("Bearer {}", build_access_token(id_user, &handle)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::from(correction_payload().to_string()))
                     .unwrap(),
             )
@@ -5824,19 +5992,23 @@ mod tests {
     fn p2_writes_prefetch_identities_before_mutation() {
         let service_source = include_str!("../services/portfolio_operations.rs");
 
+        // Signatures include the opening paren to disambiguate the legacy
+        // write methods from the P3 `*_idempotent` variants which add a
+        // replay path (enrich_many is legitimately called on replay, not on
+        // a write — so the invariant only applies to the legacy methods).
         let cases: &[(&str, &str)] = &[
             (
-                "pub async fn create_operation",
+                "pub async fn create_operation(",
                 "create_with_optional_refresh",
             ),
-            ("pub async fn update_operation", ".update("),
-            ("pub async fn cancel_operation", ".set_status("),
+            ("pub async fn update_operation(", ".update("),
+            ("pub async fn cancel_operation(", ".set_status("),
             (
-                "pub async fn post_operation",
+                "pub async fn post_operation(",
                 "set_status_posted_with_refresh",
             ),
             (
-                "pub async fn create_correction",
+                "pub async fn create_correction(",
                 "create_with_optional_refresh",
             ),
         ];
@@ -5952,6 +6124,7 @@ mod tests {
                         format!("Bearer {}", build_access_token(id_user, &handle)),
                     )
                     .header("content-type", "application/json")
+                    .header("idempotency-key", Uuid::new_v4().to_string())
                     .body(Body::from(payload.to_string()))
                     .unwrap(),
             )
@@ -6272,6 +6445,1512 @@ mod tests {
         let op = &body["operations"][0];
         assert_identity_matches(&op["asset"], id_parent, "SPNA");
         assert_identity_matches(&op["related_asset"], id_child, "SPNB");
+    }
+
+    // ====================================================================
+    // P3: Durable operation idempotency tests
+    // ====================================================================
+
+    /// Multi-connection pool needed by concurrent-race scenarios. The
+    /// `test_pool` helper above uses `max_connections=1` for the legacy
+    /// tests, which would serialize every query and turn race tests into
+    /// sequential ones.
+    async fn test_pool_concurrent() -> PgPool {
+        let database_url =
+            std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for integration tests");
+        PgPoolOptions::new()
+            .max_connections(8)
+            .connect(&database_url)
+            .await
+            .expect("test database should be reachable")
+    }
+
+    /// Delete every idempotency record for a portfolio so reruns are clean.
+    async fn cleanup_idempotency(pool: &PgPool, id_portfolio: Uuid) {
+        sqlx::query("DELETE FROM portfolio_operation_idempotency WHERE id_portfolio = $1")
+            .bind(id_portfolio)
+            .execute(pool)
+            .await
+            .expect("idempotency rows should be deleted");
+    }
+
+    async fn count_operations(pool: &PgPool, id_portfolio: Uuid) -> i64 {
+        sqlx::query_scalar("SELECT COUNT(*) FROM portfolio_operations WHERE id_portfolio = $1")
+            .bind(id_portfolio)
+            .fetch_one(pool)
+            .await
+            .expect("count should succeed")
+    }
+
+    async fn count_idempotency(pool: &PgPool, id_portfolio: Uuid) -> i64 {
+        sqlx::query_scalar(
+            "SELECT COUNT(*) FROM portfolio_operation_idempotency WHERE id_portfolio = $1",
+        )
+        .bind(id_portfolio)
+        .fetch_one(pool)
+        .await
+        .expect("count should succeed")
+    }
+
+    fn header_value(headers: &axum::http::HeaderMap, name: &str) -> Option<String> {
+        headers.get(name).map(|v| v.to_str().unwrap().to_string())
+    }
+
+    #[tokio::test]
+    async fn missing_idempotency_key_is_rejected_with_400() {
+        let pool = test_pool().await;
+        let handle = format!("p3a{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let id_user = create_user(&pool, &handle).await;
+        let id_portfolio = create_portfolio(&pool, id_user, None).await;
+
+        let (status, body) = post_json_with_headers(
+            &pool,
+            id_user,
+            &handle,
+            &format!("/v1/portfolios/{id_portfolio}/operations"),
+            posted_deposit_payload(),
+            &[],
+        )
+        .await;
+
+        let op_count = count_operations(&pool, id_portfolio).await;
+        let refresh_count = count_all_refresh_requests(&pool, id_portfolio).await;
+        cleanup_user_tree(&pool, id_user, &[]).await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"]["code"], "missing_idempotency_key");
+        assert_eq!(op_count, 0);
+        assert_eq!(refresh_count, 0);
+    }
+
+    #[tokio::test]
+    async fn malformed_idempotency_key_is_rejected_with_400() {
+        let pool = test_pool().await;
+        let handle = format!("p3b{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let id_user = create_user(&pool, &handle).await;
+        let id_portfolio = create_portfolio(&pool, id_user, None).await;
+
+        let (status, body) = post_json_with_headers(
+            &pool,
+            id_user,
+            &handle,
+            &format!("/v1/portfolios/{id_portfolio}/operations"),
+            posted_deposit_payload(),
+            &[("idempotency-key", "not-a-uuid".to_string())],
+        )
+        .await;
+
+        let op_count = count_operations(&pool, id_portfolio).await;
+        cleanup_user_tree(&pool, id_user, &[]).await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"]["code"], "invalid_idempotency_key");
+        assert_eq!(op_count, 0);
+    }
+
+    #[tokio::test]
+    async fn first_posted_create_returns_201_and_replayed_false() {
+        let pool = test_pool().await;
+        let handle = format!("p3c{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let id_user = create_user(&pool, &handle).await;
+        let id_portfolio = create_portfolio(&pool, id_user, None).await;
+        let key = Uuid::new_v4();
+
+        let (status, headers, body) = post_json_full(
+            &pool,
+            id_user,
+            &handle,
+            &format!("/v1/portfolios/{id_portfolio}/operations"),
+            posted_deposit_payload(),
+            &[("idempotency-key", key.to_string())],
+        )
+        .await;
+
+        let pending = count_pending_refresh_requests(&pool, id_portfolio).await;
+        let idemp = count_idempotency(&pool, id_portfolio).await;
+        cleanup_refresh_requests(&pool, id_portfolio).await;
+        cleanup_idempotency(&pool, id_portfolio).await;
+
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(
+            header_value(&headers, "idempotency-replayed").as_deref(),
+            Some("false")
+        );
+        assert_eq!(body["operation"]["operation_status"], "posted");
+        assert!(body["refresh_request"]["id_portfolio_refresh_request"].is_string());
+        assert_eq!(pending, 1);
+        assert_eq!(idemp, 1);
+    }
+
+    #[tokio::test]
+    async fn exact_replay_returns_same_ids_no_new_rows_and_200() {
+        let pool = test_pool().await;
+        let handle = format!("p3d{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let id_user = create_user(&pool, &handle).await;
+        let id_portfolio = create_portfolio(&pool, id_user, None).await;
+        let key = Uuid::new_v4();
+        let uri = format!("/v1/portfolios/{id_portfolio}/operations");
+
+        let (status1, headers1, body1) = post_json_full(
+            &pool,
+            id_user,
+            &handle,
+            &uri,
+            posted_deposit_payload(),
+            &[("idempotency-key", key.to_string())],
+        )
+        .await;
+
+        let (status2, headers2, body2) = post_json_full(
+            &pool,
+            id_user,
+            &handle,
+            &uri,
+            posted_deposit_payload(),
+            &[("idempotency-key", key.to_string())],
+        )
+        .await;
+
+        let op_count = count_operations(&pool, id_portfolio).await;
+        let refresh_total = count_all_refresh_requests(&pool, id_portfolio).await;
+        let idemp_count = count_idempotency(&pool, id_portfolio).await;
+        cleanup_refresh_requests(&pool, id_portfolio).await;
+        cleanup_idempotency(&pool, id_portfolio).await;
+
+        assert_eq!(status1, StatusCode::CREATED);
+        assert_eq!(status2, StatusCode::OK);
+        assert_eq!(
+            header_value(&headers1, "idempotency-replayed").as_deref(),
+            Some("false")
+        );
+        assert_eq!(
+            header_value(&headers2, "idempotency-replayed").as_deref(),
+            Some("true")
+        );
+        assert_eq!(
+            body1["operation"]["id_portfolio_operation"],
+            body2["operation"]["id_portfolio_operation"],
+            "operation id must be stable across replay"
+        );
+        assert_eq!(
+            body1["refresh_request"]["id_portfolio_refresh_request"],
+            body2["refresh_request"]["id_portfolio_refresh_request"],
+            "refresh-request id must be stable across replay"
+        );
+        assert_eq!(op_count, 1, "no new operation on replay");
+        assert_eq!(refresh_total, 1, "no new refresh-request on replay");
+        assert_eq!(idemp_count, 1);
+    }
+
+    #[tokio::test]
+    async fn same_key_different_amount_returns_409_conflict() {
+        let pool = test_pool().await;
+        let handle = format!("p3e{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let id_user = create_user(&pool, &handle).await;
+        let id_portfolio = create_portfolio(&pool, id_user, None).await;
+        let key = Uuid::new_v4();
+        let uri = format!("/v1/portfolios/{id_portfolio}/operations");
+
+        let _ = post_json_with_headers(
+            &pool,
+            id_user,
+            &handle,
+            &uri,
+            posted_deposit_payload(),
+            &[("idempotency-key", key.to_string())],
+        )
+        .await;
+
+        // Same key, mutate the amount.
+        let mut other = posted_deposit_payload();
+        other["gross_amount_minor"] = json!(200000);
+        other["cash_amount_minor"] = json!(200000);
+        let (status, body) = post_json_with_headers(
+            &pool,
+            id_user,
+            &handle,
+            &uri,
+            other,
+            &[("idempotency-key", key.to_string())],
+        )
+        .await;
+
+        let op_count = count_operations(&pool, id_portfolio).await;
+        cleanup_refresh_requests(&pool, id_portfolio).await;
+        cleanup_idempotency(&pool, id_portfolio).await;
+
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(body["error"]["code"], "idempotency_key_conflict");
+        assert_eq!(op_count, 1, "no extra operation must be inserted");
+    }
+
+    #[tokio::test]
+    async fn same_uuid_isolated_per_user() {
+        let pool = test_pool().await;
+        let handle_a = format!("p3f{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let handle_b = format!("p3g{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let id_user_a = create_user(&pool, &handle_a).await;
+        let id_user_b = create_user(&pool, &handle_b).await;
+        let id_portfolio_a = create_portfolio(&pool, id_user_a, None).await;
+        let id_portfolio_b = create_portfolio(&pool, id_user_b, None).await;
+        let key = Uuid::new_v4();
+
+        let (status_a, _headers_a, _body_a) = post_json_full(
+            &pool,
+            id_user_a,
+            &handle_a,
+            &format!("/v1/portfolios/{id_portfolio_a}/operations"),
+            posted_deposit_payload(),
+            &[("idempotency-key", key.to_string())],
+        )
+        .await;
+        let (status_b, headers_b, _body_b) = post_json_full(
+            &pool,
+            id_user_b,
+            &handle_b,
+            &format!("/v1/portfolios/{id_portfolio_b}/operations"),
+            posted_deposit_payload(),
+            &[("idempotency-key", key.to_string())],
+        )
+        .await;
+
+        cleanup_refresh_requests(&pool, id_portfolio_a).await;
+        cleanup_refresh_requests(&pool, id_portfolio_b).await;
+        cleanup_idempotency(&pool, id_portfolio_a).await;
+        cleanup_idempotency(&pool, id_portfolio_b).await;
+
+        assert_eq!(status_a, StatusCode::CREATED);
+        assert_eq!(
+            status_b,
+            StatusCode::CREATED,
+            "second user's key must not collide"
+        );
+        assert_eq!(
+            header_value(&headers_b, "idempotency-replayed").as_deref(),
+            Some("false")
+        );
+    }
+
+    #[tokio::test]
+    async fn pre_write_validation_failure_does_not_consume_key() {
+        let pool = test_pool().await;
+        let handle = format!("p3h{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let id_user = create_user(&pool, &handle).await;
+        let id_portfolio = create_portfolio(&pool, id_user, None).await; // EUR
+        let key = Uuid::new_v4();
+        let uri = format!("/v1/portfolios/{id_portfolio}/operations");
+
+        let mut bad = posted_deposit_payload();
+        bad["currency"] = json!("USD"); // cross-currency without FX → 422
+
+        let (status_bad, body_bad) = post_json_with_headers(
+            &pool,
+            id_user,
+            &handle,
+            &uri,
+            bad,
+            &[("idempotency-key", key.to_string())],
+        )
+        .await;
+
+        // Same key now used with a valid payload — must succeed.
+        let (status_ok, _, _body_ok) = post_json_full(
+            &pool,
+            id_user,
+            &handle,
+            &uri,
+            posted_deposit_payload(),
+            &[("idempotency-key", key.to_string())],
+        )
+        .await;
+
+        let idemp = count_idempotency(&pool, id_portfolio).await;
+        cleanup_refresh_requests(&pool, id_portfolio).await;
+        cleanup_idempotency(&pool, id_portfolio).await;
+
+        assert_eq!(status_bad, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(body_bad["error"]["code"], "unsupported_cross_currency");
+        assert_eq!(status_ok, StatusCode::CREATED);
+        assert_eq!(idemp, 1, "exactly one idempotency record after success");
+    }
+
+    #[tokio::test]
+    async fn refresh_token_authentication_is_rejected() {
+        let pool = test_pool().await;
+        let handle = format!("p3i{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let id_user = create_user(&pool, &handle).await;
+        let id_portfolio = create_portfolio(&pool, id_user, None).await;
+        let key = Uuid::new_v4();
+
+        let app = crate::http::router(test_state(pool.clone()).await);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/v1/portfolios/{id_portfolio}/operations"))
+                    .header(
+                        AUTHORIZATION,
+                        format!("Bearer {}", build_refresh_token(id_user, &handle)),
+                    )
+                    .header("content-type", "application/json")
+                    .header("idempotency-key", key.to_string())
+                    .body(Body::from(posted_deposit_payload().to_string()))
+                    .unwrap(),
+            )
+            .await
+            .expect("response should build");
+
+        let status = response.status();
+        cleanup_user_tree(&pool, id_user, &[]).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn correction_replay_returns_same_adjustment_and_no_new_row() {
+        let pool = test_pool().await;
+        let handle = format!("p3j{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let id_user = create_user(&pool, &handle).await;
+        let id_portfolio = create_portfolio(&pool, id_user, None).await;
+
+        // Seed a posted operation to correct (insert directly, bypass idempotency).
+        let original =
+            insert_operation(&pool, id_portfolio, "posted", posted_deposit_payload()).await;
+
+        let key = Uuid::new_v4();
+        let uri = format!("/v1/portfolios/{id_portfolio}/operations/{original}/corrections");
+
+        let (status1, headers1, body1) = post_json_full(
+            &pool,
+            id_user,
+            &handle,
+            &uri,
+            correction_payload(),
+            &[("idempotency-key", key.to_string())],
+        )
+        .await;
+        let (status2, headers2, body2) = post_json_full(
+            &pool,
+            id_user,
+            &handle,
+            &uri,
+            correction_payload(),
+            &[("idempotency-key", key.to_string())],
+        )
+        .await;
+
+        let adjustment_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM portfolio_operations WHERE id_portfolio = $1 AND id_corrected_operation = $2",
+        )
+        .bind(id_portfolio)
+        .bind(original)
+        .fetch_one(&pool)
+        .await
+        .expect("count");
+
+        cleanup_idempotency(&pool, id_portfolio).await;
+        sqlx::query("DELETE FROM portfolio_operations WHERE id_portfolio = $1 AND id_corrected_operation = $2")
+            .bind(id_portfolio)
+            .bind(original)
+            .execute(&pool)
+            .await
+            .expect("delete corrections");
+
+        assert_eq!(status1, StatusCode::CREATED);
+        assert_eq!(status2, StatusCode::OK);
+        assert_eq!(
+            header_value(&headers1, "idempotency-replayed").as_deref(),
+            Some("false")
+        );
+        assert_eq!(
+            header_value(&headers2, "idempotency-replayed").as_deref(),
+            Some("true")
+        );
+        assert_eq!(
+            body1["operation"]["id_portfolio_operation"],
+            body2["operation"]["id_portfolio_operation"]
+        );
+        assert_eq!(adjustment_count, 1, "no second adjustment must be created");
+    }
+
+    #[tokio::test]
+    async fn concurrent_identical_creates_produce_exactly_one_operation() {
+        // Uses a multi-connection pool so two transactions truly run in
+        // parallel and race on the (id_user, idempotency_key) unique index.
+        let pool = test_pool_concurrent().await;
+        let handle = format!("p3k{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let id_user = create_user(&pool, &handle).await;
+        let id_portfolio = create_portfolio(&pool, id_user, None).await;
+        let key = Uuid::new_v4();
+        let uri = format!("/v1/portfolios/{id_portfolio}/operations");
+
+        let app = crate::http::router(test_state(pool.clone()).await);
+
+        let build_req = || {
+            Request::builder()
+                .method("POST")
+                .uri(&uri)
+                .header(
+                    AUTHORIZATION,
+                    format!("Bearer {}", build_access_token(id_user, &handle)),
+                )
+                .header("content-type", "application/json")
+                .header("idempotency-key", key.to_string())
+                .body(Body::from(posted_deposit_payload().to_string()))
+                .unwrap()
+        };
+
+        let app_a = app.clone();
+        let app_b = app.clone();
+        let (resp_a, resp_b) =
+            tokio::join!(app_a.oneshot(build_req()), app_b.oneshot(build_req()),);
+
+        let resp_a = resp_a.expect("response a");
+        let resp_b = resp_b.expect("response b");
+        assert!(resp_a.status().is_success());
+        assert!(resp_b.status().is_success());
+
+        let body_a: Value = serde_json::from_slice(
+            &body::to_bytes(resp_a.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let body_b: Value = serde_json::from_slice(
+            &body::to_bytes(resp_b.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+
+        let op_count = count_operations(&pool, id_portfolio).await;
+        let refresh_total = count_all_refresh_requests(&pool, id_portfolio).await;
+        cleanup_refresh_requests(&pool, id_portfolio).await;
+        cleanup_idempotency(&pool, id_portfolio).await;
+
+        assert_eq!(
+            body_a["operation"]["id_portfolio_operation"],
+            body_b["operation"]["id_portfolio_operation"],
+            "both concurrent winners must point at the same operation"
+        );
+        assert_eq!(op_count, 1, "exactly one operation row must persist");
+        assert_eq!(refresh_total, 1, "exactly one refresh request must persist");
+    }
+
+    #[tokio::test]
+    async fn concurrent_different_payloads_one_succeeds_one_conflicts() {
+        let pool = test_pool_concurrent().await;
+        let handle = format!("p3l{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let id_user = create_user(&pool, &handle).await;
+        let id_portfolio = create_portfolio(&pool, id_user, None).await;
+        let key = Uuid::new_v4();
+        let uri = format!("/v1/portfolios/{id_portfolio}/operations");
+
+        let app = crate::http::router(test_state(pool.clone()).await);
+        let mut other_payload = posted_deposit_payload();
+        other_payload["gross_amount_minor"] = json!(777777);
+        other_payload["cash_amount_minor"] = json!(777777);
+
+        let build_req = |payload: Value| {
+            Request::builder()
+                .method("POST")
+                .uri(&uri)
+                .header(
+                    AUTHORIZATION,
+                    format!("Bearer {}", build_access_token(id_user, &handle)),
+                )
+                .header("content-type", "application/json")
+                .header("idempotency-key", key.to_string())
+                .body(Body::from(payload.to_string()))
+                .unwrap()
+        };
+
+        let app_a = app.clone();
+        let app_b = app.clone();
+        let (resp_a, resp_b) = tokio::join!(
+            app_a.oneshot(build_req(posted_deposit_payload())),
+            app_b.oneshot(build_req(other_payload)),
+        );
+
+        let status_a = resp_a.unwrap().status();
+        let status_b = resp_b.unwrap().status();
+
+        let op_count = count_operations(&pool, id_portfolio).await;
+        cleanup_refresh_requests(&pool, id_portfolio).await;
+        cleanup_idempotency(&pool, id_portfolio).await;
+
+        // Exactly one success, one conflict (which one wins depends on
+        // PostgreSQL's lock arbitration — we assert the outcome shape).
+        let success_count = [status_a, status_b]
+            .iter()
+            .filter(|s| s.is_success())
+            .count();
+        let conflict_count = [status_a, status_b]
+            .iter()
+            .filter(|s| **s == StatusCode::CONFLICT)
+            .count();
+        assert_eq!(success_count, 1, "exactly one create must succeed");
+        assert_eq!(conflict_count, 1, "the loser must see 409");
+        assert_eq!(op_count, 1, "exactly one operation row");
+    }
+
+    #[tokio::test]
+    async fn external_provider_remains_independent_from_idempotency() {
+        // Two requests using the same external_provider/reference still
+        // collide on the unique external-provider index, regardless of
+        // Idempotency-Key. P3 must NOT replace external-provider dedup.
+        let pool = test_pool().await;
+        let handle = format!("p3m{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let id_user = create_user(&pool, &handle).await;
+        let id_portfolio = create_portfolio(&pool, id_user, None).await;
+        let uri = format!("/v1/portfolios/{id_portfolio}/operations");
+
+        // Unique external reference per run so prior tests' rows don't
+        // collide on the unique external-provider index (posted operations
+        // are immutable and therefore not cleaned up between runs).
+        let unique_ref = format!("ref-{}", Uuid::new_v4().simple());
+        let mut payload = posted_deposit_payload();
+        payload["external_provider"] = json!("acme-broker");
+        payload["external_reference"] = json!(unique_ref);
+
+        let (status1, _) = post_json_with_headers(
+            &pool,
+            id_user,
+            &handle,
+            &uri,
+            payload.clone(),
+            &[("idempotency-key", Uuid::new_v4().to_string())],
+        )
+        .await;
+        // Different idempotency key, SAME external provider/reference.
+        let (status2, _) = post_json_with_headers(
+            &pool,
+            id_user,
+            &handle,
+            &uri,
+            payload,
+            &[("idempotency-key", Uuid::new_v4().to_string())],
+        )
+        .await;
+
+        cleanup_refresh_requests(&pool, id_portfolio).await;
+        cleanup_idempotency(&pool, id_portfolio).await;
+
+        assert_eq!(status1, StatusCode::CREATED);
+        assert!(
+            !status2.is_success(),
+            "second external-provider conflict must NOT succeed, got {status2}"
+        );
+    }
+
+    // ====================================================================
+    // P3 hardening — replay ordering, cross-portfolio, kind conflicts,
+    // pending/correction concurrency, rollback, external-ref regression,
+    // CORS preflight.
+    // ====================================================================
+
+    /// Helper: drive the full create path with a fixed key and return the
+    /// raw status + response body.
+    async fn create_with_key(
+        pool: &PgPool,
+        id_user: Uuid,
+        handle: &str,
+        id_portfolio: Uuid,
+        key: Uuid,
+        body: Value,
+    ) -> (StatusCode, axum::http::HeaderMap, Value) {
+        post_json_full(
+            pool,
+            id_user,
+            handle,
+            &format!("/v1/portfolios/{id_portfolio}/operations"),
+            body,
+            &[("idempotency-key", key.to_string())],
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn replay_after_primary_asset_becomes_inactive() {
+        // P3 contract: an exact replay must NOT re-run asset-activity
+        // validation. The original write committed when the asset was
+        // active; a subsequent identical retry must still return the same
+        // operation id, even if the asset has since been marked inactive.
+        let pool = test_pool().await;
+        let handle = format!("p3ria{}", &Uuid::new_v4().simple().to_string()[..10]);
+        let id_user = create_user(&pool, &handle).await;
+        let id_portfolio = create_portfolio(&pool, id_user, None).await;
+        let id_asset = create_asset(
+            &pool,
+            &format!("RIA{}", &Uuid::new_v4().simple().to_string()[..8]),
+        )
+        .await;
+        let key = Uuid::new_v4();
+
+        let mut buy = buy_payload(id_asset);
+        buy["operation_status"] = json!("posted");
+
+        let (status1, _, body1) =
+            create_with_key(&pool, id_user, &handle, id_portfolio, key, buy.clone()).await;
+        assert_eq!(status1, StatusCode::CREATED);
+
+        // Drift: mark the asset inactive. A non-idempotent fresh request
+        // would now hit `inactive_asset_reference`. The replay must not.
+        set_asset_status(&pool, id_asset, "inactive").await;
+
+        let (status2, headers2, body2) =
+            create_with_key(&pool, id_user, &handle, id_portfolio, key, buy).await;
+
+        let op_count = count_operations(&pool, id_portfolio).await;
+        // Posted operations cannot be deleted (DB trigger). The other posted
+        // tests in this file follow the same pattern — clean up only the
+        // deletable sub-rows and leave the immutable operation in place.
+        cleanup_refresh_requests(&pool, id_portfolio).await;
+        cleanup_idempotency(&pool, id_portfolio).await;
+
+        assert_eq!(status2, StatusCode::OK);
+        assert_eq!(
+            header_value(&headers2, "idempotency-replayed").as_deref(),
+            Some("true")
+        );
+        assert_eq!(
+            body1["operation"]["id_portfolio_operation"],
+            body2["operation"]["id_portfolio_operation"],
+            "replay must return the same operation id even if the asset is inactive now"
+        );
+        assert_eq!(op_count, 1);
+    }
+
+    #[tokio::test]
+    async fn correction_replay_after_referenced_asset_becomes_inactive() {
+        let pool = test_pool().await;
+        let handle = format!("p3rci{}", &Uuid::new_v4().simple().to_string()[..10]);
+        let id_user = create_user(&pool, &handle).await;
+        let id_portfolio = create_portfolio(&pool, id_user, None).await;
+        let id_asset = create_asset(
+            &pool,
+            &format!("RCI{}", &Uuid::new_v4().simple().to_string()[..8]),
+        )
+        .await;
+
+        // Seed a posted original.
+        let original =
+            insert_operation(&pool, id_portfolio, "posted", posted_deposit_payload()).await;
+
+        let key = Uuid::new_v4();
+        let uri = format!("/v1/portfolios/{id_portfolio}/operations/{original}/corrections");
+        let mut payload = correction_payload();
+        payload["id_asset"] = json!(id_asset);
+
+        let (status1, _, body1) = post_json_full(
+            &pool,
+            id_user,
+            &handle,
+            &uri,
+            payload.clone(),
+            &[("idempotency-key", key.to_string())],
+        )
+        .await;
+        assert_eq!(status1, StatusCode::CREATED);
+
+        set_asset_status(&pool, id_asset, "inactive").await;
+
+        let (status2, headers2, body2) = post_json_full(
+            &pool,
+            id_user,
+            &handle,
+            &uri,
+            payload,
+            &[("idempotency-key", key.to_string())],
+        )
+        .await;
+
+        let adj_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM portfolio_operations WHERE id_portfolio = $1 AND id_corrected_operation = $2",
+        )
+        .bind(id_portfolio)
+        .bind(original)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        cleanup_idempotency(&pool, id_portfolio).await;
+        sqlx::query("DELETE FROM portfolio_operations WHERE id_portfolio = $1 AND id_corrected_operation = $2")
+            .bind(id_portfolio)
+            .bind(original)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        assert_eq!(status2, StatusCode::OK);
+        assert_eq!(
+            header_value(&headers2, "idempotency-replayed").as_deref(),
+            Some("true")
+        );
+        assert_eq!(
+            body1["operation"]["id_portfolio_operation"],
+            body2["operation"]["id_portfolio_operation"]
+        );
+        assert_eq!(
+            adj_count, 1,
+            "no second adjustment must be created on replay"
+        );
+    }
+
+    #[tokio::test]
+    async fn replay_after_refresh_request_advanced_returns_same_refresh_id() {
+        // The refresh-request status MAY advance from `pending` to
+        // `processing`/`completed` between the original write and the
+        // replay. The IDs on the replay envelope must be stable; the
+        // status field reflects the CURRENT state of the refresh request
+        // (the replay envelope returns the live status, not the original
+        // one — documented in kushim-api/README.md).
+        let pool = test_pool().await;
+        let handle = format!("p3rrc{}", &Uuid::new_v4().simple().to_string()[..10]);
+        let id_user = create_user(&pool, &handle).await;
+        let id_portfolio = create_portfolio(&pool, id_user, None).await;
+        let key = Uuid::new_v4();
+
+        let (status1, _, body1) = create_with_key(
+            &pool,
+            id_user,
+            &handle,
+            id_portfolio,
+            key,
+            posted_deposit_payload(),
+        )
+        .await;
+        assert_eq!(status1, StatusCode::CREATED);
+        let refresh_id = body1["refresh_request"]["id_portfolio_refresh_request"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        // Simulate the worker advancing the request.
+        sqlx::query(
+            "UPDATE portfolio_refresh_requests SET status = 'completed', completed_at = now() WHERE id_portfolio_refresh_request = $1::uuid",
+        )
+        .bind(&refresh_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let (status2, _, body2) = create_with_key(
+            &pool,
+            id_user,
+            &handle,
+            id_portfolio,
+            key,
+            posted_deposit_payload(),
+        )
+        .await;
+
+        cleanup_idempotency(&pool, id_portfolio).await;
+        sqlx::query("DELETE FROM portfolio_refresh_requests WHERE id_portfolio = $1")
+            .bind(id_portfolio)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        assert_eq!(status2, StatusCode::OK);
+        assert_eq!(
+            body1["operation"]["id_portfolio_operation"],
+            body2["operation"]["id_portfolio_operation"]
+        );
+        assert_eq!(
+            body2["refresh_request"]["id_portfolio_refresh_request"]
+                .as_str()
+                .unwrap(),
+            refresh_id,
+            "refresh-request id MUST be stable across replay"
+        );
+        assert_eq!(
+            body2["refresh_request"]["status"], "completed",
+            "replay surfaces the CURRENT refresh-request status"
+        );
+    }
+
+    #[tokio::test]
+    async fn same_user_cross_portfolio_returns_409_not_404() {
+        // Brief §2: the durable key scope is (id_user, idempotency_key).
+        // Reusing a successful key on another OWNED portfolio is a
+        // CONFLICT (409), not a 404 — and must not create anything.
+        let pool = test_pool().await;
+        let handle = format!("p3xpf{}", &Uuid::new_v4().simple().to_string()[..10]);
+        let id_user = create_user(&pool, &handle).await;
+        let portfolio_a = create_portfolio(&pool, id_user, None).await;
+        let portfolio_b = create_portfolio(&pool, id_user, None).await;
+        let key = Uuid::new_v4();
+
+        let (status_a, _, body_a) = create_with_key(
+            &pool,
+            id_user,
+            &handle,
+            portfolio_a,
+            key,
+            posted_deposit_payload(),
+        )
+        .await;
+        assert_eq!(status_a, StatusCode::CREATED);
+        let op_a = body_a["operation"]["id_portfolio_operation"].clone();
+
+        let (status_b, _, body_b) = create_with_key(
+            &pool,
+            id_user,
+            &handle,
+            portfolio_b,
+            key,
+            posted_deposit_payload(),
+        )
+        .await;
+
+        let ops_b = count_operations(&pool, portfolio_b).await;
+        let refresh_b = count_all_refresh_requests(&pool, portfolio_b).await;
+        let idemp_b = count_idempotency(&pool, portfolio_b).await;
+        // The original record (against portfolio_a) is unchanged.
+        let record_op: Option<Uuid> = sqlx::query_scalar(
+            "SELECT id_portfolio_operation FROM portfolio_operation_idempotency WHERE id_user = $1 AND idempotency_key = $2",
+        )
+        .bind(id_user)
+        .bind(key)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        cleanup_refresh_requests(&pool, portfolio_a).await;
+        cleanup_idempotency(&pool, portfolio_a).await;
+
+        assert_eq!(
+            status_b,
+            StatusCode::CONFLICT,
+            "same user + same key on a different portfolio must 409, not 404"
+        );
+        assert_eq!(body_b["error"]["code"], "idempotency_key_conflict");
+        assert_eq!(ops_b, 0, "no operation must be inserted in portfolio_b");
+        assert_eq!(refresh_b, 0, "no refresh-request in portfolio_b");
+        assert_eq!(idemp_b, 0, "no idempotency record in portfolio_b");
+        assert_eq!(
+            json!(record_op),
+            op_a,
+            "original (portfolio_a) idempotency record must remain unchanged"
+        );
+    }
+
+    #[tokio::test]
+    async fn same_uuid_independent_for_two_different_users_even_with_overlap() {
+        // Sanity: the cross-portfolio conflict above is per-user; another
+        // user with the same UUID is independent. Already covered by an
+        // earlier test, kept here as a sibling assertion.
+        let pool = test_pool().await;
+        let h_a = format!("p3oa{}", &Uuid::new_v4().simple().to_string()[..10]);
+        let h_b = format!("p3ob{}", &Uuid::new_v4().simple().to_string()[..10]);
+        let user_a = create_user(&pool, &h_a).await;
+        let user_b = create_user(&pool, &h_b).await;
+        let pf_a = create_portfolio(&pool, user_a, None).await;
+        let pf_b = create_portfolio(&pool, user_b, None).await;
+        let key = Uuid::new_v4();
+
+        let (status_a, _, _) =
+            create_with_key(&pool, user_a, &h_a, pf_a, key, posted_deposit_payload()).await;
+        let (status_b, _, _) =
+            create_with_key(&pool, user_b, &h_b, pf_b, key, posted_deposit_payload()).await;
+
+        cleanup_refresh_requests(&pool, pf_a).await;
+        cleanup_refresh_requests(&pool, pf_b).await;
+        cleanup_idempotency(&pool, pf_a).await;
+        cleanup_idempotency(&pool, pf_b).await;
+
+        assert_eq!(status_a, StatusCode::CREATED);
+        assert_eq!(status_b, StatusCode::CREATED);
+    }
+
+    #[tokio::test]
+    async fn same_key_create_then_correction_returns_409() {
+        let pool = test_pool().await;
+        let handle = format!("p3kcc{}", &Uuid::new_v4().simple().to_string()[..10]);
+        let id_user = create_user(&pool, &handle).await;
+        let id_portfolio = create_portfolio(&pool, id_user, None).await;
+        let key = Uuid::new_v4();
+
+        // First: a normal create.
+        let (status1, _, _) = create_with_key(
+            &pool,
+            id_user,
+            &handle,
+            id_portfolio,
+            key,
+            posted_deposit_payload(),
+        )
+        .await;
+        assert_eq!(status1, StatusCode::CREATED);
+
+        // Seed a posted op to correct (separate, via direct insert).
+        let original =
+            insert_operation(&pool, id_portfolio, "posted", posted_deposit_payload()).await;
+        let uri = format!("/v1/portfolios/{id_portfolio}/operations/{original}/corrections");
+        let (status2, _, body2) = post_json_full(
+            &pool,
+            id_user,
+            &handle,
+            &uri,
+            correction_payload(),
+            &[("idempotency-key", key.to_string())],
+        )
+        .await;
+
+        let adj_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM portfolio_operations WHERE id_portfolio = $1 AND id_corrected_operation IS NOT NULL",
+        )
+        .bind(id_portfolio)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        cleanup_refresh_requests(&pool, id_portfolio).await;
+        cleanup_idempotency(&pool, id_portfolio).await;
+
+        assert_eq!(status2, StatusCode::CONFLICT);
+        assert_eq!(body2["error"]["code"], "idempotency_key_conflict");
+        assert_eq!(adj_count, 0, "no adjustment must be created");
+    }
+
+    #[tokio::test]
+    async fn same_key_correction_then_create_returns_409() {
+        let pool = test_pool().await;
+        let handle = format!("p3kcb{}", &Uuid::new_v4().simple().to_string()[..10]);
+        let id_user = create_user(&pool, &handle).await;
+        let id_portfolio = create_portfolio(&pool, id_user, None).await;
+
+        let original =
+            insert_operation(&pool, id_portfolio, "posted", posted_deposit_payload()).await;
+        let key = Uuid::new_v4();
+
+        let (status1, _, _) = post_json_full(
+            &pool,
+            id_user,
+            &handle,
+            &format!("/v1/portfolios/{id_portfolio}/operations/{original}/corrections"),
+            correction_payload(),
+            &[("idempotency-key", key.to_string())],
+        )
+        .await;
+        assert_eq!(status1, StatusCode::CREATED);
+
+        // Now reuse the key on a plain create.
+        let (status2, _, body2) = create_with_key(
+            &pool,
+            id_user,
+            &handle,
+            id_portfolio,
+            key,
+            posted_deposit_payload(),
+        )
+        .await;
+
+        let extra_ops: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM portfolio_operations WHERE id_portfolio = $1 AND id_corrected_operation IS NULL",
+        )
+        .bind(id_portfolio)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        cleanup_idempotency(&pool, id_portfolio).await;
+        sqlx::query("DELETE FROM portfolio_operations WHERE id_portfolio = $1 AND id_corrected_operation IS NOT NULL")
+            .bind(id_portfolio)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        assert_eq!(status2, StatusCode::CONFLICT);
+        assert_eq!(body2["error"]["code"], "idempotency_key_conflict");
+        // `original` was inserted directly (posted, immutable) — so the
+        // primary-operations count is exactly the seeded original, no extra
+        // create must have landed.
+        assert_eq!(extra_ops, 1, "no extra primary operation must be inserted");
+    }
+
+    #[tokio::test]
+    async fn correction_same_key_against_different_originals_returns_409() {
+        let pool = test_pool().await;
+        let handle = format!("p3kco{}", &Uuid::new_v4().simple().to_string()[..10]);
+        let id_user = create_user(&pool, &handle).await;
+        let id_portfolio = create_portfolio(&pool, id_user, None).await;
+
+        let original_a =
+            insert_operation(&pool, id_portfolio, "posted", posted_deposit_payload()).await;
+        let original_b =
+            insert_operation(&pool, id_portfolio, "posted", posted_deposit_payload()).await;
+        let key = Uuid::new_v4();
+
+        let (status1, _, _) = post_json_full(
+            &pool,
+            id_user,
+            &handle,
+            &format!("/v1/portfolios/{id_portfolio}/operations/{original_a}/corrections"),
+            correction_payload(),
+            &[("idempotency-key", key.to_string())],
+        )
+        .await;
+        assert_eq!(status1, StatusCode::CREATED);
+
+        let (status2, _, body2) = post_json_full(
+            &pool,
+            id_user,
+            &handle,
+            &format!("/v1/portfolios/{id_portfolio}/operations/{original_b}/corrections"),
+            correction_payload(),
+            &[("idempotency-key", key.to_string())],
+        )
+        .await;
+
+        let adj_against_b: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM portfolio_operations WHERE id_portfolio = $1 AND id_corrected_operation = $2",
+        )
+        .bind(id_portfolio)
+        .bind(original_b)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        cleanup_idempotency(&pool, id_portfolio).await;
+        sqlx::query("DELETE FROM portfolio_operations WHERE id_portfolio = $1 AND id_corrected_operation IS NOT NULL")
+            .bind(id_portfolio)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        assert_eq!(status2, StatusCode::CONFLICT);
+        assert_eq!(body2["error"]["code"], "idempotency_key_conflict");
+        assert_eq!(
+            adj_against_b, 0,
+            "no adjustment must be created against original_b"
+        );
+    }
+
+    #[tokio::test]
+    async fn pending_create_replay_returns_same_op_and_no_refresh() {
+        let pool = test_pool().await;
+        let handle = format!("p3pr{}", &Uuid::new_v4().simple().to_string()[..10]);
+        let id_user = create_user(&pool, &handle).await;
+        let id_portfolio = create_portfolio(&pool, id_user, None).await;
+        let key = Uuid::new_v4();
+
+        // pending default — no operation_status field at all.
+        let (status1, headers1, body1) = create_with_key(
+            &pool,
+            id_user,
+            &handle,
+            id_portfolio,
+            key,
+            deposit_payload(),
+        )
+        .await;
+        let (status2, headers2, body2) = create_with_key(
+            &pool,
+            id_user,
+            &handle,
+            id_portfolio,
+            key,
+            deposit_payload(),
+        )
+        .await;
+
+        let op_count = count_operations(&pool, id_portfolio).await;
+        let refresh_count = count_all_refresh_requests(&pool, id_portfolio).await;
+        let idemp_count = count_idempotency(&pool, id_portfolio).await;
+        cleanup_idempotency(&pool, id_portfolio).await;
+        cleanup_user_tree(&pool, id_user, &[]).await;
+
+        assert_eq!(status1, StatusCode::CREATED);
+        assert_eq!(status2, StatusCode::OK);
+        assert_eq!(
+            header_value(&headers1, "idempotency-replayed").as_deref(),
+            Some("false")
+        );
+        assert_eq!(
+            header_value(&headers2, "idempotency-replayed").as_deref(),
+            Some("true")
+        );
+        assert_eq!(
+            body1["operation"]["id_portfolio_operation"],
+            body2["operation"]["id_portfolio_operation"]
+        );
+        assert!(body1["refresh_request"].is_null());
+        assert!(body2["refresh_request"].is_null());
+        assert_eq!(op_count, 1);
+        assert_eq!(refresh_count, 0, "pending creates never enqueue refresh");
+        assert_eq!(idemp_count, 1);
+    }
+
+    #[tokio::test]
+    async fn concurrent_identical_corrections_produce_exactly_one_adjustment() {
+        let pool = test_pool_concurrent().await;
+        let handle = format!("p3cic{}", &Uuid::new_v4().simple().to_string()[..10]);
+        let id_user = create_user(&pool, &handle).await;
+        let id_portfolio = create_portfolio(&pool, id_user, None).await;
+        let original =
+            insert_operation(&pool, id_portfolio, "posted", posted_deposit_payload()).await;
+        let key = Uuid::new_v4();
+        let uri = format!("/v1/portfolios/{id_portfolio}/operations/{original}/corrections");
+        let app = crate::http::router(test_state(pool.clone()).await);
+
+        let build_req = || {
+            Request::builder()
+                .method("POST")
+                .uri(&uri)
+                .header(
+                    AUTHORIZATION,
+                    format!("Bearer {}", build_access_token(id_user, &handle)),
+                )
+                .header("content-type", "application/json")
+                .header("idempotency-key", key.to_string())
+                .body(Body::from(correction_payload().to_string()))
+                .unwrap()
+        };
+
+        let (r1, r2, r3) = tokio::join!(
+            app.clone().oneshot(build_req()),
+            app.clone().oneshot(build_req()),
+            app.clone().oneshot(build_req()),
+        );
+        let responses = [r1.unwrap(), r2.unwrap(), r3.unwrap()];
+        for r in &responses {
+            assert!(
+                r.status().is_success(),
+                "all three must succeed, got {:?}",
+                r.status()
+            );
+        }
+        let mut bodies: Vec<Value> = Vec::new();
+        for r in responses {
+            let bytes = body::to_bytes(r.into_body(), usize::MAX).await.unwrap();
+            bodies.push(serde_json::from_slice::<Value>(&bytes).unwrap());
+        }
+
+        let adj_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM portfolio_operations WHERE id_portfolio = $1 AND id_corrected_operation = $2",
+        )
+        .bind(id_portfolio)
+        .bind(original)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let idemp_count = count_idempotency(&pool, id_portfolio).await;
+
+        cleanup_idempotency(&pool, id_portfolio).await;
+        sqlx::query("DELETE FROM portfolio_operations WHERE id_portfolio = $1 AND id_corrected_operation IS NOT NULL")
+            .bind(id_portfolio)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let op_ids: Vec<&str> = bodies
+            .iter()
+            .map(|b| b["operation"]["id_portfolio_operation"].as_str().unwrap())
+            .collect();
+        assert!(
+            op_ids.iter().all(|id| *id == op_ids[0]),
+            "all responses point at the same adjustment"
+        );
+        assert_eq!(adj_count, 1, "exactly one adjustment must be created");
+        assert_eq!(idemp_count, 1);
+    }
+
+    #[tokio::test]
+    async fn concurrent_correction_conflict_one_succeeds_one_409() {
+        let pool = test_pool_concurrent().await;
+        let handle = format!("p3ccc{}", &Uuid::new_v4().simple().to_string()[..10]);
+        let id_user = create_user(&pool, &handle).await;
+        let id_portfolio = create_portfolio(&pool, id_user, None).await;
+        let original =
+            insert_operation(&pool, id_portfolio, "posted", posted_deposit_payload()).await;
+        let key = Uuid::new_v4();
+        let uri = format!("/v1/portfolios/{id_portfolio}/operations/{original}/corrections");
+        let app = crate::http::router(test_state(pool.clone()).await);
+
+        let mut payload_b = correction_payload();
+        payload_b["cash_amount_minor"] = json!(424242);
+
+        let build_req = |payload: Value| {
+            Request::builder()
+                .method("POST")
+                .uri(&uri)
+                .header(
+                    AUTHORIZATION,
+                    format!("Bearer {}", build_access_token(id_user, &handle)),
+                )
+                .header("content-type", "application/json")
+                .header("idempotency-key", key.to_string())
+                .body(Body::from(payload.to_string()))
+                .unwrap()
+        };
+
+        let (ra, rb) = tokio::join!(
+            app.clone().oneshot(build_req(correction_payload())),
+            app.clone().oneshot(build_req(payload_b)),
+        );
+        let sa = ra.unwrap().status();
+        let sb = rb.unwrap().status();
+
+        let adj_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM portfolio_operations WHERE id_portfolio = $1 AND id_corrected_operation = $2",
+        )
+        .bind(id_portfolio)
+        .bind(original)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        cleanup_idempotency(&pool, id_portfolio).await;
+        sqlx::query("DELETE FROM portfolio_operations WHERE id_portfolio = $1 AND id_corrected_operation IS NOT NULL")
+            .bind(id_portfolio)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let success = [sa, sb].iter().filter(|s| s.is_success()).count();
+        let conflict = [sa, sb]
+            .iter()
+            .filter(|s| **s == StatusCode::CONFLICT)
+            .count();
+        assert_eq!(success, 1);
+        assert_eq!(conflict, 1);
+        assert_eq!(adj_count, 1);
+    }
+
+    #[tokio::test]
+    async fn rollback_after_claim_leaves_no_idempotency_record() {
+        // Forces a deterministic transactional failure AFTER the
+        // idempotency claim by referencing a non-existent
+        // `id_corrected_operation` (FK fk_portfolio_operations_corrected_op
+        // fails at COMMIT for an adjustment row). The idempotency claim,
+        // operation insert and refresh enqueue must all roll back.
+        let pool = test_pool().await;
+        let handle = format!("p3rb{}", &Uuid::new_v4().simple().to_string()[..10]);
+        let id_user = create_user(&pool, &handle).await;
+        let id_portfolio = create_portfolio(&pool, id_user, None).await;
+        let key = Uuid::new_v4();
+
+        // Adjustment + id_corrected_operation pointing at a UUID that does
+        // not exist → FK violation deep inside the same transaction that
+        // claimed the idempotency row.
+        let payload = json!({
+            "operation_type": "adjustment",
+            "operation_status": "posted",
+            "executed_at": "2026-06-05T10:00:00Z",
+            "cash_amount_minor": 100,
+            "currency": "EUR",
+            "id_corrected_operation": Uuid::new_v4(),
+            "metadata": {}
+        });
+
+        let (status, body) = post_json_with_headers(
+            &pool,
+            id_user,
+            &handle,
+            &format!("/v1/portfolios/{id_portfolio}/operations"),
+            payload,
+            &[("idempotency-key", key.to_string())],
+        )
+        .await;
+
+        let op_count = count_operations(&pool, id_portfolio).await;
+        let refresh_count = count_all_refresh_requests(&pool, id_portfolio).await;
+        let idemp_count = count_idempotency(&pool, id_portfolio).await;
+
+        assert!(
+            !status.is_success(),
+            "the FK violation must surface as a non-2xx, got {status}"
+        );
+        // Never leak a raw SQL/constraint name.
+        let body_text = body.to_string();
+        assert!(
+            !body_text.contains("constraint"),
+            "must not leak constraint name"
+        );
+        assert!(
+            !body_text.contains("violates"),
+            "must not leak raw PG error"
+        );
+        assert!(!body_text.contains("sqlx"), "must not leak driver name");
+
+        assert_eq!(op_count, 0, "operation must roll back");
+        assert_eq!(refresh_count, 0, "refresh-request must roll back");
+        assert_eq!(idemp_count, 0, "idempotency record must roll back");
+
+        // After rollback the key is still reusable with a corrected payload.
+        let (status_ok, _, _) = create_with_key(
+            &pool,
+            id_user,
+            &handle,
+            id_portfolio,
+            key,
+            posted_deposit_payload(),
+        )
+        .await;
+        cleanup_refresh_requests(&pool, id_portfolio).await;
+        cleanup_idempotency(&pool, id_portfolio).await;
+        assert_eq!(status_ok, StatusCode::CREATED);
+    }
+
+    #[tokio::test]
+    async fn external_reference_conflict_leaves_no_idempotency_record() {
+        // First operation seeds (provider, reference). A SECOND operation
+        // re-using the same external (provider, reference) under a NEW
+        // idempotency key must:
+        //   (a) fail (unique constraint on external_provider/_reference);
+        //   (b) leave no idempotency record;
+        //   (c) allow that same key to be reused with a corrected
+        //       external_reference.
+        let pool = test_pool().await;
+        let handle = format!("p3xr{}", &Uuid::new_v4().simple().to_string()[..10]);
+        let id_user = create_user(&pool, &handle).await;
+        let id_portfolio = create_portfolio(&pool, id_user, None).await;
+
+        let unique_ref = format!("ref-{}", Uuid::new_v4().simple());
+        let mut seed = posted_deposit_payload();
+        seed["external_provider"] = json!("acme-broker");
+        seed["external_reference"] = json!(unique_ref);
+
+        let (status_seed, _, _) = create_with_key(
+            &pool,
+            id_user,
+            &handle,
+            id_portfolio,
+            Uuid::new_v4(),
+            seed.clone(),
+        )
+        .await;
+        assert_eq!(status_seed, StatusCode::CREATED);
+
+        // Second attempt: NEW idempotency key, same external_reference →
+        // unique-index conflict deep inside the transaction.
+        let bad_key = Uuid::new_v4();
+        let (status_bad, body_bad) = post_json_with_headers(
+            &pool,
+            id_user,
+            &handle,
+            &format!("/v1/portfolios/{id_portfolio}/operations"),
+            seed,
+            &[("idempotency-key", bad_key.to_string())],
+        )
+        .await;
+
+        let idemp_for_bad: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM portfolio_operation_idempotency WHERE id_user = $1 AND idempotency_key = $2",
+        )
+        .bind(id_user)
+        .bind(bad_key)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        assert!(
+            !status_bad.is_success(),
+            "unique-constraint must surface as non-2xx"
+        );
+        assert!(
+            !body_bad.to_string().contains("constraint"),
+            "no raw PG details"
+        );
+        assert_eq!(
+            idemp_for_bad, 0,
+            "no idempotency record may remain for the failed bad-key attempt"
+        );
+
+        // The same key can be reused with a corrected external_reference.
+        let mut fixed = posted_deposit_payload();
+        fixed["external_provider"] = json!("acme-broker");
+        fixed["external_reference"] = json!(format!("ref-{}", Uuid::new_v4().simple()));
+        let (status_fix, _, _) =
+            create_with_key(&pool, id_user, &handle, id_portfolio, bad_key, fixed).await;
+
+        cleanup_refresh_requests(&pool, id_portfolio).await;
+        cleanup_idempotency(&pool, id_portfolio).await;
+
+        assert_eq!(
+            status_fix,
+            StatusCode::CREATED,
+            "reused key with corrected external_reference must succeed"
+        );
+    }
+
+    #[tokio::test]
+    async fn cors_preflight_allows_idempotency_key() {
+        // The CORS preflight must accept the Idempotency-Key header so the
+        // browser actually sends the subsequent POST. The Expose-Headers
+        // contract is asserted separately on a real response below
+        // (`cors_real_response_exposes_idempotency_replayed`) — tower-http
+        // only emits Expose-Headers on the actual cross-origin response,
+        // not on the OPTIONS preflight.
+        let pool = test_pool().await;
+        let app =
+            crate::http::router_with_cors(test_state(pool).await, Some("http://localhost:5173"));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("OPTIONS")
+                    .uri("/v1/portfolios/00000000-0000-0000-0000-000000000000/operations")
+                    .header("origin", "http://localhost:5173")
+                    .header("access-control-request-method", "POST")
+                    .header(
+                        "access-control-request-headers",
+                        "authorization,content-type,idempotency-key",
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("preflight should be built");
+
+        let status = response.status();
+        let allow_headers = response
+            .headers()
+            .get("access-control-allow-headers")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+
+        assert!(status.is_success(), "preflight must succeed, got {status}");
+        assert!(
+            allow_headers.to_lowercase().contains("idempotency-key"),
+            "Allow-Headers must include idempotency-key, got: {allow_headers}"
+        );
+    }
+
+    #[tokio::test]
+    async fn cors_real_response_exposes_idempotency_replayed() {
+        // tower-http emits Access-Control-Expose-Headers only on actual
+        // cross-origin responses (not on preflights). Hit a public health
+        // endpoint from the configured origin and assert the header.
+        let pool = test_pool().await;
+        let app =
+            crate::http::router_with_cors(test_state(pool).await, Some("http://localhost:5173"));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/health")
+                    .header("origin", "http://localhost:5173")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("response should be built");
+
+        let expose_headers = response
+            .headers()
+            .get("access-control-expose-headers")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+
+        assert!(
+            expose_headers
+                .to_lowercase()
+                .contains("idempotency-replayed"),
+            "Expose-Headers must include idempotency-replayed, got: {expose_headers}"
+        );
     }
 
     #[test]

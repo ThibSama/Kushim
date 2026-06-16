@@ -3,7 +3,11 @@ use crate::domain::portfolio_operation::{
     PortfolioOperationFilters, UpdatePortfolioOperation,
 };
 use crate::domain::portfolio_refresh_request::PortfolioRefreshRequest;
+use crate::repositories::portfolio_operation_idempotency::{
+    ClaimOutcome, IdempotencyRequestKind, PortfolioOperationIdempotencyRepository,
+};
 use crate::repositories::portfolio_refresh_requests::enqueue_refresh_request_in_tx;
+use serde_json::Value as JsonValue;
 use serde_json::Value;
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use thiserror::Error;
@@ -185,6 +189,86 @@ impl PortfolioOperationRepository {
 
         tx.commit().await?;
         Ok((operation, refresh))
+    }
+
+    /// P3 idempotency-aware variant of `create_with_optional_refresh`. Inside
+    /// ONE transaction:
+    ///   1. claim `(id_user, idempotency_key)` via INSERT ... ON CONFLICT
+    ///      DO NOTHING; on conflict, ROLLBACK and return `RaceLost` — the
+    ///      caller must replay the winner;
+    ///   2. insert the operation and (when posted) enqueue the refresh request;
+    ///   3. UPDATE the claim row with the resulting operation/refresh ids;
+    ///   4. COMMIT.
+    ///
+    /// The unique index on `(id_user, idempotency_key)` guarantees only one
+    /// transaction wins a race; losers see step 1 return zero rows AFTER the
+    /// winner committed, so re-reading the table always returns the fully
+    /// populated winner row.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_with_optional_refresh_and_idempotency(
+        &self,
+        input: &NewPortfolioOperation,
+        id_user: Uuid,
+        idempotency_key: Uuid,
+        request_kind: IdempotencyRequestKind,
+        id_corrected_operation: Option<Uuid>,
+        request_fingerprint: &JsonValue,
+    ) -> Result<IdempotencyWriteOutcome, PortfolioOperationRepositoryError> {
+        let mut tx: sqlx::Transaction<'_, Postgres> = self.pool.begin().await?;
+
+        let claim = PortfolioOperationIdempotencyRepository::claim_or_conflict_in_tx(
+            &mut tx,
+            id_user,
+            input.id_portfolio,
+            idempotency_key,
+            request_kind,
+            id_corrected_operation,
+            request_fingerprint,
+        )
+        .await
+        .map_err(map_idempotency_error)?;
+
+        let id_record = match claim {
+            ClaimOutcome::Claimed { id_record } => id_record,
+            ClaimOutcome::Conflict => {
+                tx.rollback().await?;
+                return Ok(IdempotencyWriteOutcome::RaceLost);
+            }
+        };
+
+        let row = bind_operation_insert(sqlx::query(OPERATION_INSERT_SQL), input)
+            .fetch_one(&mut *tx)
+            .await?;
+        let operation = operation_from_row(&row)?;
+
+        let refresh = if operation.operation_status == OperationStatus::Posted {
+            Some(
+                enqueue_refresh_request_in_tx(
+                    &mut tx,
+                    operation.id_portfolio,
+                    Some(operation.id_portfolio_operation),
+                )
+                .await
+                .map_err(map_refresh_error)?,
+            )
+        } else {
+            None
+        };
+
+        PortfolioOperationIdempotencyRepository::finalize_in_tx(
+            &mut tx,
+            id_record,
+            &operation,
+            refresh.as_ref(),
+        )
+        .await
+        .map_err(map_idempotency_error)?;
+
+        tx.commit().await?;
+        Ok(IdempotencyWriteOutcome::Created {
+            operation,
+            refresh_request: refresh,
+        })
     }
 
     pub async fn create(
@@ -694,6 +778,28 @@ fn bind_operation_insert<'q>(
         .bind(input.id_corrected_operation)
         .bind(&input.notes)
         .bind(&input.metadata)
+}
+
+/// Outcome of an idempotency-protected create. `RaceLost` means the caller
+/// must replay the existing record (the operation/refresh inserted by this
+/// transaction were rolled back).
+#[allow(clippy::large_enum_variant)]
+pub enum IdempotencyWriteOutcome {
+    Created {
+        operation: PortfolioOperation,
+        refresh_request: Option<PortfolioRefreshRequest>,
+    },
+    RaceLost,
+}
+
+fn map_idempotency_error(
+    error: crate::repositories::portfolio_operation_idempotency::IdempotencyRepositoryError,
+) -> PortfolioOperationRepositoryError {
+    use crate::repositories::portfolio_operation_idempotency::IdempotencyRepositoryError as Err;
+    match error {
+        Err::Database(error) => PortfolioOperationRepositoryError::Database(error),
+        Err::InvalidRow => PortfolioOperationRepositoryError::InvalidRow,
+    }
 }
 
 fn map_refresh_error(

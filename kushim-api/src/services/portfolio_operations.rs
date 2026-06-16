@@ -9,12 +9,20 @@ use crate::{
     domain::portfolio_refresh_request::PortfolioRefreshRequest,
     repositories::{
         assets::{AssetRepository, AssetRepositoryError},
-        portfolio_operations::{PortfolioOperationRepository, PortfolioOperationRepositoryError},
+        portfolio_operation_idempotency::{
+            IdempotencyRecord, IdempotencyRepositoryError, IdempotencyRequestKind,
+            PortfolioOperationIdempotencyRepository,
+        },
+        portfolio_operations::{
+            IdempotencyWriteOutcome, PortfolioOperationRepository,
+            PortfolioOperationRepositoryError,
+        },
         portfolio_refresh_requests::{
             PortfolioRefreshRequestRepository, PortfolioRefreshRequestRepositoryError,
         },
         portfolios::{PortfolioRepository, PortfolioRepositoryError},
     },
+    services::operation_fingerprint::build_fingerprint,
 };
 use bigdecimal::BigDecimal;
 use serde_json::Value;
@@ -42,6 +50,7 @@ pub struct PortfolioOperationService {
     portfolio_repository: PortfolioRepository,
     portfolio_operation_repository: PortfolioOperationRepository,
     portfolio_refresh_request_repository: PortfolioRefreshRequestRepository,
+    idempotency_repository: PortfolioOperationIdempotencyRepository,
 }
 
 /// Result of a write that may have enqueued a portfolio refresh request.
@@ -52,6 +61,16 @@ pub struct PortfolioOperationService {
 pub struct OperationWriteOutcome {
     pub operation: PortfolioOperationView,
     pub refresh_request: Option<PortfolioRefreshRequest>,
+}
+
+/// P3 idempotent write outcome. `replayed` is `true` when the response was
+/// served from a previously committed idempotency record (no new operation
+/// was inserted). The HTTP layer surfaces this through the
+/// `Idempotency-Replayed` response header.
+#[derive(Debug, Clone)]
+pub struct IdempotentOperationWriteOutcome {
+    pub outcome: OperationWriteOutcome,
+    pub replayed: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -231,12 +250,14 @@ impl PortfolioOperationService {
         portfolio_repository: PortfolioRepository,
         portfolio_operation_repository: PortfolioOperationRepository,
         portfolio_refresh_request_repository: PortfolioRefreshRequestRepository,
+        idempotency_repository: PortfolioOperationIdempotencyRepository,
     ) -> Self {
         Self {
             asset_repository,
             portfolio_repository,
             portfolio_operation_repository,
             portfolio_refresh_request_repository,
+            idempotency_repository,
         }
     }
 
@@ -248,7 +269,10 @@ impl PortfolioOperationService {
             .assert_owned_portfolio(input.id_portfolio, input.id_user)
             .await?;
 
-        let operation_status = input.operation_status.unwrap_or(OperationStatus::Pending);
+        let operation_status = input
+            .operation_status
+            .clone()
+            .unwrap_or(OperationStatus::Pending);
         if operation_status == OperationStatus::Cancelled {
             return Err(PortfolioOperationServiceError::Validation {
                 code: "invalid_operation_status",
@@ -324,6 +348,444 @@ impl PortfolioOperationService {
         Ok(OperationWriteOutcome {
             operation: build_view(operation, &identities),
             refresh_request,
+        })
+    }
+
+    /// P3 idempotent variant of `create_operation`. Ordering invariant:
+    ///
+    ///   1. authenticate (handler) + ownership check;
+    ///   2. canonicalize the request — pure transforms only (status default,
+    ///      canonical currency, RFC3339 parse, normalized strings, default
+    ///      metadata);
+    ///   3. build the canonical fingerprint;
+    ///   4. look up `(id_user, idempotency_key)` and replay on exact match
+    ///      or 409 on any mismatch;
+    ///   5. ONLY when no record exists: run mutable-state validations
+    ///      (`validate_operation_payload`, asset activity, cross-currency,
+    ///      identity prefetch) and then execute the transactional claim +
+    ///      operation + refresh + finalize.
+    ///
+    /// This ordering guarantees an exact retry of a previously successful
+    /// request returns the same operation/refresh identity even if the
+    /// referenced asset has since been deactivated, the FX rate has gone
+    /// stale, or the refresh request has moved to `processing`/`completed`.
+    /// A replay never re-runs business validation that depends on mutable
+    /// state. Concurrent identical requests collapse into ONE committed row:
+    /// the loser sees `RaceLost`, re-reads the winner's record, and replays.
+    pub async fn create_operation_idempotent(
+        &self,
+        input: CreatePortfolioOperationInput,
+        idempotency_key: Uuid,
+    ) -> Result<IdempotentOperationWriteOutcome, PortfolioOperationServiceError> {
+        let portfolio = self
+            .assert_owned_portfolio(input.id_portfolio, input.id_user)
+            .await?;
+
+        // Step 2 — canonicalize. Pure transforms; no mutable-state checks.
+        let candidate = self.build_create_candidate(&input)?;
+
+        // Step 3 — fingerprint.
+        let fingerprint = build_fingerprint(
+            input.id_user,
+            IdempotencyRequestKind::CreateOperation,
+            None,
+            &candidate,
+        );
+
+        // Step 4 — replay lookup. A successful prior request bypasses every
+        // mutable-state validation below: if the asset was active when the
+        // original write committed, the replay must still succeed even if
+        // it is inactive today.
+        if let Some(existing) = self
+            .idempotency_repository
+            .find_by_user_and_key(input.id_user, idempotency_key)
+            .await
+            .map_err(map_idempotency_repository_error)?
+        {
+            return self
+                .replay_existing(
+                    existing,
+                    IdempotencyRequestKind::CreateOperation,
+                    None,
+                    &fingerprint,
+                    input.id_portfolio,
+                    input.id_user,
+                )
+                .await;
+        }
+
+        // Step 5 — fresh request. Mutable-state validations run ONLY here.
+        // A failure rejects BEFORE the transactional claim, so the key is
+        // not consumed and a corrected retry may reuse the same UUID.
+        validate_operation_payload(&candidate)?;
+        self.validate_asset_references(&candidate).await?;
+        if candidate.operation_status == OperationStatus::Posted {
+            validate_cross_currency_posting(
+                &candidate.currency,
+                &portfolio.base_currency,
+                candidate.cash_amount_minor,
+                candidate.fx_rate_to_portfolio.as_deref(),
+            )?;
+        }
+
+        // Identities must be resolved BEFORE the transaction starts, same as
+        // the non-idempotent path: a SELECT failure after the commit would
+        // turn a committed mutation into an HTTP 500 and invite a duplicate.
+        let identities = self
+            .prefetch_identities(
+                candidate
+                    .id_asset
+                    .into_iter()
+                    .chain(candidate.id_related_asset),
+            )
+            .await?;
+
+        let write_outcome = self
+            .portfolio_operation_repository
+            .create_with_optional_refresh_and_idempotency(
+                &candidate,
+                input.id_user,
+                idempotency_key,
+                IdempotencyRequestKind::CreateOperation,
+                None,
+                &fingerprint,
+            )
+            .await
+            .map_err(map_operation_repository_error)?;
+
+        match write_outcome {
+            IdempotencyWriteOutcome::Created {
+                operation,
+                refresh_request,
+            } => Ok(IdempotentOperationWriteOutcome {
+                outcome: OperationWriteOutcome {
+                    operation: build_view(operation, &identities),
+                    refresh_request,
+                },
+                replayed: false,
+            }),
+            IdempotencyWriteOutcome::RaceLost => {
+                // Another transaction committed first. Re-read and replay.
+                let existing = self
+                    .idempotency_repository
+                    .find_by_user_and_key(input.id_user, idempotency_key)
+                    .await
+                    .map_err(map_idempotency_repository_error)?
+                    .ok_or(PortfolioOperationServiceError::Internal)?;
+                self.replay_existing(
+                    existing,
+                    IdempotencyRequestKind::CreateOperation,
+                    None,
+                    &fingerprint,
+                    input.id_portfolio,
+                    input.id_user,
+                )
+                .await
+            }
+        }
+    }
+
+    /// P3 idempotent variant of `create_correction`. Same ordering as
+    /// `create_operation_idempotent`; the only additions are loading the
+    /// original operation (needed for the canonical currency fallback and
+    /// for the fingerprint's `id_corrected_operation` field) BEFORE the
+    /// lookup, and deferring the "original must be posted" check to the
+    /// fresh-request path so a replay still works if the original somehow
+    /// changed state (it can't via the API — posted is DB-immutable — but
+    /// the contract is symmetric with `create_operation_idempotent`).
+    pub async fn create_correction_idempotent(
+        &self,
+        input: CreatePortfolioOperationCorrectionInput,
+        idempotency_key: Uuid,
+    ) -> Result<IdempotentOperationWriteOutcome, PortfolioOperationServiceError> {
+        let portfolio = self
+            .assert_owned_portfolio(input.id_portfolio, input.id_user)
+            .await?;
+
+        // Loading the original is mandatory for canonicalization (default
+        // currency fallback and `id_corrected_operation` in the fingerprint).
+        let original_operation = self
+            .portfolio_operation_repository
+            .find_by_id_and_portfolio(input.id_portfolio_operation, input.id_portfolio)
+            .await
+            .map_err(map_operation_repository_error)?
+            .ok_or(PortfolioOperationServiceError::NotFound {
+                code: "operation_not_found",
+                message: "portfolio operation was not found",
+            })?;
+
+        // Step 2 — canonicalize (pure transforms; no posted/asset checks).
+        let candidate = self.build_correction_candidate(&original_operation, &input)?;
+
+        // Step 3 — fingerprint.
+        let fingerprint = build_fingerprint(
+            input.id_user,
+            IdempotencyRequestKind::CreateCorrection,
+            Some(original_operation.id_portfolio_operation),
+            &candidate,
+        );
+
+        // Step 4 — replay lookup BEFORE any mutable-state check.
+        if let Some(existing) = self
+            .idempotency_repository
+            .find_by_user_and_key(input.id_user, idempotency_key)
+            .await
+            .map_err(map_idempotency_repository_error)?
+        {
+            return self
+                .replay_existing(
+                    existing,
+                    IdempotencyRequestKind::CreateCorrection,
+                    Some(original_operation.id_portfolio_operation),
+                    &fingerprint,
+                    input.id_portfolio,
+                    input.id_user,
+                )
+                .await;
+        }
+
+        // Step 5 — fresh request. Posted-original requirement + payload +
+        // asset activity + cross-currency. Failures here do not consume the
+        // idempotency key.
+        require_correctable_original(&original_operation)?;
+        validate_correction_payload(&candidate)?;
+        validate_operation_payload(&candidate)?;
+        self.validate_asset_references(&candidate).await?;
+        if candidate.operation_status == OperationStatus::Posted {
+            validate_cross_currency_posting(
+                &candidate.currency,
+                &portfolio.base_currency,
+                candidate.cash_amount_minor,
+                candidate.fx_rate_to_portfolio.as_deref(),
+            )?;
+        }
+
+        let identities = self
+            .prefetch_identities(
+                candidate
+                    .id_asset
+                    .into_iter()
+                    .chain(candidate.id_related_asset),
+            )
+            .await?;
+
+        let write_outcome = self
+            .portfolio_operation_repository
+            .create_with_optional_refresh_and_idempotency(
+                &candidate,
+                input.id_user,
+                idempotency_key,
+                IdempotencyRequestKind::CreateCorrection,
+                Some(original_operation.id_portfolio_operation),
+                &fingerprint,
+            )
+            .await
+            .map_err(map_operation_repository_error)?;
+
+        match write_outcome {
+            IdempotencyWriteOutcome::Created {
+                operation,
+                refresh_request,
+            } => Ok(IdempotentOperationWriteOutcome {
+                outcome: OperationWriteOutcome {
+                    operation: build_view(operation, &identities),
+                    refresh_request,
+                },
+                replayed: false,
+            }),
+            IdempotencyWriteOutcome::RaceLost => {
+                let existing = self
+                    .idempotency_repository
+                    .find_by_user_and_key(input.id_user, idempotency_key)
+                    .await
+                    .map_err(map_idempotency_repository_error)?
+                    .ok_or(PortfolioOperationServiceError::Internal)?;
+                self.replay_existing(
+                    existing,
+                    IdempotencyRequestKind::CreateCorrection,
+                    Some(original_operation.id_portfolio_operation),
+                    &fingerprint,
+                    input.id_portfolio,
+                    input.id_user,
+                )
+                .await
+            }
+        }
+    }
+
+    /// Build the `NewPortfolioOperation` that would have been persisted by
+    /// `create_operation`, including all defaults/normalization, so the
+    /// idempotency fingerprint reflects what the row would look like once
+    /// committed.
+    ///
+    /// Pure transforms only: status default, canonical currency lookup,
+    /// RFC3339 parsing, normalized strings, default metadata. No mutable-
+    /// state checks (asset activity, cross-currency, etc.) — those belong
+    /// to the post-lookup fresh-request path so an exact replay never
+    /// fails because of unrelated drift since the original write committed.
+    /// The status-cancelled and unsupported-currency rejections stay here
+    /// because they reject the REQUEST shape, never an in-DB state.
+    fn build_create_candidate(
+        &self,
+        input: &CreatePortfolioOperationInput,
+    ) -> Result<NewPortfolioOperation, PortfolioOperationServiceError> {
+        let operation_status = input
+            .operation_status
+            .clone()
+            .unwrap_or(OperationStatus::Pending);
+        if operation_status == OperationStatus::Cancelled {
+            return Err(PortfolioOperationServiceError::Validation {
+                code: "invalid_operation_status",
+                message: "operation creation does not accept cancelled status",
+            });
+        }
+        let canonical_currency = validate_currency(&input.currency)?;
+        Ok(NewPortfolioOperation {
+            id_portfolio: input.id_portfolio,
+            id_asset: input.id_asset,
+            id_related_asset: input.id_related_asset,
+            operation_type: input.operation_type.clone(),
+            operation_status,
+            executed_at: parse_datetime(&input.executed_at)?,
+            effective_at: parse_optional_datetime(input.effective_at.as_deref())?,
+            quantity: normalize_optional_string(input.quantity.clone()),
+            related_quantity: normalize_optional_string(input.related_quantity.clone()),
+            price_minor: input.price_minor,
+            gross_amount_minor: input.gross_amount_minor,
+            fees_minor: input.fees_minor,
+            taxes_minor: input.taxes_minor,
+            cash_amount_minor: input.cash_amount_minor.unwrap_or(0),
+            currency: canonical_currency.to_string(),
+            fx_rate_to_portfolio: normalize_optional_string(input.fx_rate_to_portfolio.clone()),
+            external_provider: normalize_optional_string(input.external_provider.clone()),
+            external_reference: normalize_optional_string(input.external_reference.clone()),
+            id_corrected_operation: input.id_corrected_operation,
+            notes: normalize_optional_string(input.notes.clone()),
+            metadata: input.metadata.clone().unwrap_or_else(default_metadata),
+        })
+    }
+
+    /// Pure correction-candidate builder. Mirrors `build_create_candidate`:
+    /// it never inspects the original's mutable state (status, asset
+    /// activity, etc.) — those checks live in
+    /// `require_correctable_original` and run only on the fresh-request
+    /// path so a replay survives any drift.
+    fn build_correction_candidate(
+        &self,
+        original_operation: &PortfolioOperation,
+        input: &CreatePortfolioOperationCorrectionInput,
+    ) -> Result<NewPortfolioOperation, PortfolioOperationServiceError> {
+        let operation_status = input
+            .operation_status
+            .clone()
+            .unwrap_or(OperationStatus::Pending);
+        if operation_status == OperationStatus::Cancelled {
+            return Err(PortfolioOperationServiceError::Validation {
+                code: "invalid_operation_status",
+                message: "correction creation does not accept cancelled status",
+            });
+        }
+
+        Ok(NewPortfolioOperation {
+            id_portfolio: input.id_portfolio,
+            id_asset: input.id_asset,
+            id_related_asset: input.id_related_asset,
+            operation_type: OperationType::Adjustment,
+            operation_status,
+            executed_at: parse_datetime(&input.executed_at)?,
+            effective_at: parse_optional_datetime(input.effective_at.as_deref())?,
+            quantity: normalize_optional_string(input.quantity.clone()),
+            related_quantity: normalize_optional_string(input.related_quantity.clone()),
+            price_minor: input.price_minor,
+            gross_amount_minor: input.gross_amount_minor,
+            fees_minor: input.fees_minor,
+            taxes_minor: input.taxes_minor,
+            cash_amount_minor: input.cash_amount_minor.unwrap_or(0),
+            currency: match &input.currency {
+                Some(value) => validate_currency(value)?.to_string(),
+                None => original_operation.currency.clone(),
+            },
+            fx_rate_to_portfolio: normalize_optional_string(input.fx_rate_to_portfolio.clone()),
+            external_provider: normalize_optional_string(input.external_provider.clone()),
+            external_reference: normalize_optional_string(input.external_reference.clone()),
+            id_corrected_operation: Some(original_operation.id_portfolio_operation),
+            notes: normalize_optional_string(input.notes.clone()),
+            metadata: input.metadata.clone().unwrap_or_else(default_metadata),
+        })
+    }
+
+    /// Replay a previously committed idempotency record. Validates that the
+    /// new request matches the original (kind, correction link, fingerprint)
+    /// before loading and returning the original operation/refresh identity.
+    async fn replay_existing(
+        &self,
+        record: IdempotencyRecord,
+        request_kind: IdempotencyRequestKind,
+        id_corrected_operation: Option<Uuid>,
+        new_fingerprint: &serde_json::Value,
+        id_portfolio: Uuid,
+        id_user: Uuid,
+    ) -> Result<IdempotentOperationWriteOutcome, PortfolioOperationServiceError> {
+        // User scoping is enforced at lookup time, but a row whose recorded
+        // portfolio differs from the request must still be a conflict — same
+        // key cannot be reused across portfolios for a different write.
+        if record.request_kind != request_kind
+            || record.id_corrected_operation != id_corrected_operation
+            || record.id_portfolio != id_portfolio
+            || record.id_user != id_user
+            || &record.request_fingerprint != new_fingerprint
+        {
+            return Err(PortfolioOperationServiceError::Conflict {
+                code: "idempotency_key_conflict",
+                message: "Idempotency-Key was reused with a different request",
+            });
+        }
+
+        let id_operation = record
+            .id_portfolio_operation
+            .ok_or(PortfolioOperationServiceError::Internal)?;
+
+        let operation = self
+            .portfolio_operation_repository
+            .find_by_id_and_portfolio(id_operation, record.id_portfolio)
+            .await
+            .map_err(map_operation_repository_error)?
+            .ok_or_else(|| {
+                tracing::error!(
+                    %id_operation,
+                    id_portfolio = %record.id_portfolio,
+                    "idempotency replay: recorded operation no longer exists"
+                );
+                PortfolioOperationServiceError::Internal
+            })?;
+
+        let refresh = match record.id_portfolio_refresh_request {
+            Some(id_refresh) => Some(
+                self.portfolio_refresh_request_repository
+                    .find_by_id_and_portfolio(id_refresh, record.id_portfolio)
+                    .await
+                    .map_err(map_refresh_repository_error)?
+                    .ok_or_else(|| {
+                        tracing::error!(
+                            %id_refresh,
+                            id_portfolio = %record.id_portfolio,
+                            "idempotency replay: recorded refresh request no longer exists"
+                        );
+                        PortfolioOperationServiceError::Internal
+                    })?,
+            ),
+            None => None,
+        };
+
+        let mut views = self.enrich_many(vec![operation]).await?;
+        let view = views.remove(0);
+
+        Ok(IdempotentOperationWriteOutcome {
+            outcome: OperationWriteOutcome {
+                operation: view,
+                refresh_request: refresh,
+            },
+            replayed: true,
         })
     }
 
@@ -607,7 +1069,10 @@ impl PortfolioOperationService {
             }
         }
 
-        let operation_status = input.operation_status.unwrap_or(OperationStatus::Pending);
+        let operation_status = input
+            .operation_status
+            .clone()
+            .unwrap_or(OperationStatus::Pending);
         if operation_status == OperationStatus::Cancelled {
             return Err(PortfolioOperationServiceError::Validation {
                 code: "invalid_operation_status",
@@ -1707,6 +2172,42 @@ fn map_refresh_repository_error(
         }
         PortfolioRefreshRequestRepositoryError::InvalidRow => {
             tracing::error!("portfolio refresh request repository returned an invalid row");
+            PortfolioOperationServiceError::Internal
+        }
+    }
+}
+
+/// Mutable-state requirement for the correction create path: the original
+/// operation must be `posted`. Pulled out of `build_correction_candidate`
+/// so it only runs on the fresh-request path; replays of a successful
+/// correction must never re-check this (the original was posted at write
+/// time, that is enough).
+fn require_correctable_original(
+    original: &PortfolioOperation,
+) -> Result<(), PortfolioOperationServiceError> {
+    match original.operation_status {
+        OperationStatus::Posted => Ok(()),
+        OperationStatus::Pending => Err(PortfolioOperationServiceError::Conflict {
+            code: "correction_requires_posted_operation",
+            message: "only posted portfolio operations can be corrected",
+        }),
+        OperationStatus::Cancelled => Err(PortfolioOperationServiceError::Conflict {
+            code: "correction_requires_posted_operation",
+            message: "cancelled portfolio operations cannot be corrected",
+        }),
+    }
+}
+
+fn map_idempotency_repository_error(
+    error: IdempotencyRepositoryError,
+) -> PortfolioOperationServiceError {
+    match error {
+        IdempotencyRepositoryError::Database(error) => {
+            tracing::error!(error = %error, "operation idempotency repository database error");
+            PortfolioOperationServiceError::Internal
+        }
+        IdempotencyRepositoryError::InvalidRow => {
+            tracing::error!("operation idempotency repository returned an invalid row");
             PortfolioOperationServiceError::Internal
         }
     }
