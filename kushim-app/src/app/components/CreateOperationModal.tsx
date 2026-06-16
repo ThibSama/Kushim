@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { AlertCircle } from "lucide-react";
 import { Card } from "./Card";
 import { Button } from "./Button";
@@ -37,9 +37,30 @@ function mapBackendErrorToFrench(code: string, fallback: string): string {
       return "Cette devise n'est pas prise en charge.";
     case "invalid_fx_rate_to_portfolio":
       return "Le taux de change doit être un nombre positif.";
+    case "missing_idempotency_key":
+      return "La requête ne peut pas être sécurisée. Veuillez réessayer.";
+    case "invalid_idempotency_key":
+      return "La requête ne peut pas être sécurisée. Veuillez réessayer.";
+    case "idempotency_key_conflict":
+      return "Cette tentative correspond à une opération différente. Vérifiez les données puis recommencez.";
     default:
       return `${code}: ${fallback}`;
   }
+}
+
+/// Compact, stable fingerprint of the payload submitted to the backend.
+/// Used by the modal lifecycle to decide whether a retry of the SAME logical
+/// submission attempt (same data) can reuse the in-flight idempotency key,
+/// or whether the user materially edited the form and we must rotate it.
+/// The frontend fingerprint is intentionally a coarse hash: the backend is
+/// the authoritative arbiter — if our hashing misses a difference the server
+/// will return `idempotency_key_conflict` and the modal surfaces the message.
+function fingerprintPayload(payload: CreateOperationPayload): string {
+  const ordered: Record<string, unknown> = {};
+  for (const key of Object.keys(payload).sort()) {
+    ordered[key] = (payload as Record<string, unknown>)[key];
+  }
+  return JSON.stringify(ordered);
 }
 
 const ASSET_OPERATION_TYPES = ["buy", "sell", "dividend"];
@@ -92,6 +113,13 @@ export function CreateOperationModal({ portfolioId, onClose }: Props) {
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // P3: one logical submission attempt = one idempotency key. Generated
+  // lazily, reused while the user retries the SAME payload after an
+  // ambiguous network/server error, and rotated whenever the payload
+  // changes materially OR after a confirmed success. Kept in a ref (not
+  // state) so updating it never re-renders the form.
+  const attemptRef = useRef<{ key: string; fingerprint: string } | null>(null);
 
   // Currency change handler clears stale FX state when the user picks the
   // portfolio base currency again, so a previously typed rate cannot leak
@@ -250,9 +278,29 @@ export function CreateOperationModal({ portfolioId, onClose }: Props) {
       payload.price_minor = priceMinor;
     }
 
+    // P3 key lifecycle: reuse the in-flight key if this is a retry of the
+    // SAME payload (recover from an ambiguous network failure → backend
+    // replays the original write); rotate to a fresh UUID when the payload
+    // changed materially OR when no attempt is in flight.
+    const fingerprint = fingerprintPayload(payload);
+    if (
+      !attemptRef.current ||
+      attemptRef.current.fingerprint !== fingerprint
+    ) {
+      attemptRef.current = {
+        key: crypto.randomUUID(),
+        fingerprint,
+      };
+    }
+    const idempotencyKey = attemptRef.current.key;
+
     setSubmitting(true);
     try {
-      const result = await createOperation(portfolioId, payload);
+      const result = await createOperation(
+        portfolioId,
+        payload,
+        idempotencyKey,
+      );
       // A posted operation must come back with a refresh request; if it does
       // not, treat it as a backend contract error rather than silently closing.
       if (!result.refresh_request) {
@@ -266,6 +314,9 @@ export function CreateOperationModal({ portfolioId, onClose }: Props) {
         portfolioId,
         result.refresh_request.id_portfolio_refresh_request,
       );
+      // Confirmed success: clear the attempt so the next submission starts
+      // fresh. A successful key must never be reused for a new operation.
+      attemptRef.current = null;
       onClose();
     } catch (e) {
       if (e instanceof ApiRequestError) {
