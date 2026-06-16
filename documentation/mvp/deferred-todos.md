@@ -22,6 +22,8 @@ Use these labels:
 
 ### Deferred
 
+- production-grade retention/cleanup policy for `portfolio_operation_idempotency` rows: P3 keeps the durable record indefinitely so legitimate late retries can replay; a follow-up should age out records older than a documented retention horizon (e.g. 7 days for replay safety, then archive)
+- extending the P3 idempotency contract to additional state-changing endpoints (`POST /v1/portfolios`, the auth `/signup` flow, future payment endpoints). P3 only covers operation creation and correction creation because those are the only paths that could create a duplicate ledger row from a retried request.
 - production-grade asset-master ingestion, enrichment, alias and metadata workflow (the canonical seed is intentionally minimal — three rows, no aliases, no metadata, no prices)
 - broader canonical seed coverage beyond AAPL/MSFT/NVDA
 - operation type to asset class validation matrix

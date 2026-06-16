@@ -1,4 +1,5 @@
 pub mod assets;
+pub mod portfolio_operation_idempotency;
 pub mod portfolio_operations;
 pub mod portfolio_read_models;
 pub mod portfolio_refresh_requests;

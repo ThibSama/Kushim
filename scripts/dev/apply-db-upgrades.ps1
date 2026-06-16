@@ -53,13 +53,79 @@ foreach ($script in $scripts) {
 }
 
 Write-Host ''
-Write-Host 'All upgrade scripts applied. Verifying portfolio_refresh_requests table...'
-$tableCheck = 'SELECT to_regclass(''public.portfolio_refresh_requests'') IS NOT NULL;' |
-    docker exec -i $container psql -U kushim -d kushim -t -A
-if ($tableCheck.Trim() -ne 't') {
-    Write-Error 'portfolio_refresh_requests table is missing after upgrade.'
+Write-Host 'All upgrade scripts applied. Verifying required objects...'
+
+# Required relations after every upgrade pass. Add new entries here whenever a
+# new upgrade introduces a load-bearing table — checking only one table no
+# longer implies the whole schema is in good shape.
+$requiredTables = @(
+    'portfolio_refresh_requests',
+    'portfolio_operation_idempotency'
+)
+
+# Required uniqueness / FK / CHECK / index objects for P3 durable idempotency.
+# These are what makes ON CONFLICT DO NOTHING actually serialize concurrent
+# claims and what keeps the audit history coherent; a missing object silently
+# breaks the contract, so we fail loudly. FK delete actions are pinned where
+# they matter (RESTRICT for the audit chain).
+$requiredObjects = @(
+    @{ Kind = 'index';      Name = 'uq_portfolio_operation_idempotency_user_key' },
+    @{ Kind = 'index';      Name = 'idx_portfolio_operation_idempotency_portfolio_created' },
+    @{ Kind = 'fk';         Name = 'fk_portfolio_operation_idempotency_user';                Delete = 'r' },
+    @{ Kind = 'fk';         Name = 'fk_portfolio_operation_idempotency_portfolio';           Delete = 'r' },
+    @{ Kind = 'fk';         Name = 'fk_portfolio_operation_idempotency_operation';           Delete = 'r' },
+    @{ Kind = 'fk';         Name = 'fk_portfolio_operation_idempotency_corrected_operation'; Delete = 'n' },
+    @{ Kind = 'fk';         Name = 'fk_portfolio_operation_idempotency_refresh_request';     Delete = 'n' },
+    @{ Kind = 'check';      Name = 'chk_portfolio_operation_idempotency_request_kind' },
+    @{ Kind = 'check';      Name = 'chk_portfolio_operation_idempotency_correction_link' }
+)
+
+$missing = @()
+
+foreach ($table in $requiredTables) {
+    $present = "SELECT to_regclass('public.$table') IS NOT NULL;" |
+        docker exec -i $container psql -U kushim -d kushim -t -A
+    if ($present.Trim() -eq 't') {
+        Write-Host "  table  OK: $table"
+    } else {
+        Write-Host "  table  MISSING: $table"
+        $missing += "table $table"
+    }
+}
+
+foreach ($obj in $requiredObjects) {
+    switch ($obj.Kind) {
+        'index' {
+            $sql = "SELECT EXISTS(SELECT 1 FROM pg_indexes WHERE indexname = '$($obj.Name)');"
+        }
+        'check' {
+            $sql = "SELECT EXISTS(SELECT 1 FROM pg_constraint WHERE conname = '$($obj.Name)' AND contype = 'c');"
+        }
+        'fk' {
+            # confdeltype: 'r' RESTRICT, 'n' SET NULL, 'c' CASCADE, 'a' NO ACTION.
+            $sql = "SELECT EXISTS(SELECT 1 FROM pg_constraint WHERE conname = '$($obj.Name)' AND contype = 'f' AND confdeltype = '$($obj.Delete)');"
+        }
+        default {
+            Write-Error "Unknown verification kind: $($obj.Kind)"
+            exit 1
+        }
+    }
+    $present = $sql | docker exec -i $container psql -U kushim -d kushim -t -A
+    if ($present.Trim() -eq 't') {
+        $detail = if ($obj.Kind -eq 'fk') { " (ON DELETE $($obj.Delete))" } else { '' }
+        Write-Host "  $($obj.Kind)  OK: $($obj.Name)$detail"
+    } else {
+        Write-Host "  $($obj.Kind)  MISSING or WRONG: $($obj.Name)"
+        $missing += "$($obj.Kind) $($obj.Name)"
+    }
+}
+
+if ($missing.Count -gt 0) {
+    Write-Host ''
+    Write-Error ("Required objects missing after upgrade: " + ($missing -join ', '))
     exit 1
 }
 
-Write-Host 'portfolio_refresh_requests table present. Upgrade complete.'
+Write-Host ''
+Write-Host 'All required tables, indexes and FK constraints verified. Upgrade complete.'
 exit 0
