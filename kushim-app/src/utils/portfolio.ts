@@ -83,10 +83,22 @@ export function getPerformanceTone(value: number): PerformanceTone {
   return "neutral";
 }
 
+// `currency` is an ISO 4217 code (e.g. "USD", "EUR"). It is required and not
+// defaulted: silently falling back to EUR previously caused a USD portfolio to
+// display "€" everywhere a caller forgot to thread the currency through. When
+// the caller genuinely has no currency yet (e.g. loading state, asset_market_data
+// not yet hydrated), pass `null`/`undefined` and the value is rendered as a
+// plain localized number without a symbol — never as a wrong currency.
 export function formatCurrency(
   value: number,
-  currency: PortfolioCurrency = "EUR",
+  currency: string | null | undefined,
 ): string {
+  if (!currency) {
+    return value.toLocaleString("fr-FR", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    });
+  }
   return new Intl.NumberFormat("fr-FR", {
     style: "currency",
     currency,
@@ -97,7 +109,7 @@ export function formatCurrency(
 
 export function formatSignedCurrency(
   value: number,
-  currency: PortfolioCurrency = "EUR",
+  currency: string | null | undefined,
 ): string {
   const formatted = formatCurrency(Math.abs(value), currency);
   if (value > 0) return `+${formatted}`;

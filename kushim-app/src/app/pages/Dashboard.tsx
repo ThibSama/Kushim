@@ -965,7 +965,7 @@ export function Dashboard() {
                         {r.currency}
                       </td>
                       <td style={{ padding: "14px 0 14px 8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", fontSize: "14px", fontWeight: 600, color: "var(--text-primary)", borderBottom: i < recentRows.length - 1 ? "1px solid var(--surface-1-border)" : "none", whiteSpace: "nowrap" }}>
-                        {formatCurrency(r.total)}
+                        {formatCurrency(r.total, r.currency)}
                       </td>
                     </tr>
                   );

@@ -135,8 +135,16 @@ function EmptyOperationsState({ onCreate }: { onCreate: () => void }) {
 }
 
 export function Transactions() {
-  const { activePortfolioId } = usePortfolioStore();
+  const { activePortfolioId, portfolios } = usePortfolioStore();
   const { operations, status, loadOperations } = useOperationsStore();
+
+  // Active portfolio's base currency drives the cross-operation aggregate tiles
+  // (Achats / Ventes / Dépôts / …). Per-row prices and totals use the
+  // operation's own `currency` so a future multi-currency portfolio still
+  // displays each row with its native symbol.
+  const activePortfolio =
+    portfolios.find((p) => p.id_portfolio === activePortfolioId) ?? null;
+  const portfolioCurrency = activePortfolio?.base_currency ?? null;
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -197,12 +205,12 @@ export function Transactions() {
   );
 
   const metricCards = [
-    { key: "purchases", label: "Achats", value: formatCurrency(metrics.purchases), icon: ShoppingCart, iconColor: "var(--color-gain)", accent: "rgba(16, 185, 129, 0.14)", mdSpan: "md:col-span-1", xlSpan: "xl:col-span-2", minHeight: "104px" },
-    { key: "sales", label: "Ventes", value: formatCurrency(metrics.sales), icon: TrendingUp, iconColor: "var(--color-loss)", accent: "rgba(239, 68, 68, 0.12)", mdSpan: "md:col-span-1", xlSpan: "xl:col-span-1", minHeight: "104px" },
-    { key: "deposits", label: "Dépôts", value: formatCurrency(metrics.deposits), icon: ArrowDownCircle, iconColor: "var(--color-accent)", accent: "rgba(59, 130, 246, 0.12)", mdSpan: "md:col-span-1", xlSpan: "xl:col-span-1", minHeight: "104px" },
-    { key: "withdrawals", label: "Retraits", value: formatCurrency(metrics.withdrawals), icon: ArrowUpCircle, iconColor: "var(--color-warning)", accent: "rgba(245, 158, 11, 0.12)", mdSpan: "md:col-span-1", xlSpan: "xl:col-span-2", minHeight: "88px" },
-    { key: "dividends", label: "Dividendes", value: formatCurrency(metrics.dividends), icon: Landmark, iconColor: "#6366F1", accent: "rgba(99, 102, 241, 0.12)", mdSpan: "md:col-span-1", xlSpan: "xl:col-span-1", minHeight: "88px" },
-    { key: "fees", label: "Frais", value: formatCurrency(metrics.fees), icon: Receipt, iconColor: "var(--text-secondary)", accent: "rgba(161, 161, 170, 0.10)", mdSpan: "md:col-span-1", xlSpan: "xl:col-span-1", minHeight: "88px" },
+    { key: "purchases", label: "Achats", value: formatCurrency(metrics.purchases, portfolioCurrency), icon: ShoppingCart, iconColor: "var(--color-gain)", accent: "rgba(16, 185, 129, 0.14)", mdSpan: "md:col-span-1", xlSpan: "xl:col-span-2", minHeight: "104px" },
+    { key: "sales", label: "Ventes", value: formatCurrency(metrics.sales, portfolioCurrency), icon: TrendingUp, iconColor: "var(--color-loss)", accent: "rgba(239, 68, 68, 0.12)", mdSpan: "md:col-span-1", xlSpan: "xl:col-span-1", minHeight: "104px" },
+    { key: "deposits", label: "Dépôts", value: formatCurrency(metrics.deposits, portfolioCurrency), icon: ArrowDownCircle, iconColor: "var(--color-accent)", accent: "rgba(59, 130, 246, 0.12)", mdSpan: "md:col-span-1", xlSpan: "xl:col-span-1", minHeight: "104px" },
+    { key: "withdrawals", label: "Retraits", value: formatCurrency(metrics.withdrawals, portfolioCurrency), icon: ArrowUpCircle, iconColor: "var(--color-warning)", accent: "rgba(245, 158, 11, 0.12)", mdSpan: "md:col-span-1", xlSpan: "xl:col-span-2", minHeight: "88px" },
+    { key: "dividends", label: "Dividendes", value: formatCurrency(metrics.dividends, portfolioCurrency), icon: Landmark, iconColor: "#6366F1", accent: "rgba(99, 102, 241, 0.12)", mdSpan: "md:col-span-1", xlSpan: "xl:col-span-1", minHeight: "88px" },
+    { key: "fees", label: "Frais", value: formatCurrency(metrics.fees, portfolioCurrency), icon: Receipt, iconColor: "var(--text-secondary)", accent: "rgba(161, 161, 170, 0.10)", mdSpan: "md:col-span-1", xlSpan: "xl:col-span-1", minHeight: "88px" },
   ];
 
   if (!activePortfolioId) {
@@ -370,10 +378,10 @@ export function Transactions() {
                         </td>
                         <td style={{ padding: "14px 16px", fontSize: "12px", color: r.statusKey === "cancelled" ? "var(--color-loss)" : "var(--text-tertiary)" }}>{r.status}</td>
                         <td style={{ ...monoCell, textAlign: "right" }}>{r.qty}</td>
-                        <td style={{ ...monoCell, textAlign: "right" }}>{r.price === null ? "—" : formatCurrency(r.price)}</td>
-                        <td style={{ ...monoCell, textAlign: "right", color: "var(--text-secondary)" }} className="hidden sm:table-cell">{r.fees > 0 ? formatCurrency(r.fees) : "—"}</td>
+                        <td style={{ ...monoCell, textAlign: "right" }}>{r.price === null ? "—" : formatCurrency(r.price, r.currency)}</td>
+                        <td style={{ ...monoCell, textAlign: "right", color: "var(--text-secondary)" }} className="hidden sm:table-cell">{r.fees > 0 ? formatCurrency(r.fees, r.currency) : "—"}</td>
                         <td style={{ padding: "14px 16px", textAlign: "center", fontSize: "12px", color: "var(--text-tertiary)", whiteSpace: "nowrap" }} className="hidden sm:table-cell">{r.currency}</td>
-                        <td style={{ ...monoCell, textAlign: "right", fontWeight: 600 }}>{formatCurrency(r.total)}</td>
+                        <td style={{ ...monoCell, textAlign: "right", fontWeight: 600 }}>{formatCurrency(r.total, r.currency)}</td>
                         <td style={{ padding: "14px 16px", fontSize: "12px", color: "var(--text-tertiary)", minWidth: "180px" }} className="hidden lg:table-cell">{r.notes || "—"}</td>
                       </tr>
                     );
