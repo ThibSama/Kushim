@@ -1,6 +1,7 @@
 pub mod assets;
 pub mod extractors;
 pub mod health;
+pub mod idempotency;
 pub mod me;
 pub mod portfolio_operations;
 pub mod portfolio_read_models;
@@ -9,6 +10,7 @@ pub mod portfolios;
 pub mod reference;
 
 use crate::state::AppState;
+use axum::http::HeaderName;
 use axum::{
     Router,
     body::to_bytes,
@@ -133,13 +135,23 @@ fn build_cors_layer(allowed_origins: Option<&str>) -> CorsLayer {
         return CorsLayer::new();
     }
 
+    // P3: browsers send `Idempotency-Key` on POST creates and reads the
+    // `Idempotency-Replayed` echo back. Both must be allow-listed by CORS or
+    // the preflight will fail and the create call never leaves the browser.
+    let idempotency_key_header =
+        HeaderName::from_static(crate::http::idempotency::IDEMPOTENCY_KEY_HEADER_LOWER);
+    let idempotency_replayed_header =
+        HeaderName::from_static(crate::errors::IDEMPOTENCY_REPLAYED_HEADER_LOWER);
+
     CorsLayer::new()
         .allow_origin(origins)
         .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::OPTIONS])
         .allow_headers([
             axum::http::header::CONTENT_TYPE,
             axum::http::header::AUTHORIZATION,
+            idempotency_key_header,
         ])
+        .expose_headers([idempotency_replayed_header])
 }
 
 async fn normalize_plaintext_error_responses(response: Response) -> Response {

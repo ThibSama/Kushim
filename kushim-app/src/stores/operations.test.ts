@@ -125,6 +125,7 @@ describe("useOperationsStore (P2)", () => {
         currency: "EUR",
         id_asset: aaplAsset.id_asset,
       },
+      "00000000-0000-4000-8000-000000000001",
     );
 
     expect(result.operation.asset?.ticker).toBe("AAPL");

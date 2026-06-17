@@ -107,6 +107,30 @@ describe("sessionGate + authenticatedRequest", () => {
     expect(req[1].headers["Authorization"]).toBe("Bearer access-1");
   });
 
+  it("preserves caller-provided Idempotency-Key across a 401 refresh retry (P3)", async () => {
+    fetchMock
+      .mockResolvedValueOnce(makeResponse({ status: 401 }))
+      .mockResolvedValueOnce(makeResponse({ body: { ok: true } }));
+
+    const key = "00000000-0000-4000-8000-000000000099";
+    await authenticatedRequest<{ ok: boolean }>("http://api", "/v1/x", {
+      method: "POST",
+      body: { foo: 1 },
+      headers: { "Idempotency-Key": key },
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const firstHeaders = fetchMock.mock.calls[0][1].headers;
+    const secondHeaders = fetchMock.mock.calls[1][1].headers;
+    // Same key on the original AND on the post-refresh retry — backend
+    // sees the same logical attempt and replays the original write.
+    expect(firstHeaders["Idempotency-Key"]).toBe(key);
+    expect(secondHeaders["Idempotency-Key"]).toBe(key);
+    // Authorization rotated.
+    expect(firstHeaders["Authorization"]).toBe("Bearer access-1");
+    expect(secondHeaders["Authorization"]).toBe("Bearer access-2");
+  });
+
   it("401 triggers a refresh then retries the original request with the new token", async () => {
     fetchMock
       .mockResolvedValueOnce(makeResponse({ status: 401 }))

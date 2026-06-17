@@ -587,6 +587,80 @@ CREATE INDEX idx_portfolio_refresh_requests_claim
 CREATE INDEX idx_portfolio_refresh_requests_portfolio_recent
     ON portfolio_refresh_requests (id_portfolio, requested_at DESC);
 
+-- P3: Durable idempotency for portfolio-operation creation and correction
+-- creation. Each row records a successful write keyed by
+-- (id_user, idempotency_key) so retries that arrive after the original
+-- transaction committed return the SAME operation and refresh-request identity
+-- instead of creating a duplicate ledger row.
+--
+-- Atomicity: the row is inserted in the SAME transaction that inserts the
+-- operation (and, when applicable, enqueues the refresh request). The
+-- `id_portfolio_operation` / `id_portfolio_refresh_request` columns are
+-- nullable only because they are populated by the same-transaction UPDATE
+-- that follows the operation INSERT; a committed row always carries a non-null
+-- operation reference. The unique (id_user, idempotency_key) constraint plus
+-- INSERT ... ON CONFLICT DO NOTHING resolves concurrent races: the loser
+-- rolls back its operation insert and replays the winner.
+CREATE TABLE portfolio_operation_idempotency (
+    id_portfolio_operation_idempotency uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    id_user uuid NOT NULL,
+    id_portfolio uuid NOT NULL,
+    idempotency_key uuid NOT NULL,
+    request_kind varchar(40) NOT NULL,
+    id_corrected_operation uuid,
+    request_fingerprint jsonb NOT NULL,
+    id_portfolio_operation uuid,
+    id_portfolio_refresh_request uuid,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    -- Audit-log semantics: the idempotency table is a durable record of
+    -- successful writes for replay safety. RESTRICT on user/portfolio/
+    -- resulting-operation prevents a silent deletion path from erasing
+    -- idempotency history. Posted operations are already DB-immutable
+    -- (prevent_posted_operation_mutation), so in practice no chain can
+    -- delete a referenced row anyway.
+    CONSTRAINT fk_portfolio_operation_idempotency_user
+        FOREIGN KEY (id_user) REFERENCES users (id_user) ON DELETE RESTRICT,
+    CONSTRAINT fk_portfolio_operation_idempotency_portfolio
+        FOREIGN KEY (id_portfolio) REFERENCES portfolios (id_portfolio) ON DELETE RESTRICT,
+    CONSTRAINT fk_portfolio_operation_idempotency_operation
+        FOREIGN KEY (id_portfolio_operation)
+        REFERENCES portfolio_operations (id_portfolio_operation)
+        ON DELETE RESTRICT,
+    -- The corrected-operation pointer and the refresh-request pointer are
+    -- audit-friendly: SET NULL keeps the idempotency row alive even if the
+    -- pointer target is ever cleaned up (refresh requests may be aged out
+    -- under the future retention policy — see deferred-todos.md).
+    CONSTRAINT fk_portfolio_operation_idempotency_corrected_operation
+        FOREIGN KEY (id_corrected_operation)
+        REFERENCES portfolio_operations (id_portfolio_operation)
+        ON DELETE SET NULL,
+    CONSTRAINT fk_portfolio_operation_idempotency_refresh_request
+        FOREIGN KEY (id_portfolio_refresh_request)
+        REFERENCES portfolio_refresh_requests (id_portfolio_refresh_request)
+        ON DELETE SET NULL,
+    CONSTRAINT chk_portfolio_operation_idempotency_request_kind
+        CHECK (request_kind IN ('create_operation', 'create_correction')),
+    CONSTRAINT chk_portfolio_operation_idempotency_correction_link
+        CHECK (
+            (request_kind = 'create_operation' AND id_corrected_operation IS NULL)
+            OR (request_kind = 'create_correction' AND id_corrected_operation IS NOT NULL)
+        ),
+    CONSTRAINT chk_portfolio_operation_idempotency_fingerprint_object
+        CHECK (jsonb_typeof(request_fingerprint) = 'object')
+);
+
+CREATE UNIQUE INDEX uq_portfolio_operation_idempotency_user_key
+    ON portfolio_operation_idempotency (id_user, idempotency_key);
+
+CREATE INDEX idx_portfolio_operation_idempotency_portfolio_created
+    ON portfolio_operation_idempotency (id_portfolio, created_at DESC);
+
+COMMENT ON TABLE portfolio_operation_idempotency IS
+'P3 durable idempotency log for operation/correction creation. A row scopes
+an Idempotency-Key to its authenticated user and records the originating
+operation/refresh-request identity so retries replay the original write
+deterministically.';
+
 CREATE TABLE rm_portfolio_summary (
     id_rm_portfolio_summary uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     id_portfolio uuid NOT NULL,
