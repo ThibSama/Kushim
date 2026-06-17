@@ -999,25 +999,25 @@ mod tests {
     /// cleanup, so the sweep only removes assets whose creating test has
     /// already torn down its rows. Canonical seeded assets always have
     /// `exchange IS NOT NULL` and are never touched.
-async fn cleanup_user_tree(pool: &PgPool, id_user: Uuid, asset_ids: &[Uuid]) {
-    // P3 audit FKs use ON DELETE RESTRICT for user/portfolio/operation,
-    // so the idempotency rows must be cleaned up BEFORE the operations
-    // they reference.
-    sqlx::query(
-        r#"
+    async fn cleanup_user_tree(pool: &PgPool, id_user: Uuid, asset_ids: &[Uuid]) {
+        // P3 audit FKs use ON DELETE RESTRICT for user/portfolio/operation,
+        // so the idempotency rows must be cleaned up BEFORE the operations
+        // they reference.
+        sqlx::query(
+            r#"
         DELETE FROM portfolio_operation_idempotency
         WHERE id_user = $1
         "#,
-    )
-    .bind(id_user)
-    .execute(pool)
-    .await
-    .expect("idempotency records should be deleted");
+        )
+        .bind(id_user)
+        .execute(pool)
+        .await
+        .expect("idempotency records should be deleted");
 
-    // Holding snapshots reference assets via RESTRICT — scrub them before
-    // attempting any asset deletion. Same for the holdings read model.
-    sqlx::query(
-        r#"
+        // Holding snapshots reference assets via RESTRICT — scrub them before
+        // attempting any asset deletion. Same for the holdings read model.
+        sqlx::query(
+            r#"
         DELETE FROM portfolio_holding_snapshot_daily
         WHERE id_portfolio_snapshot_daily IN (
             SELECT id_portfolio_snapshot_daily
@@ -1029,14 +1029,14 @@ async fn cleanup_user_tree(pool: &PgPool, id_user: Uuid, asset_ids: &[Uuid]) {
             )
         )
         "#,
-    )
-    .bind(id_user)
-    .execute(pool)
-    .await
-    .expect("holding snapshots should be deleted");
+        )
+        .bind(id_user)
+        .execute(pool)
+        .await
+        .expect("holding snapshots should be deleted");
 
-    sqlx::query(
-        r#"
+        sqlx::query(
+            r#"
         DELETE FROM portfolio_snapshots_daily
         WHERE id_portfolio IN (
             SELECT id_portfolio
@@ -1044,14 +1044,14 @@ async fn cleanup_user_tree(pool: &PgPool, id_user: Uuid, asset_ids: &[Uuid]) {
             WHERE id_user = $1
         )
         "#,
-    )
-    .bind(id_user)
-    .execute(pool)
-    .await
-    .expect("snapshots should be deleted");
+        )
+        .bind(id_user)
+        .execute(pool)
+        .await
+        .expect("snapshots should be deleted");
 
-    sqlx::query(
-        r#"
+        sqlx::query(
+            r#"
         DELETE FROM rm_portfolio_holdings
         WHERE id_portfolio IN (
             SELECT id_portfolio
@@ -1059,14 +1059,14 @@ async fn cleanup_user_tree(pool: &PgPool, id_user: Uuid, asset_ids: &[Uuid]) {
             WHERE id_user = $1
         )
         "#,
-    )
-    .bind(id_user)
-    .execute(pool)
-    .await
-    .expect("holdings read model should be deleted");
+        )
+        .bind(id_user)
+        .execute(pool)
+        .await
+        .expect("holdings read model should be deleted");
 
-    sqlx::query(
-        r#"
+        sqlx::query(
+            r#"
         DELETE FROM rm_portfolio_summary
         WHERE id_portfolio IN (
             SELECT id_portfolio
@@ -1074,14 +1074,14 @@ async fn cleanup_user_tree(pool: &PgPool, id_user: Uuid, asset_ids: &[Uuid]) {
             WHERE id_user = $1
         )
         "#,
-    )
-    .bind(id_user)
-    .execute(pool)
-    .await
-    .expect("summary read model should be deleted");
+        )
+        .bind(id_user)
+        .execute(pool)
+        .await
+        .expect("summary read model should be deleted");
 
-    sqlx::query(
-        r#"
+        sqlx::query(
+            r#"
         DELETE FROM portfolio_refresh_requests
         WHERE id_portfolio IN (
             SELECT id_portfolio
@@ -1089,17 +1089,17 @@ async fn cleanup_user_tree(pool: &PgPool, id_user: Uuid, asset_ids: &[Uuid]) {
             WHERE id_user = $1
         )
         "#,
-    )
-    .bind(id_user)
-    .execute(pool)
-    .await
-    .expect("refresh requests should be deleted");
+        )
+        .bind(id_user)
+        .execute(pool)
+        .await
+        .expect("refresh requests should be deleted");
 
-    // Posted portfolio_operations are intentionally immutable through the
-    // `prevent_posted_operation_mutation` database trigger. Only operations
-    // whose status permits deletion are removed here.
-    sqlx::query(
-        r#"
+        // Posted portfolio_operations are intentionally immutable through the
+        // `prevent_posted_operation_mutation` database trigger. Only operations
+        // whose status permits deletion are removed here.
+        sqlx::query(
+            r#"
         DELETE FROM portfolio_operations
         WHERE id_portfolio IN (
             SELECT id_portfolio
@@ -1108,37 +1108,37 @@ async fn cleanup_user_tree(pool: &PgPool, id_user: Uuid, asset_ids: &[Uuid]) {
         )
           AND operation_status IN ('pending', 'cancelled')
         "#,
-    )
-    .bind(id_user)
-    .execute(pool)
-    .await
-    .expect("deletable operations should be deleted");
-
-    // These deletes may remain blocked by immutable posted operations.
-    // The tests now run in disposable databases, so any remaining tree is
-    // removed when the temporary database itself is dropped.
-    let _ = sqlx::query("DELETE FROM portfolios WHERE id_user = $1")
+        )
         .bind(id_user)
         .execute(pool)
-        .await;
+        .await
+        .expect("deletable operations should be deleted");
 
-    let _ = sqlx::query("DELETE FROM users WHERE id_user = $1")
-        .bind(id_user)
-        .execute(pool)
-        .await;
-
-    for id_asset in asset_ids {
-        sqlx::query("DELETE FROM assets WHERE id_asset = $1")
-            .bind(id_asset)
+        // These deletes may remain blocked by immutable posted operations.
+        // The tests now run in disposable databases, so any remaining tree is
+        // removed when the temporary database itself is dropped.
+        let _ = sqlx::query("DELETE FROM portfolios WHERE id_user = $1")
+            .bind(id_user)
             .execute(pool)
-            .await
-            .expect("asset should be deleted");
-    }
+            .await;
 
-    // Intentionally no defensive global sweep here: a concurrent test may
-    // have created an asset but not yet inserted the operation referencing it.
-    // Exact UUID deletion remains race-safe.
-}
+        let _ = sqlx::query("DELETE FROM users WHERE id_user = $1")
+            .bind(id_user)
+            .execute(pool)
+            .await;
+
+        for id_asset in asset_ids {
+            sqlx::query("DELETE FROM assets WHERE id_asset = $1")
+                .bind(id_asset)
+                .execute(pool)
+                .await
+                .expect("asset should be deleted");
+        }
+
+        // Intentionally no defensive global sweep here: a concurrent test may
+        // have created an asset but not yet inserted the operation referencing it.
+        // Exact UUID deletion remains race-safe.
+    }
     fn build_access_token(id_user: Uuid, public_handle: &str) -> String {
         build_token(id_user, public_handle, TokenType::Access)
     }
