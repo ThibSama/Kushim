@@ -62,7 +62,7 @@ mod tests {
         let database_url = {
             let _guard = crate::test_utils::lock_env();
             match std::env::var("DATABASE_URL") {
-                Ok(value) => value,
+                Ok(_) => crate::test_utils::require_disposable_test_database_url(),
                 Err(_) => return,
             }
         };

@@ -183,7 +183,7 @@ mod tests {
     async fn test_pool() -> PgPool {
         let database_url = {
             let _guard = lock_env();
-            std::env::var("DATABASE_URL").unwrap_or_default()
+            crate::test_utils::require_disposable_test_database_url()
         };
         assert!(
             !database_url.is_empty(),
