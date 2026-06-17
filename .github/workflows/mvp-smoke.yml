@@ -148,7 +148,10 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Init database schema
-        run: psql "$DATABASE_URL" -f ../infra/postgres/init/001_init.sql
+        run: |
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f ../infra/postgres/init/001_init.sql
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f ../infra/postgres/init/002_seed_canonical_assets.sql
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f ../infra/postgres/init/003_seed_auth_roles.sql
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -191,7 +194,10 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Init database schema
-        run: psql "$DATABASE_URL" -f ../infra/postgres/init/001_init.sql
+        run: |
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f ../infra/postgres/init/001_init.sql
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f ../infra/postgres/init/002_seed_canonical_assets.sql
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f ../infra/postgres/init/003_seed_auth_roles.sql
 
       - uses: dtolnay/rust-toolchain@stable
         with:
