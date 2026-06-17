@@ -156,24 +156,34 @@ function Invoke-ApiPost {
         ContentType = "application/json"
     }
     if ($null -ne $Body) {
+        # Send the JSON body as a string (not byte[]). In Windows PowerShell 5.1
+        # the byte[] path can leave the response stream consumed before our
+        # catch reads it, producing empty error bodies on 4xx/5xx. Setting the
+        # explicit content-type with charset keeps UTF-8 on the wire.
         $jsonBody = $Body | ConvertTo-Json -Depth 10 -Compress
-        $params["Body"] = [System.Text.Encoding]::UTF8.GetBytes($jsonBody)
+        $params["Body"] = $jsonBody
+        $params["ContentType"] = "application/json; charset=utf-8"
     }
     try {
         $response = Invoke-RestMethod @params
         return $response
     } catch {
-        $statusCode = $null
-        $responseBody = ""
+        $statusCode = -1
+        $responseBody = "<no body captured>"
+        $exMessage = $_.Exception.Message
         if ($_.Exception.Response) {
             $statusCode = [int]$_.Exception.Response.StatusCode
             try {
-                $reader = [System.IO.StreamReader]::new($_.Exception.Response.GetResponseStream())
+                $respStream = $_.Exception.Response.GetResponseStream()
+                if ($respStream.CanSeek) { $respStream.Position = 0 }
+                $reader = [System.IO.StreamReader]::new($respStream)
                 $responseBody = $reader.ReadToEnd()
                 $reader.Close()
-            } catch {}
+            } catch {
+                $responseBody = "<failed to read response stream: $($_.Exception.Message)>"
+            }
         }
-        throw "POST $Url failed (status=$statusCode): $($_.Exception.Message)`nResponse: $responseBody"
+        throw "POST $Url failed (status=$statusCode): $exMessage`nResponse body: $responseBody"
     }
 }
 

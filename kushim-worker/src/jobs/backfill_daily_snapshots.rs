@@ -241,7 +241,7 @@ mod tests {
         config::{Config, WorkerJob, WorkerMode},
         jobs::Job,
         state::AppState,
-        test_utils::lock_env,
+        test_utils::{cleanup_worker_test_tree, lock_env},
     };
     use sqlx::{PgPool, Row, postgres::PgPoolOptions};
     use std::time::Duration as StdDuration;
@@ -251,7 +251,7 @@ mod tests {
     async fn test_pool() -> PgPool {
         let database_url = {
             let _guard = lock_env();
-            std::env::var("DATABASE_URL").unwrap_or_default()
+            crate::test_utils::require_disposable_test_database_url()
         };
 
         assert!(
@@ -642,6 +642,8 @@ mod tests {
         .await
         .expect("operation count should be available");
         assert_eq!(operations_count, 3);
+
+        cleanup_worker_test_tree(&pool, user).await;
     }
 
     #[tokio::test]
@@ -679,6 +681,8 @@ mod tests {
         assert_eq!(snapshots[0].get::<String, _>("snapshot_date"), "2026-06-02");
         assert_eq!(snapshots[0].get::<i64, _>("total_value_minor"), 0);
         assert_eq!(snapshots[1].get::<String, _>("snapshot_date"), "2026-06-03");
+
+        cleanup_worker_test_tree(&pool, user).await;
     }
 
     #[tokio::test]
@@ -833,5 +837,7 @@ mod tests {
         assert_eq!(day2_holding.get::<i64, _>("pnl_minor"), 0);
         assert_eq!(day2_holding.get::<String, _>("weight_pct"), "100.0000");
         assert!(day2_holding.get::<bool, _>("is_estimated"));
+
+        cleanup_worker_test_tree(&pool, user).await;
     }
 }

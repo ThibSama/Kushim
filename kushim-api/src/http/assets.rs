@@ -313,8 +313,7 @@ mod tests {
     use uuid::Uuid;
 
     async fn test_pool() -> PgPool {
-        let database_url =
-            std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for integration tests");
+        let database_url = crate::test_support::require_disposable_test_database_url();
         PgPoolOptions::new()
             .max_connections(1)
             .connect(&database_url)
@@ -1113,6 +1112,204 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
         cleanup_assets(&pool, &[asset_id], &[], &[], &[user_id]).await;
+    }
+
+    // ---------------------------------------------------------------------
+    // Catalogue discoverability policy (equity-without-exchange filter)
+    // ---------------------------------------------------------------------
+    //
+    // Background. Integration tests across `kushim-api` (this file's
+    // `create_asset` helpers in portfolio_operations tests) and `kushim-worker`
+    // (Backfill/Snapshot/Worker/Composite Asset fixtures) insert equity rows
+    // with no exchange. They previously leaked into `GET /v1/assets` because
+    // the catalogue query had no discoverability filter, polluting the
+    // production-shaped catalogue with hundreds of "Asset APA<hex>" rows.
+    //
+    // The repository now refuses to surface equities without an exchange
+    // (their natural identity is (ticker, exchange) per the canonical seed),
+    // but still resolves them by id_asset so historical operations referencing
+    // legacy rows stay queryable. Non-equity asset classes (crypto, etf, etc.)
+    // are NOT subject to this rule because they have a different natural
+    // identity.
+
+    /// Inserts an equity row with no exchange — the exact shape used by
+    /// integration-test fixtures across kushim-api and kushim-worker.
+    async fn insert_equity_without_exchange(pool: &PgPool, name: &str, symbol: &str) -> Uuid {
+        sqlx::query(
+            r#"
+            INSERT INTO assets (asset_class, status, name, native_currency, symbol)
+            VALUES ('equity', 'active', $1, 'EUR', $2)
+            RETURNING id_asset
+            "#,
+        )
+        .bind(name)
+        .bind(symbol)
+        .fetch_one(pool)
+        .await
+        .expect("equity without exchange should be inserted")
+        .try_get("id_asset")
+        .expect("id_asset should be returned")
+    }
+
+    /// Inserts a crypto row with no exchange. Crypto assets legitimately lack
+    /// an exchange (their natural identity is `symbol` and optionally
+    /// `network`), so the discoverability filter must NOT exclude them.
+    async fn insert_crypto_without_exchange(
+        pool: &PgPool,
+        name: &str,
+        symbol: &str,
+        network: &str,
+    ) -> Uuid {
+        sqlx::query(
+            r#"
+            INSERT INTO assets (asset_class, status, name, native_currency, symbol, network)
+            VALUES ('crypto', 'active', $1, 'USD', $2, $3)
+            RETURNING id_asset
+            "#,
+        )
+        .bind(name)
+        .bind(symbol)
+        .bind(network)
+        .fetch_one(pool)
+        .await
+        .expect("crypto without exchange should be inserted")
+        .try_get("id_asset")
+        .expect("id_asset should be returned")
+    }
+
+    #[tokio::test]
+    async fn list_assets_hides_equity_without_exchange() {
+        let pool = test_pool().await;
+        let handle = format!("dfx{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let user_id = create_user(&pool, &handle).await;
+        let suffix = Uuid::new_v4().simple().to_string()[..8].to_string();
+        // Canonical-shape equity (ticker + exchange) must surface.
+        let canonical = insert_asset(
+            &pool,
+            &format!("Discoverable Equity {suffix}"),
+            &format!("DSC{suffix}"),
+            // Synthetic but well-formed ISIN: 2-char country + 10-char A-Z0-9.
+            // `suffix` is 8 lowercase hex chars; uppercase it and pad with two
+            // zeros to satisfy `chk_assets_isin_format` (`^[A-Z0-9]{12}$`).
+            &format!("US{}00", suffix.to_uppercase()),
+            "NYSE",
+            "equity",
+            "active",
+        )
+        .await;
+        // Fixture-shape equity (no exchange) must be hidden by the policy.
+        let fixture =
+            insert_equity_without_exchange(&pool, &format!("Asset {suffix}"), &suffix).await;
+
+        let app = crate::http::router(test_state(pool.clone()).await);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/assets?search={suffix}"))
+                    .header(
+                        AUTHORIZATION,
+                        format!("Bearer {}", build_access_token(user_id, &handle)),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("response should be built");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_json(response).await;
+        let returned: Vec<_> = body["assets"]
+            .as_array()
+            .expect("assets should be an array")
+            .iter()
+            .map(|a| a["id_asset"].as_str().unwrap().to_string())
+            .collect();
+        assert!(
+            returned.contains(&canonical.to_string()),
+            "canonical equity must remain discoverable; got {returned:?}"
+        );
+        assert!(
+            !returned.contains(&fixture.to_string()),
+            "equity without exchange must be hidden by the discoverability filter; got {returned:?}"
+        );
+        assert_eq!(body["pagination"]["returned"], 1);
+        assert_eq!(body["pagination"]["has_more"], false);
+
+        cleanup_assets(&pool, &[canonical, fixture], &[], &[], &[user_id]).await;
+    }
+
+    #[tokio::test]
+    async fn list_assets_keeps_crypto_without_exchange_discoverable() {
+        let pool = test_pool().await;
+        let handle = format!("dcx{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let user_id = create_user(&pool, &handle).await;
+        let suffix = Uuid::new_v4().simple().to_string()[..8].to_string();
+        // Crypto naturally has no exchange. The filter is equity-only and must
+        // not touch crypto rows.
+        let crypto =
+            insert_crypto_without_exchange(&pool, &format!("Crypto {suffix}"), &suffix, "ethereum")
+                .await;
+
+        let app = crate::http::router(test_state(pool.clone()).await);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/assets?search={suffix}"))
+                    .header(
+                        AUTHORIZATION,
+                        format!("Bearer {}", build_access_token(user_id, &handle)),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("response should be built");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_json(response).await;
+        let returned: Vec<_> = body["assets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| a["id_asset"].as_str().unwrap().to_string())
+            .collect();
+        assert!(
+            returned.contains(&crypto.to_string()),
+            "crypto without exchange must stay discoverable; got {returned:?}"
+        );
+
+        cleanup_assets(&pool, &[crypto], &[], &[], &[user_id]).await;
+    }
+
+    #[tokio::test]
+    async fn get_asset_by_id_returns_equity_without_exchange() {
+        let pool = test_pool().await;
+        let handle = format!("byi{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let user_id = create_user(&pool, &handle).await;
+        let suffix = Uuid::new_v4().simple().to_string()[..8].to_string();
+        let fixture =
+            insert_equity_without_exchange(&pool, &format!("Asset {suffix}"), &suffix).await;
+
+        // Direct-by-id lookup MUST still resolve hidden rows so historical
+        // operations referencing legacy fixtures stay queryable.
+        let app = crate::http::router(test_state(pool.clone()).await);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/assets/{fixture}"))
+                    .header(
+                        AUTHORIZATION,
+                        format!("Bearer {}", build_access_token(user_id, &handle)),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("response should be built");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_json(response).await;
+        assert_eq!(body["asset"]["id_asset"], fixture.to_string());
+        assert!(body["asset"]["exchange"].is_null());
+
+        cleanup_assets(&pool, &[fixture], &[], &[], &[user_id]).await;
     }
 
     #[test]

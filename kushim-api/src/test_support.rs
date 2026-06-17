@@ -7,6 +7,52 @@
 
 use sqlx::PgPool;
 
+/// Reads `DATABASE_URL` and refuses to return it unless it points at a
+/// disposable test database whose name starts with `kushim_test_`.
+///
+/// Database-backed tests must never run against the persistent development
+/// database `kushim`: the schema enforces immutability on posted
+/// portfolio_operations, so every test that posts an operation leaks a
+/// schema-protected residue that the per-test cleanup cannot remove. The
+/// only reliable isolation is a brand-new database per suite invocation,
+/// which the `scripts/test/run-rust-db-suite.ps1` runner provides.
+///
+/// This guard is the defense-in-depth lid: even if the runner is bypassed,
+/// the tests refuse to touch the wrong database. The escape hatch
+/// `KUSHIM_ALLOW_SHARED_TEST_DATABASE=1` is documented as UNSAFE and exists
+/// only for the unlikely case where CI must temporarily fall back to a
+/// shared development pool — it is never enabled by the runner or by
+/// normal CI.
+pub fn require_disposable_test_database_url() -> String {
+    let url = std::env::var("DATABASE_URL").expect(
+        "DATABASE_URL must be set for integration tests (use scripts/test/run-rust-db-suite.ps1)",
+    );
+    let dbname = extract_database_name(&url).unwrap_or_default();
+    if dbname.starts_with("kushim_test_") {
+        return url;
+    }
+    if std::env::var("KUSHIM_ALLOW_SHARED_TEST_DATABASE").as_deref() == Ok("1") {
+        return url;
+    }
+    panic!(
+        "REFUSED to run database-backed tests against database '{dbname}'. \
+         Use `scripts/test/run-rust-db-suite.ps1 -Service kushim-api` to run \
+         them against a disposable `kushim_test_*` database. \
+         Override with KUSHIM_ALLOW_SHARED_TEST_DATABASE=1 only if you know \
+         what you're doing (it WILL leak rows into the dev database)."
+    );
+}
+
+/// Extracts the path-segment database name from a `postgresql://…/<db>`
+/// URL. Returns `None` for malformed URLs.
+fn extract_database_name(url: &str) -> Option<&str> {
+    let after_scheme = url.split("://").nth(1)?;
+    let path = after_scheme.split_once('/').map(|(_, rest)| rest)?;
+    // Strip any query string (`?…`) — the database name is the path segment
+    // up to the first `?`.
+    Some(path.split('?').next().unwrap_or(path).trim_end_matches('/'))
+}
+
 /// Ensures the canonical authentication reference data — the
 /// `(id_role = 1, label = "user")` row — exists in the test database, in a
 /// way that is safe under `cargo test`'s parallel test runner.
@@ -104,8 +150,7 @@ mod tests {
     use std::sync::Arc;
 
     async fn test_pool(max_connections: u32) -> PgPool {
-        let database_url =
-            std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for integration tests");
+        let database_url = super::require_disposable_test_database_url();
         PgPoolOptions::new()
             .max_connections(max_connections)
             .connect(&database_url)

@@ -105,8 +105,11 @@ impl Job for RebuildCurrentReadModelsJob {
 mod tests {
     use super::RebuildCurrentReadModelsJob;
     use crate::{
-        config::Config, jobs::Job, repositories::read_model_rebuild::ReadModelRebuildRepository,
-        state::AppState, test_utils::lock_env,
+        config::Config,
+        jobs::Job,
+        repositories::read_model_rebuild::ReadModelRebuildRepository,
+        state::AppState,
+        test_utils::{cleanup_worker_test_tree, lock_env},
     };
     use sqlx::{PgPool, Row};
     use time::{Duration, OffsetDateTime};
@@ -115,7 +118,7 @@ mod tests {
     async fn test_pool() -> PgPool {
         let database_url = {
             let _guard = lock_env();
-            std::env::var("DATABASE_URL").unwrap_or_default()
+            crate::test_utils::require_disposable_test_database_url()
         };
 
         assert!(
@@ -352,6 +355,8 @@ mod tests {
         assert_eq!(summary.3, 0);
         assert_eq!(summary.4, "empty");
         assert_eq!(fetch_holdings_count(&pool, id_portfolio).await, 0);
+
+        cleanup_worker_test_tree(&pool, id_user).await;
     }
 
     #[tokio::test]
@@ -392,6 +397,8 @@ mod tests {
         assert_eq!(summary.2, 1_000);
         assert_eq!(summary.3, 0);
         assert_eq!(summary.4, "active");
+
+        cleanup_worker_test_tree(&pool, id_user).await;
     }
 
     #[tokio::test]
@@ -473,6 +480,8 @@ mod tests {
         assert_eq!(holding.get::<i64, _>("invested_base_minor"), 600);
         assert_eq!(holding.get::<i64, _>("market_value_minor"), 800);
         assert_eq!(holding.get::<i64, _>("pnl_base_minor"), 200);
+
+        cleanup_worker_test_tree(&pool, id_user).await;
     }
 
     #[tokio::test]
@@ -549,6 +558,8 @@ mod tests {
             .expect("summary should exist");
         assert_eq!(summary.1, 100);
         assert_eq!(summary.2, 100);
+
+        cleanup_worker_test_tree(&pool, id_user).await;
     }
 
     #[tokio::test]
@@ -579,6 +590,8 @@ mod tests {
             .expect("rebuild should succeed");
 
         assert_eq!(fetch_holdings_count(&pool, id_portfolio).await, 0);
+
+        cleanup_worker_test_tree(&pool, id_user).await;
     }
 
     #[tokio::test]
@@ -621,6 +634,8 @@ mod tests {
                 .await
                 .expect("summary count should succeed");
         assert_eq!(summaries, 1);
+
+        cleanup_worker_test_tree(&pool, id_user).await;
     }
 
     #[tokio::test]
@@ -679,6 +694,8 @@ mod tests {
         .expect("operation should still exist");
         assert_eq!(operation.get::<String, _>("operation_status"), "posted");
         assert_eq!(operation.get::<i64, _>("cash_amount_minor"), 100);
+
+        cleanup_worker_test_tree(&pool, id_user).await;
     }
 
     #[tokio::test]
@@ -710,6 +727,8 @@ mod tests {
                 .iter()
                 .any(|portfolio| portfolio.id_portfolio == deleted_portfolio)
         );
+
+        cleanup_worker_test_tree(&pool, id_user).await;
     }
 
     #[test]

@@ -382,8 +382,7 @@ mod tests {
     use uuid::Uuid;
 
     async fn test_pool() -> PgPool {
-        let database_url =
-            std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for integration tests");
+        let database_url = crate::test_support::require_disposable_test_database_url();
         PgPoolOptions::new()
             .max_connections(1)
             .connect(&database_url)

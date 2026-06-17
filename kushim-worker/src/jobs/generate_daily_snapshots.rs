@@ -150,7 +150,12 @@ impl Job for GenerateDailySnapshotsJob {
 #[cfg(test)]
 mod tests {
     use super::GenerateDailySnapshotsJob;
-    use crate::{config::Config, jobs::Job, state::AppState, test_utils::lock_env};
+    use crate::{
+        config::Config,
+        jobs::Job,
+        state::AppState,
+        test_utils::{cleanup_worker_test_tree, lock_env},
+    };
     use sqlx::{PgPool, Row};
     use time::{Date, Duration, OffsetDateTime};
     use uuid::Uuid;
@@ -158,7 +163,7 @@ mod tests {
     async fn test_pool() -> PgPool {
         let database_url = {
             let _guard = lock_env();
-            std::env::var("DATABASE_URL").unwrap_or_default()
+            crate::test_utils::require_disposable_test_database_url()
         };
 
         assert!(
@@ -495,6 +500,8 @@ mod tests {
         assert_eq!(holding.get::<i64, _>("invested_minor"), 600);
         assert_eq!(holding.get::<i64, _>("market_value_minor"), 800);
         assert_eq!(holding.get::<i64, _>("pnl_minor"), 200);
+
+        cleanup_worker_test_tree(&pool, id_user).await;
     }
 
     #[tokio::test]
@@ -527,6 +534,8 @@ mod tests {
             .await
             .expect("snapshot id should exist");
         assert_eq!(holding_snapshot_count(&pool, id_snapshot).await, 0);
+
+        cleanup_worker_test_tree(&pool, id_user).await;
     }
 
     #[tokio::test]
@@ -545,6 +554,8 @@ mod tests {
             snapshot_count_for_portfolio_and_date(&pool, id_portfolio, snapshot_date).await,
             0
         );
+
+        cleanup_worker_test_tree(&pool, id_user).await;
     }
 
     #[tokio::test]
@@ -595,6 +606,8 @@ mod tests {
             snapshot_count_for_portfolio_and_date(&pool, other_portfolio, snapshot_date).await,
             0
         );
+
+        cleanup_worker_test_tree(&pool, id_user).await;
     }
 
     #[tokio::test]
@@ -699,6 +712,8 @@ mod tests {
         assert_eq!(holding.get::<i64, _>("market_value_minor"), 700);
         assert_eq!(holding.get::<i64, _>("pnl_minor"), -200);
         assert!(holding.get::<bool, _>("is_estimated"));
+
+        cleanup_worker_test_tree(&pool, id_user).await;
     }
 
     #[tokio::test]
@@ -841,6 +856,8 @@ mod tests {
             snapshot_count_for_portfolio_and_date(&pool, deleted_portfolio, snapshot_date).await,
             0
         );
+
+        cleanup_worker_test_tree(&pool, id_user).await;
     }
 
     #[tokio::test]
@@ -891,6 +908,8 @@ mod tests {
             snapshot_count_for_portfolio_and_date(&pool, second, snapshot_date).await,
             1
         );
+
+        cleanup_worker_test_tree(&pool, id_user).await;
     }
 
     #[test]

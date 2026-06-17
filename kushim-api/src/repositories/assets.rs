@@ -203,6 +203,16 @@ impl AssetRepository {
                           AND lower(aa.alias) LIKE $6
                     )
               )
+              -- Catalogue discoverability policy: equities are exchange-listed
+              -- by definition (their natural identity is (ticker, exchange) per
+              -- 002_seed_canonical_assets.sql). An equity row with no exchange
+              -- cannot be uniquely resolved by a user — every integration-test
+              -- fixture matches this shape, and no canonical row does. Hiding
+              -- them here keeps direct-by-id lookup (`find_by_id`) unfiltered
+              -- so historical operations remain resolvable. Crypto/ETF/bond/
+              -- forex/etc. asset classes are NOT subject to this rule because
+              -- their natural identity is symbol/network/ISIN, not exchange.
+              AND NOT (a.asset_class = 'equity' AND a.exchange IS NULL)
             ORDER BY a.name ASC, a.ticker ASC NULLS LAST, a.exchange ASC NULLS LAST
             LIMIT $7
             OFFSET $8

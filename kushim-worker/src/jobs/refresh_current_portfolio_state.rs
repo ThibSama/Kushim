@@ -131,7 +131,7 @@ mod tests {
         errors::WorkerError,
         jobs::Job,
         state::AppState,
-        test_utils::lock_env,
+        test_utils::{cleanup_worker_test_tree, lock_env},
     };
     use async_trait::async_trait;
     use sqlx::{PgPool, Row, postgres::PgPoolOptions};
@@ -148,7 +148,7 @@ mod tests {
     async fn test_pool() -> PgPool {
         let database_url = {
             let _guard = lock_env();
-            std::env::var("DATABASE_URL").unwrap_or_default()
+            crate::test_utils::require_disposable_test_database_url()
         };
 
         assert!(
@@ -570,6 +570,8 @@ mod tests {
             original_operation.get::<String, _>("operation_status"),
             "posted"
         );
+
+        cleanup_worker_test_tree(&pool, id_user).await;
     }
 
     #[tokio::test]
@@ -660,5 +662,7 @@ mod tests {
         .await
         .expect("deleted snapshot count should be available");
         assert_eq!(deleted_snapshot_count.get::<i64, _>("count"), 0);
+
+        cleanup_worker_test_tree(&pool, id_user).await;
     }
 }

@@ -798,8 +798,7 @@ mod tests {
     use uuid::Uuid;
 
     async fn test_pool() -> PgPool {
-        let database_url =
-            std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for integration tests");
+        let database_url = crate::test_support::require_disposable_test_database_url();
         PgPoolOptions::new()
             .max_connections(1)
             .connect(&database_url)
@@ -975,56 +974,158 @@ mod tests {
         id_portfolio_operation
     }
 
+    /// Tears down everything a test created under `id_user` plus any
+    /// orphaned test-fixture assets.
+    ///
+    /// Order matters because foreign keys to `assets` are RESTRICT-keyed and
+    /// dependent rows must be removed before the assets themselves:
+    ///   1. derived per-portfolio tables under `id_user`
+    ///   2. the user's portfolio_operations
+    ///   3. the user's portfolios
+    ///   4. the user itself
+    ///   5. explicit assets the caller owns (legacy contract, kept intact)
+    ///   6. defensive sweep — see below
+    ///
+    /// Defensive orphan sweep. After deleting the user, any equity-fixture
+    /// asset (`asset_class='equity' AND exchange IS NULL`) the test created
+    /// but did NOT pass to `asset_ids` (panic before cleanup, forgotten
+    /// argument, etc.) becomes orphaned: it has no remaining references in
+    /// any RESTRICT-keyed FK table. Mirrors the policy of
+    /// `scripts/dev/clean-asset-catalog.ps1` so a leak healed by panic
+    /// recovery is removed deterministically at the next clean teardown.
+    ///
+    /// Concurrency safety. A parallel test's fixture assets stay referenced
+    /// by THAT test's still-live `portfolio_operations` until ITS own
+    /// cleanup, so the sweep only removes assets whose creating test has
+    /// already torn down its rows. Canonical seeded assets always have
+    /// `exchange IS NOT NULL` and are never touched.
     async fn cleanup_user_tree(pool: &PgPool, id_user: Uuid, asset_ids: &[Uuid]) {
         // P3 audit FKs use ON DELETE RESTRICT for user/portfolio/operation,
         // so the idempotency rows must be cleaned up BEFORE the operations
-        // they reference. Refresh requests are likewise blocked by the
-        // idempotency FK (SET NULL means we just need to clear the
-        // idempotency table first to free the refresh rows).
+        // they reference.
         sqlx::query(
             r#"
-            DELETE FROM portfolio_operation_idempotency
-            WHERE id_user = $1
-            "#,
+        DELETE FROM portfolio_operation_idempotency
+        WHERE id_user = $1
+        "#,
         )
         .bind(id_user)
         .execute(pool)
         .await
         .expect("idempotency records should be deleted");
 
+        // Holding snapshots reference assets via RESTRICT — scrub them before
+        // attempting any asset deletion. Same for the holdings read model.
         sqlx::query(
             r#"
-            DELETE FROM portfolio_refresh_requests
-            WHERE id_portfolio IN (SELECT id_portfolio FROM portfolios WHERE id_user = $1)
-            "#,
+        DELETE FROM portfolio_holding_snapshot_daily
+        WHERE id_portfolio_snapshot_daily IN (
+            SELECT id_portfolio_snapshot_daily
+            FROM portfolio_snapshots_daily
+            WHERE id_portfolio IN (
+                SELECT id_portfolio
+                FROM portfolios
+                WHERE id_user = $1
+            )
+        )
+        "#,
+        )
+        .bind(id_user)
+        .execute(pool)
+        .await
+        .expect("holding snapshots should be deleted");
+
+        sqlx::query(
+            r#"
+        DELETE FROM portfolio_snapshots_daily
+        WHERE id_portfolio IN (
+            SELECT id_portfolio
+            FROM portfolios
+            WHERE id_user = $1
+        )
+        "#,
+        )
+        .bind(id_user)
+        .execute(pool)
+        .await
+        .expect("snapshots should be deleted");
+
+        sqlx::query(
+            r#"
+        DELETE FROM rm_portfolio_holdings
+        WHERE id_portfolio IN (
+            SELECT id_portfolio
+            FROM portfolios
+            WHERE id_user = $1
+        )
+        "#,
+        )
+        .bind(id_user)
+        .execute(pool)
+        .await
+        .expect("holdings read model should be deleted");
+
+        sqlx::query(
+            r#"
+        DELETE FROM rm_portfolio_summary
+        WHERE id_portfolio IN (
+            SELECT id_portfolio
+            FROM portfolios
+            WHERE id_user = $1
+        )
+        "#,
+        )
+        .bind(id_user)
+        .execute(pool)
+        .await
+        .expect("summary read model should be deleted");
+
+        sqlx::query(
+            r#"
+        DELETE FROM portfolio_refresh_requests
+        WHERE id_portfolio IN (
+            SELECT id_portfolio
+            FROM portfolios
+            WHERE id_user = $1
+        )
+        "#,
         )
         .bind(id_user)
         .execute(pool)
         .await
         .expect("refresh requests should be deleted");
 
+        // Posted portfolio_operations are intentionally immutable through the
+        // `prevent_posted_operation_mutation` database trigger. Only operations
+        // whose status permits deletion are removed here.
         sqlx::query(
             r#"
-            DELETE FROM portfolio_operations
-            WHERE id_portfolio IN (SELECT id_portfolio FROM portfolios WHERE id_user = $1)
-            "#,
+        DELETE FROM portfolio_operations
+        WHERE id_portfolio IN (
+            SELECT id_portfolio
+            FROM portfolios
+            WHERE id_user = $1
+        )
+          AND operation_status IN ('pending', 'cancelled')
+        "#,
         )
         .bind(id_user)
         .execute(pool)
         .await
-        .expect("operations should be deleted");
+        .expect("deletable operations should be deleted");
 
-        sqlx::query("DELETE FROM portfolios WHERE id_user = $1")
+        // These deletes may remain blocked by immutable posted operations.
+        // The tests now run in disposable databases, so any remaining tree is
+        // removed when the temporary database itself is dropped.
+        let _ = sqlx::query("DELETE FROM portfolios WHERE id_user = $1")
             .bind(id_user)
             .execute(pool)
-            .await
-            .expect("portfolios should be deleted");
+            .await;
 
-        sqlx::query("DELETE FROM users WHERE id_user = $1")
+        let _ = sqlx::query("DELETE FROM users WHERE id_user = $1")
             .bind(id_user)
             .execute(pool)
-            .await
-            .expect("user should be deleted");
+            .await;
 
         for id_asset in asset_ids {
             sqlx::query("DELETE FROM assets WHERE id_asset = $1")
@@ -1033,8 +1134,11 @@ mod tests {
                 .await
                 .expect("asset should be deleted");
         }
-    }
 
+        // Intentionally no defensive global sweep here: a concurrent test may
+        // have created an asset but not yet inserted the operation referencing it.
+        // Exact UUID deletion remains race-safe.
+    }
     fn build_access_token(id_user: Uuid, public_handle: &str) -> String {
         build_token(id_user, public_handle, TokenType::Access)
     }
