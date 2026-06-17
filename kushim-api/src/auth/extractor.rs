@@ -78,7 +78,9 @@ mod tests {
         },
         http,
         repositories::{
-            assets::AssetRepository, portfolio_operations::PortfolioOperationRepository,
+            assets::AssetRepository,
+            portfolio_operation_idempotency::PortfolioOperationIdempotencyRepository,
+            portfolio_operations::PortfolioOperationRepository,
             portfolio_read_models::PortfolioReadModelRepository,
             portfolio_refresh_requests::PortfolioRefreshRequestRepository,
             portfolio_snapshots::PortfolioSnapshotRepository, portfolios::PortfolioRepository,
@@ -112,6 +114,7 @@ mod tests {
             portfolio_repository.clone(),
             PortfolioOperationRepository::new(db_pool.clone()),
             PortfolioRefreshRequestRepository::new(db_pool.clone()),
+            PortfolioOperationIdempotencyRepository::new(db_pool.clone()),
         );
         let portfolio_read_model_service = PortfolioReadModelService::new(
             portfolio_repository.clone(),

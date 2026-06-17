@@ -24,6 +24,7 @@ type OperationsState = {
   createOperation: (
     portfolioId: string,
     payload: CreateOperationPayload,
+    idempotencyKey: string,
   ) => Promise<CreateOperationResult>;
   reloadOperations: (portfolioId: string) => Promise<void>;
   loadReferenceData: () => Promise<void>;
@@ -56,11 +57,19 @@ export const useOperationsStore = create<OperationsState>((set, get) => ({
     }
   },
 
-  createOperation: async (portfolioId, payload) => {
+  createOperation: async (portfolioId, payload, idempotencyKey) => {
     const token = useAuthStore.getState().token;
     if (!token) throw new Error("no_session");
 
-    const result = await apiCreateOperation(token, portfolioId, payload);
+    // P3: the idempotency key is owned by the caller (the modal) so a retry
+    // of the SAME logical submission attempt reuses the same key and the
+    // backend replays the original operation instead of creating a duplicate.
+    const result = await apiCreateOperation(
+      token,
+      portfolioId,
+      payload,
+      idempotencyKey,
+    );
     // The created operation appears immediately in the list with its real
     // status (posted for the normal flow). The asynchronous portfolio refresh
     // is tracked separately via the refresh store; we do NOT fake a refresh.

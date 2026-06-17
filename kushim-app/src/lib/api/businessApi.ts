@@ -524,20 +524,39 @@ export async function listOperations(
 export async function createOperation(
   idOrToken: string | IgnoredToken,
   maybeIdOrPayload: string | CreateOperationPayload,
-  maybePayload?: CreateOperationPayload,
+  maybePayloadOrKey?: CreateOperationPayload | string,
+  maybeIdempotencyKey?: string,
 ): Promise<CreateOperationResult> {
+  // Supported call shapes:
+  //   createOperation(portfolioId, payload, idempotencyKey)
+  //   createOperation(accessToken, portfolioId, payload, idempotencyKey) — legacy
+  // The idempotency key is REQUIRED by the backend P3 contract; we never
+  // generate it here so the UI layer keeps the single source of truth for
+  // the key lifecycle (one logical submission attempt = one UUID).
   const portfolioId =
     typeof maybeIdOrPayload === "string"
       ? maybeIdOrPayload
       : (idOrToken as string);
   const payload =
-    maybePayload ?? (maybeIdOrPayload as CreateOperationPayload);
+    typeof maybeIdOrPayload === "string"
+      ? (maybePayloadOrKey as CreateOperationPayload)
+      : (maybeIdOrPayload as CreateOperationPayload);
+  const idempotencyKey =
+    typeof maybeIdOrPayload === "string"
+      ? maybeIdempotencyKey
+      : (maybePayloadOrKey as string | undefined);
+  if (!idempotencyKey) {
+    throw new Error(
+      "createOperation requires an idempotency key (P3 contract)",
+    );
+  }
   const res = await authenticatedRequest<{
     operation: PortfolioOperation;
     refresh_request: RefreshRequestRef | null;
   }>(API_URL, `/v1/portfolios/${portfolioId}/operations`, {
     method: "POST",
     body: payload,
+    headers: { "Idempotency-Key": idempotencyKey },
   });
   return {
     operation: res.operation,

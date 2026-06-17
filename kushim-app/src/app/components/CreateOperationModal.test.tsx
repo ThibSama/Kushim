@@ -309,4 +309,267 @@ describe("CreateOperationModal", () => {
       ).toBeInTheDocument(),
     );
   });
+
+  // ===================================================================
+  // P3: Idempotency-Key lifecycle
+  // ===================================================================
+
+  describe("P3 idempotency key lifecycle", () => {
+    let originalRandomUUID: typeof crypto.randomUUID;
+    let uuidCounter = 0;
+
+    beforeEach(() => {
+      uuidCounter = 0;
+      originalRandomUUID = crypto.randomUUID;
+      // Deterministic UUID generator so the tests can assert reuse vs
+      // rotation without depending on real random values.
+      Object.defineProperty(crypto, "randomUUID", {
+        configurable: true,
+        value: () => {
+          uuidCounter += 1;
+          // RFC4122-shaped string so the backend extractor would accept it.
+          return `00000000-0000-4000-8000-00000000000${uuidCounter}` as `${string}-${string}-${string}-${string}-${string}`;
+        },
+      });
+    });
+
+    afterEach(() => {
+      Object.defineProperty(crypto, "randomUUID", {
+        configurable: true,
+        value: originalRandomUUID,
+      });
+    });
+
+    it("first submission generates a UUID and passes it to the store", async () => {
+      const user = userEvent.setup();
+      render(<CreateOperationModal portfolioId="pf-eur" onClose={() => {}} />);
+      await setMontantBrut(user, "100");
+      await user.click(screen.getByRole("button", { name: /Enregistrer/ }));
+      await waitFor(() => expect(createOperationMock).toHaveBeenCalled());
+      const key = createOperationMock.mock.calls[0][2];
+      expect(key).toBe("00000000-0000-4000-8000-000000000001");
+    });
+
+    it("retrying the same unchanged payload reuses the same UUID", async () => {
+      createOperationMock.mockRejectedValueOnce(
+        new ApiRequestError({
+          code: "internal_error",
+          message: "transient",
+          status: 500,
+        }),
+      );
+      createOperationMock.mockResolvedValueOnce(defaultRefreshOutcome());
+      const user = userEvent.setup();
+      render(<CreateOperationModal portfolioId="pf-eur" onClose={() => {}} />);
+      await setMontantBrut(user, "100");
+      await user.click(screen.getByRole("button", { name: /Enregistrer/ }));
+      await waitFor(() => expect(createOperationMock).toHaveBeenCalledTimes(1));
+      // Retry without editing the form.
+      await user.click(screen.getByRole("button", { name: /Enregistrer/ }));
+      await waitFor(() => expect(createOperationMock).toHaveBeenCalledTimes(2));
+      const key1 = createOperationMock.mock.calls[0][2];
+      const key2 = createOperationMock.mock.calls[1][2];
+      expect(key2).toBe(key1);
+    });
+
+    it("editing the amount rotates the UUID for the next submission", async () => {
+      createOperationMock.mockRejectedValueOnce(
+        new ApiRequestError({
+          code: "internal_error",
+          message: "transient",
+          status: 500,
+        }),
+      );
+      createOperationMock.mockResolvedValueOnce(defaultRefreshOutcome());
+      const user = userEvent.setup();
+      render(<CreateOperationModal portfolioId="pf-eur" onClose={() => {}} />);
+      await setMontantBrut(user, "100");
+      await user.click(screen.getByRole("button", { name: /Enregistrer/ }));
+      await waitFor(() => expect(createOperationMock).toHaveBeenCalledTimes(1));
+      // Change the amount, then retry — the payload now differs.
+      await setMontantBrut(user, "250");
+      await user.click(screen.getByRole("button", { name: /Enregistrer/ }));
+      await waitFor(() => expect(createOperationMock).toHaveBeenCalledTimes(2));
+      const key1 = createOperationMock.mock.calls[0][2];
+      const key2 = createOperationMock.mock.calls[1][2];
+      expect(key1).not.toBe(key2);
+    });
+
+    it("maps idempotency_key_conflict to a clear French message", async () => {
+      createOperationMock.mockRejectedValueOnce(
+        new ApiRequestError({
+          code: "idempotency_key_conflict",
+          message: "raw backend message",
+          status: 409,
+        }),
+      );
+      const user = userEvent.setup();
+      render(<CreateOperationModal portfolioId="pf-eur" onClose={() => {}} />);
+      await setMontantBrut(user, "100");
+      await user.click(screen.getByRole("button", { name: /Enregistrer/ }));
+      await waitFor(() =>
+        expect(
+          screen.getByText(
+            /Cette tentative correspond à une opération différente/,
+          ),
+        ).toBeInTheDocument(),
+      );
+    });
+
+    it("maps missing_idempotency_key to a safe retry-prompt French message", async () => {
+      createOperationMock.mockRejectedValueOnce(
+        new ApiRequestError({
+          code: "missing_idempotency_key",
+          message: "raw backend message",
+          status: 400,
+        }),
+      );
+      const user = userEvent.setup();
+      render(<CreateOperationModal portfolioId="pf-eur" onClose={() => {}} />);
+      await setMontantBrut(user, "100");
+      await user.click(screen.getByRole("button", { name: /Enregistrer/ }));
+      await waitFor(() =>
+        expect(
+          screen.getByText(
+            /La requête ne peut pas être sécurisée. Veuillez réessayer\./,
+          ),
+        ).toBeInTheDocument(),
+      );
+    });
+
+    it("changing the currency rotates the UUID", async () => {
+      createOperationMock.mockRejectedValueOnce(
+        new ApiRequestError({
+          code: "internal_error",
+          message: "transient",
+          status: 500,
+        }),
+      );
+      createOperationMock.mockResolvedValueOnce(defaultRefreshOutcome());
+      const user = userEvent.setup();
+      render(<CreateOperationModal portfolioId="pf-eur" onClose={() => {}} />);
+      await setMontantBrut(user, "100");
+      await user.click(screen.getByRole("button", { name: /Enregistrer/ }));
+      await waitFor(() => expect(createOperationMock).toHaveBeenCalledTimes(1));
+      // Switch to USD (cross-currency). The canonical payload changes
+      // (currency field) AND now requires fx_rate_to_portfolio, so the
+      // submitted payload differs materially → key must rotate.
+      await pickCurrency(user, "USD");
+      const fxInput = screen
+        .getAllByRole("spinbutton")
+        .find((el) =>
+          el.previousElementSibling?.textContent?.includes("Taux de change"),
+        ) as HTMLInputElement;
+      await user.type(fxInput, "1.05");
+      await user.click(screen.getByRole("button", { name: /Enregistrer/ }));
+      await waitFor(() => expect(createOperationMock).toHaveBeenCalledTimes(2));
+      const key1 = createOperationMock.mock.calls[0][2];
+      const key2 = createOperationMock.mock.calls[1][2];
+      expect(key1).not.toBe(key2);
+      const payload2 = createOperationMock.mock.calls[1][1];
+      expect(payload2.currency).toBe("USD");
+      expect(payload2.fx_rate_to_portfolio).toBe("1.05");
+    });
+
+    it("changing the FX rate alone rotates the UUID for a cross-currency submission", async () => {
+      createOperationMock.mockRejectedValueOnce(
+        new ApiRequestError({
+          code: "internal_error",
+          message: "transient",
+          status: 500,
+        }),
+      );
+      createOperationMock.mockResolvedValueOnce(defaultRefreshOutcome());
+      const user = userEvent.setup();
+      render(<CreateOperationModal portfolioId="pf-eur" onClose={() => {}} />);
+      await setMontantBrut(user, "100");
+      await pickCurrency(user, "USD");
+      const fxInputs = () =>
+        screen
+          .getAllByRole("spinbutton")
+          .find((el) =>
+            el.previousElementSibling?.textContent?.includes("Taux de change"),
+          ) as HTMLInputElement;
+      await user.type(fxInputs(), "0.92");
+      await user.click(screen.getByRole("button", { name: /Enregistrer/ }));
+      await waitFor(() => expect(createOperationMock).toHaveBeenCalledTimes(1));
+      // Now edit only the FX rate.
+      await user.clear(fxInputs());
+      await user.type(fxInputs(), "1.10");
+      await user.click(screen.getByRole("button", { name: /Enregistrer/ }));
+      await waitFor(() => expect(createOperationMock).toHaveBeenCalledTimes(2));
+      const key1 = createOperationMock.mock.calls[0][2];
+      const key2 = createOperationMock.mock.calls[1][2];
+      expect(key1).not.toBe(key2);
+    });
+
+    it("closing and reopening the modal generates a new key", async () => {
+      const user = userEvent.setup();
+      // First mount: submit successfully, then unmount.
+      const { unmount } = render(
+        <CreateOperationModal portfolioId="pf-eur" onClose={() => {}} />,
+      );
+      await setMontantBrut(user, "100");
+      await user.click(screen.getByRole("button", { name: /Enregistrer/ }));
+      await waitFor(() => expect(createOperationMock).toHaveBeenCalledTimes(1));
+      unmount();
+
+      // Second mount with the SAME payload — a new key must be generated.
+      render(<CreateOperationModal portfolioId="pf-eur" onClose={() => {}} />);
+      await setMontantBrut(user, "100");
+      await user.click(screen.getByRole("button", { name: /Enregistrer/ }));
+      await waitFor(() => expect(createOperationMock).toHaveBeenCalledTimes(2));
+      const key1 = createOperationMock.mock.calls[0][2];
+      const key2 = createOperationMock.mock.calls[1][2];
+      expect(key1).not.toBe(key2);
+    });
+
+    it("confirmed success clears the attempt so the next op uses a new key", async () => {
+      const user = userEvent.setup();
+      // First call: success. Unmount before reopening so we don't end up
+      // with two modals on screen (each rendering its own Enregistrer
+      // button) — same pattern as the close-and-reopen test above.
+      const { unmount } = render(
+        <CreateOperationModal portfolioId="pf-eur" onClose={() => {}} />,
+      );
+      await setMontantBrut(user, "100");
+      await user.click(screen.getByRole("button", { name: /Enregistrer/ }));
+      await waitFor(() => expect(createOperationMock).toHaveBeenCalledTimes(1));
+      const key1 = createOperationMock.mock.calls[0][2];
+      unmount();
+
+      // Reopen with the same payload — a new key must be generated because
+      // the modal's attempt ref was cleared on success and the new mount
+      // starts fresh.
+      render(<CreateOperationModal portfolioId="pf-eur" onClose={() => {}} />);
+      await setMontantBrut(user, "100");
+      await user.click(screen.getByRole("button", { name: /Enregistrer/ }));
+      await waitFor(() => expect(createOperationMock).toHaveBeenCalledTimes(2));
+      const key2 = createOperationMock.mock.calls[1][2];
+      expect(key2).not.toBe(key1);
+    });
+
+    it("rapid double submission uses a single logical key", async () => {
+      // Stub the resolved outcome with a controllable promise so the
+      // first call is still in-flight when the second click happens.
+      let resolveFirst!: (value: ReturnType<typeof defaultRefreshOutcome>) => void;
+      createOperationMock.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve;
+          }),
+      );
+      const user = userEvent.setup();
+      render(<CreateOperationModal portfolioId="pf-eur" onClose={() => {}} />);
+      await setMontantBrut(user, "100");
+      const button = screen.getByRole("button", { name: /Enregistrer/ });
+      // Double-click before the first call resolves. The submit button is
+      // disabled while submitting, so the second click is a no-op — exactly
+      // one logical key was sent.
+      await user.click(button);
+      await user.click(button);
+      resolveFirst!(defaultRefreshOutcome());
+      await waitFor(() => expect(createOperationMock).toHaveBeenCalledTimes(1));
+    });
+  });
 });
