@@ -124,12 +124,17 @@ jobs:
       run:
         working-directory: kushim-api
     services:
+      # Per-job ephemeral PostgreSQL container. The database is named
+      # `kushim_test_ci` so the `require_disposable_test_database_url` guard
+      # in test_support.rs accepts it (the guard refuses anything not
+      # prefixed with `kushim_test_`). The container is destroyed when the
+      # job ends, so no cross-run state can leak.
       postgres:
         image: postgres:16
         env:
           POSTGRES_USER: kushim
           POSTGRES_PASSWORD: kushim_secret_dev
-          POSTGRES_DB: kushim
+          POSTGRES_DB: kushim_test_ci
         ports:
           - 5432:5432
         options: >-
@@ -138,7 +143,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      DATABASE_URL: postgresql://kushim:kushim_secret_dev@localhost:5432/kushim
+      DATABASE_URL: postgresql://kushim:kushim_secret_dev@localhost:5432/kushim_test_ci
     steps:
       - uses: actions/checkout@v4
 
@@ -164,12 +169,15 @@ jobs:
       run:
         working-directory: kushim-worker
     services:
+      # Per-job ephemeral PostgreSQL container — same rationale as
+      # kushim-api above. `kushim_test_ci` satisfies the worker's
+      # `require_disposable_test_database_url` guard in test_utils.rs.
       postgres:
         image: postgres:16
         env:
           POSTGRES_USER: kushim
           POSTGRES_PASSWORD: kushim_secret_dev
-          POSTGRES_DB: kushim
+          POSTGRES_DB: kushim_test_ci
         ports:
           - 5432:5432
         options: >-
@@ -178,7 +186,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      DATABASE_URL: postgresql://kushim:kushim_secret_dev@localhost:5432/kushim
+      DATABASE_URL: postgresql://kushim:kushim_secret_dev@localhost:5432/kushim_test_ci
     steps:
       - uses: actions/checkout@v4
 
