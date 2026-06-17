@@ -267,9 +267,18 @@ impl PortfolioState {
                 continue;
             }
 
+            // `quantity_scaled` is the position's quantity multiplied by
+            // `10^QUANTITY_SCALE` (i128), while `invested_base_minor` is a raw
+            // minor-unit total. Dividing the two directly truncates to zero for
+            // any realistic position because the denominator is ~10^10 larger
+            // than the numerator. Scale the numerator by `10^QUANTITY_SCALE`
+            // before dividing — the mirror of `multiply_price_by_quantity` —
+            // to recover minor units per share. Uses the existing helper so
+            // the multiplication happens in i128 before rounding.
             let avg_cost_minor = if position.quantity_scaled > 0 {
-                Some(divide_round(
+                Some(divide_multiply_round(
                     position.invested_base_minor,
+                    ten_pow(QUANTITY_SCALE),
                     position.quantity_scaled,
                 ))
             } else {
@@ -739,6 +748,69 @@ mod tests {
         assert_eq!(rebuilt.summary.cash_balance_minor, 700);
         assert_eq!(rebuilt.holdings[0].quantity, "1.0000000000");
         assert_eq!(rebuilt.holdings[0].invested_base_minor, 500);
+    }
+
+    // Regression: the rebuild used to divide `invested_base_minor` (raw minor
+    // total) by `quantity_scaled` (shares × 10^QUANTITY_SCALE), so for any
+    // realistic position the numerator was ~10^10 times smaller than the
+    // denominator and `avg_cost_minor` truncated to 0. With the fix, avg cost
+    // must be the minor-unit price per share, and a partial sell must preserve
+    // the original per-share cost.
+    #[test]
+    fn buy_records_per_share_average_cost_minor() {
+        let mut state = portfolio_state();
+        let asset = Uuid::new_v4();
+
+        let mut deposit = operation(OperationType::Deposit);
+        deposit.cash_amount_minor = 200_000;
+        state.apply(&deposit).unwrap();
+
+        // Buy 10 shares for 195,230 minor units total => avg cost = 19,523/share.
+        let mut buy = operation(OperationType::Buy);
+        buy.id_asset = Some(asset);
+        buy.quantity = Some("10.0000000000".into());
+        buy.cash_amount_minor = 195_230;
+        state.apply(&buy).unwrap();
+
+        let rebuilt = state
+            .finalize(&Default::default(), OffsetDateTime::now_utc())
+            .unwrap();
+        assert_eq!(rebuilt.holdings.len(), 1);
+        assert_eq!(rebuilt.holdings[0].quantity, "10.0000000000");
+        assert_eq!(rebuilt.holdings[0].invested_base_minor, 195_230);
+        assert_eq!(rebuilt.holdings[0].avg_cost_minor, Some(19_523));
+    }
+
+    #[test]
+    fn partial_sell_preserves_per_share_average_cost_minor() {
+        let mut state = portfolio_state();
+        let asset = Uuid::new_v4();
+
+        let mut deposit = operation(OperationType::Deposit);
+        deposit.cash_amount_minor = 200_000;
+        state.apply(&deposit).unwrap();
+
+        let mut buy = operation(OperationType::Buy);
+        buy.id_asset = Some(asset);
+        buy.quantity = Some("10.0000000000".into());
+        buy.cash_amount_minor = 195_230;
+        state.apply(&buy).unwrap();
+
+        // Sell 4 of the 10 shares. The per-share avg cost must stay at 19,523
+        // (pro-rata invested reduction keeps the cost basis per remaining
+        // share).
+        let mut sell = operation(OperationType::Sell);
+        sell.id_asset = Some(asset);
+        sell.quantity = Some("4.0000000000".into());
+        sell.cash_amount_minor = 100_000;
+        state.apply(&sell).unwrap();
+
+        let rebuilt = state
+            .finalize(&Default::default(), OffsetDateTime::now_utc())
+            .unwrap();
+        assert_eq!(rebuilt.holdings.len(), 1);
+        assert_eq!(rebuilt.holdings[0].quantity, "6.0000000000");
+        assert_eq!(rebuilt.holdings[0].avg_cost_minor, Some(19_523));
     }
 
     #[test]
