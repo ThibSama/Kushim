@@ -32,20 +32,68 @@
     PGDATABASE) instead of going through `docker exec` on a local container.
     Used by the GitHub Actions job which provides PostgreSQL as a service.
 
+.PARAMETER BaseRef
+    Git ref pointing to the pre-migration schema baseline. The validator
+    reads `infra/postgres/init/*.sql` from that ref to bootstrap the old
+    schema.
+
+    Default: `git merge-base HEAD origin/main` — the divergence point of
+    the current branch from main. This is the right baseline both locally
+    AND in CI: it's the commit on main that pre-dates the migration being
+    proposed by this branch.
+
+    Caveats:
+      * `origin/main` must be reachable. CI sets `fetch-depth: 0` so
+        history is complete. Locally you may need `git fetch origin main`
+        once if the clone is shallow.
+      * If you really want to validate against an uncommitted WIP only
+        (no committed migration yet on the branch), pass `-BaseRef HEAD`
+        explicitly.
+
 .EXAMPLE
-    # Local developer (Docker Desktop):
+    # Local developer (Docker Desktop, uncommitted WIP):
     .\scripts\test\validate-holding-valuation-provenance-migration.ps1
 
 .EXAMPLE
     # GitHub Actions (postgres service container, no docker exec needed):
     pwsh -NoProfile -File ./scripts/test/validate-holding-valuation-provenance-migration.ps1 -CiMode
+
+.EXAMPLE
+    # Explicit baseline ref (e.g., a tag or a specific commit):
+    .\scripts\test\validate-holding-valuation-provenance-migration.ps1 -BaseRef v0.4.0
 #>
 
 [CmdletBinding()]
 param(
     [switch]$KeepDatabaseOnFailure,
-    [switch]$CiMode
+    [switch]$CiMode,
+    [string]$BaseRef = ''
 )
+
+# Pick a sane default for $BaseRef when the caller did not specify one.
+# The migration being validated has typically already been committed on the
+# branch (locally OR in CI on a PR branch), so HEAD = post-migration in both
+# environments. The pre-migration baseline is the divergence point with main
+# (`git merge-base HEAD origin/main`). If `origin/main` is not reachable
+# (shallow clone with no fetch yet), we fall back to plain `main`, then
+# bail out with a remediation hint if neither resolves.
+$repoRootInit = (Resolve-Path "$PSScriptRoot\..\..").Path
+if ([string]::IsNullOrWhiteSpace($BaseRef)) {
+    foreach ($candidate in @('origin/main', 'main')) {
+        $resolved = (git -C $repoRootInit rev-parse --verify --quiet "$candidate" 2>$null) -join ''
+        if ($LASTEXITCODE -eq 0 -and $resolved) {
+            $mergeBase = (git -C $repoRootInit merge-base HEAD $candidate 2>$null) -join ''
+            if ($LASTEXITCODE -eq 0 -and $mergeBase) {
+                $BaseRef = $mergeBase.Trim()
+                Write-Host "[validator] BaseRef defaulted to merge-base(HEAD, $candidate) = $BaseRef"
+                break
+            }
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($BaseRef)) {
+        throw "Could not resolve a baseline ref. Run ``git fetch origin main`` and retry, or pass -BaseRef explicitly."
+    }
+}
 
 $ErrorActionPreference = 'Stop'
 
@@ -171,10 +219,10 @@ function Apply-FileFromGit {
         [Parameter(Mandatory = $true)][string]$RelativePath
     )
     Assert-SafeDatabaseName -Name $Database
-    Write-Host "  - applying $RelativePath from HEAD"
-    $sql = (git -C $repoRoot show "HEAD:$RelativePath") -join "`n"
+    Write-Host "  - applying $RelativePath from $BaseRef"
+    $sql = (git -C $repoRoot show "${BaseRef}:$RelativePath") -join "`n"
     if ($LASTEXITCODE -ne 0) {
-        throw "git show failed for HEAD:$RelativePath -> $sql"
+        throw "git show failed for ${BaseRef}:$RelativePath -> $sql"
     }
     $r = Invoke-PsqlCore -Database $Database -Sql $sql
     if ($r.ExitCode -ne 0) {
@@ -246,17 +294,18 @@ try {
     $created = $true
     Write-Host "[validator] CREATE DATABASE OK"
 
-    # Apply all init/*.sql in lexicographic order from the committed HEAD so
-    # the bootstrap reflects the pre-migration state byte-for-byte.
-    $initFiles = git -C $repoRoot ls-tree -r --name-only HEAD -- 'infra/postgres/init/' |
+    # Apply all init/*.sql in lexicographic order from the chosen baseline
+    # ref so the bootstrap reflects the pre-migration state byte-for-byte.
+    # The ref is `$BaseRef` (default 'HEAD' locally, 'origin/main' in CI).
+    $initFiles = git -C $repoRoot ls-tree -r --name-only $BaseRef -- 'infra/postgres/init/' |
         Where-Object { $_ -like '*.sql' } |
         Sort-Object
-    if (-not $initFiles) { throw "No init/*.sql tracked at HEAD." }
-    Write-Host "[validator] Bootstrapping from HEAD init/*.sql ($($initFiles.Count) files)"
+    if (-not $initFiles) { throw "No init/*.sql tracked at $BaseRef." }
+    Write-Host "[validator] Bootstrapping from ${BaseRef} init/*.sql ($($initFiles.Count) files)"
     foreach ($f in $initFiles) {
-        # Skip the migration's columns by ensuring we are bootstrapping the
-        # COMMITTED version, not the working-tree version. Apply-FileFromGit
-        # reads through `git show HEAD:` so working-tree edits are invisible.
+        # Apply-FileFromGit reads through `git show ${BaseRef}:` so any
+        # working-tree edits and any commits past `$BaseRef` are invisible
+        # by design — the bootstrap is the pre-migration snapshot.
         Apply-FileFromGit -Database $dbName -RelativePath $f
     }
 

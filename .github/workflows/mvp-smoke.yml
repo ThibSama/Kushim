@@ -471,7 +471,14 @@ jobs:
       PGPASSWORD: kushim_secret_dev
       PGDATABASE: kushim_test_ci_admin
     steps:
+      # `fetch-depth: 0` is required: the validator reads the pre-migration
+      # schema via `git show origin/main:infra/postgres/init/*.sql`, which is
+      # only resolvable when the runner has fetched main's history. The
+      # default `fetch-depth: 1` only checks out the PR's merge commit and
+      # `git show origin/main:...` would fail with "fatal: bad revision".
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Run holding-valuation-provenance migration validator (pwsh + CI mode)
         shell: pwsh
