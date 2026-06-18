@@ -82,6 +82,12 @@ export type Pagination = {
   has_more: boolean;
 };
 
+export type PortfolioValuationStatus =
+  | "complete"
+  | "partial"
+  | "unavailable"
+  | "empty";
+
 export type PortfolioSummary = {
   id_portfolio: string;
   base_currency: string;
@@ -94,6 +100,48 @@ export type PortfolioSummary = {
   is_estimated: boolean;
   as_of: string;
   updated_at: string;
+  /** Aggregate valuation status derived from open holdings vs. market-data rows. */
+  valuation_status: PortfolioValuationStatus;
+  /** Number of open positions in the portfolio. */
+  positions_total: number;
+  /** Subset of open positions that have a matching market-data row. */
+  positions_valued: number;
+};
+
+/**
+ * Per-holding valuation provenance — entirely read from the persisted
+ * `rm_portfolio_holdings` row. The backend never joins the live
+ * `asset_market_data` cache, so the fields below always describe the exact
+ * market-data version the worker used when it computed `market_value_minor`.
+ *
+ * Note: the legacy `fetched_at` field has been REMOVED. The replacement
+ * `record_updated_at` is named accurately: it is the wall-clock time at
+ * which the upstream `asset_market_data` row was last written (captured at
+ * rebuild time), NOT a fetch timestamp.
+ */
+export type HoldingMarketData = {
+  /** True only when the holding was actually valued from compatible live market data. */
+  available: boolean;
+  /** Source of `market_value_minor`. Null for legacy rows persisted before the migration. */
+  valuation_source: "market_data" | "invested_cost_fallback" | null;
+  /** "available" when valued from market data, "unavailable" otherwise. */
+  status: "available" | "unavailable";
+  /** Reason code when status === "unavailable". */
+  unavailable_reason:
+    | "market_data_missing"
+    | "unsupported_market_data_currency"
+    | "valuation_provenance_missing"
+    | null;
+  /** Exact price used (or rejected, in the unsupported_currency case). */
+  price_minor: number | null;
+  /** Currency of `price_minor`. */
+  currency: string | null;
+  /** Provider id (e.g. "test-static", "finnhub"). May be null even when status === "available". */
+  provider: string | null;
+  /** RFC 3339 — market-quote timestamp from the provider (asset_market_data.as_of). */
+  market_data_as_of: string | null;
+  /** RFC 3339 — wall-clock time at which the asset_market_data row was last written. */
+  record_updated_at: string | null;
 };
 
 export type PortfolioSummaryEnvelope = {
@@ -128,6 +176,7 @@ export type PortfolioHolding = {
   is_estimated: boolean;
   as_of: string;
   updated_at: string;
+  market_data: HoldingMarketData;
 };
 
 export type PortfolioHoldingsEnvelope = {
