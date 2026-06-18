@@ -33,7 +33,8 @@
         development database.
 
 .PARAMETER Service
-    The Rust service to validate. Must be one of: kushim-api, kushim-worker.
+    The Rust service to validate. Must be one of: kushim-api, kushim-worker,
+    kushim-market-data.
 
 .PARAMETER KeepDatabaseOnFailure
     When the suite fails, do NOT drop the temporary database so the operator
@@ -52,7 +53,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('kushim-api', 'kushim-worker')]
+    [ValidateSet('kushim-api', 'kushim-worker', 'kushim-market-data')]
     [string]$Service,
 
     [switch]$KeepDatabaseOnFailure,
@@ -187,7 +188,12 @@ $hostPort = 5432
 # Disposable database lifecycle
 # ---------------------------------------------------------------------------
 
-$tag    = if ($Service -eq 'kushim-api') { 'api' } else { 'worker' }
+$tag = switch ($Service) {
+    'kushim-api'         { 'api' }
+    'kushim-worker'      { 'worker' }
+    'kushim-market-data' { 'md' }
+    default              { throw "Unsupported service tag for '$Service'" }
+}
 $dbName = New-DisposableDatabaseName -Suffix $tag
 Assert-SafeDatabaseName -Name $dbName
 

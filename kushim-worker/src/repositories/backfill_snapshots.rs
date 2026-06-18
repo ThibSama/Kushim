@@ -7,7 +7,7 @@ use crate::{
 };
 use sqlx::{PgPool, Row};
 use std::collections::HashMap;
-use time::{Date, PrimitiveDateTime};
+use time::{Date, OffsetDateTime, PrimitiveDateTime};
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -139,10 +139,26 @@ impl BackfillSnapshotsRepository {
 
         let mut prices = HashMap::new();
         for row in rows {
+            // Snapshot backfill uses historical close prices from
+            // `asset_price_history_cache`, not the live `asset_market_data`
+            // cache; provider/timestamp fields therefore have no upstream
+            // value here and are filled with conservative placeholders. The
+            // snapshot pipeline does NOT persist them to
+            // `rm_portfolio_holdings` (that path is the live rebuild only).
             let value = AssetMarketValue {
                 id_asset: row.try_get("id_asset")?,
                 price_minor: row.try_get("close_minor")?,
                 currency: trim_currency(row.try_get::<String, _>("currency")?),
+                data_source: row
+                    .try_get::<Option<String>, _>("data_source")
+                    .ok()
+                    .flatten(),
+                as_of: row
+                    .try_get::<OffsetDateTime, _>("created_at")
+                    .unwrap_or(OffsetDateTime::UNIX_EPOCH),
+                record_updated_at: row
+                    .try_get::<OffsetDateTime, _>("created_at")
+                    .unwrap_or(OffsetDateTime::UNIX_EPOCH),
             };
             prices.insert(value.id_asset, value);
         }

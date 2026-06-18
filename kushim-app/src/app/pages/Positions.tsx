@@ -133,17 +133,39 @@ export function Positions() {
   const loading = holdings.status === "loading" || holdings.status === "idle";
   const holdingsList = holdings.data;
   const hasEstimated = holdingsList.some((h) => h.is_estimated);
+  // Distinguish positions with no market-data row from those merely estimated:
+  // an unavailable market_data block is an objective fact from the API, while
+  // is_estimated stays overloaded (FX, splits, missing price, …).
+  const missingMarketData = holdingsList.filter(
+    (h) => !h.market_data.available,
+  );
+  const valuedCount = holdingsList.length - missingMarketData.length;
+  const partialValuation =
+    holdingsList.length > 0 &&
+    missingMarketData.length > 0 &&
+    valuedCount > 0;
+  const fullyUnvalued =
+    holdingsList.length > 0 && valuedCount === 0;
 
   const totals = useMemo(() => {
     if (!holdings.dataAvailable || holdingsList.length === 0) return null;
+    // Sum ONLY positions that actually have market data so the displayed
+    // total never silently absorbs an invested-cost fallback as if it were a
+    // real market value. The label adapts to convey the partial state.
     let totalValue = 0;
     let totalPnl = 0;
     for (const h of holdingsList) {
+      if (!h.market_data.available) continue;
       totalValue += h.market_value_minor;
       totalPnl += h.pnl_base_minor;
     }
-    return { totalValue, totalPnl, count: holdingsList.length };
-  }, [holdingsList, holdings.dataAvailable]);
+    return {
+      totalValue,
+      totalPnl,
+      count: holdingsList.length,
+      valuedCount,
+    };
+  }, [holdingsList, holdings.dataAvailable, valuedCount]);
 
   const currency =
     activePortfolio?.base_currency ??
@@ -290,7 +312,7 @@ export function Positions() {
               </div>
             </div>
           </Card>
-          {hasEstimated && (
+          {(hasEstimated || missingMarketData.length > 0) && (
             <Card level={1}>
               <div
                 className="flex items-center gap-2"
@@ -307,7 +329,7 @@ export function Positions() {
                       color: "var(--text-tertiary)",
                       letterSpacing: "0.05em",
                     }}>
-                    Données
+                    Valorisation
                   </div>
                   <div
                     style={{
@@ -315,13 +337,47 @@ export function Positions() {
                       fontWeight: 600,
                       color: "var(--color-warning, #f59e0b)",
                     }}>
-                    Estimé
+                    {fullyUnvalued
+                      ? "Indisponible"
+                      : missingMarketData.length > 0
+                        ? `Partielle (${valuedCount}/${holdingsList.length})`
+                        : "Estimée"}
                   </div>
                 </div>
               </div>
             </Card>
           )}
         </div>
+      )}
+
+      {/* Partial-valuation banner — surfaces when at least one open position
+          has no market-data row. Distinct from is_estimated overload. */}
+      {holdings.dataAvailable && (partialValuation || fullyUnvalued) && (
+        <Card level={1} className="mb-6">
+          <div
+            className="flex items-start gap-3"
+            style={{ padding: "12px 4px", color: "var(--text-secondary)" }}>
+            <AlertTriangle
+              size={18}
+              style={{
+                color: "var(--color-warning, #f59e0b)",
+                flexShrink: 0,
+                marginTop: "2px",
+              }}
+            />
+            <div>
+              <div style={{ fontWeight: 600, fontSize: "14px", color: "var(--text-primary)" }}>
+                {fullyUnvalued
+                  ? "Aucune position n'a de prix de marché"
+                  : `${missingMarketData.length} position${missingMarketData.length > 1 ? "s" : ""} sans prix de marché`}
+              </div>
+              <div style={{ fontSize: "13px", marginTop: "2px" }}>
+                Le total affiché ne comprend que les positions valorisées. Les
+                positions sans donnée de marché sont identifiées dans le tableau.
+              </div>
+            </div>
+          </div>
+        </Card>
       )}
 
       {/* Toolbar */}
@@ -617,6 +673,47 @@ export function Positions() {
   );
 }
 
+function formatProvenanceTooltip(holding: PortfolioHolding): string {
+  const md = holding.market_data;
+  // Honest copy: the labels must never claim a "last synchronisation" — only
+  // the stored record-update timestamp is known. Likewise, when invested-cost
+  // fallback is the source we say so explicitly.
+  if (!md.available) {
+    if (md.unavailable_reason === "valuation_provenance_missing") {
+      return "Provenance de valorisation indisponible — recalcul requis.";
+    }
+    if (md.unavailable_reason === "unsupported_market_data_currency") {
+      const provider = md.provider ?? "fournisseur inconnu";
+      const priceAsOf = md.market_data_as_of
+        ? new Date(md.market_data_as_of).toLocaleString("fr-FR")
+        : "—";
+      const recordUpdatedAt = md.record_updated_at
+        ? new Date(md.record_updated_at).toLocaleString("fr-FR")
+        : "—";
+      return [
+        "Devise du cours non prise en charge.",
+        `Source : ${provider}`,
+        `Cours daté du : ${priceAsOf} (${md.currency ?? "?"})`,
+        `Enregistrement de marché mis à jour le : ${recordUpdatedAt}`,
+        "Valorisation au coût investi.",
+      ].join("\n");
+    }
+    return "Donnée de marché indisponible — la position est valorisée au coût investi.";
+  }
+  const provider = md.provider ?? "fournisseur inconnu";
+  const priceAsOf = md.market_data_as_of
+    ? new Date(md.market_data_as_of).toLocaleString("fr-FR")
+    : "—";
+  const recordUpdatedAt = md.record_updated_at
+    ? new Date(md.record_updated_at).toLocaleString("fr-FR")
+    : "—";
+  return [
+    `Source : ${provider}`,
+    `Cours daté du : ${priceAsOf}`,
+    `Enregistrement de marché mis à jour le : ${recordUpdatedAt}`,
+  ].join("\n");
+}
+
 function PositionRow({
   holding,
   isLast,
@@ -629,6 +726,8 @@ function PositionRow({
   const pnlPct = parsePercent(holding.pnl_pct);
   const weightPct = parsePercent(holding.weight_pct);
   const isPositive = holding.pnl_base_minor >= 0;
+  const marketDataAvailable = holding.market_data.available;
+  const provenanceTooltip = formatProvenanceTooltip(holding);
 
   return (
     <tr
@@ -719,60 +818,77 @@ function PositionRow({
           : "—"}
       </td>
       <td
+        title={provenanceTooltip}
         style={{
           padding: "14px 12px",
           textAlign: "right",
           fontFamily: "'JetBrains Mono', monospace",
           fontSize: "13px",
           fontWeight: 600,
-          color: "var(--text-primary)",
+          color: marketDataAvailable
+            ? "var(--text-primary)"
+            : "var(--text-tertiary)",
           minWidth: "120px",
         }}>
-        {formatMinorCurrency(
-          holding.market_value_minor,
-          holding.base_currency,
-        )}
+        {marketDataAvailable
+          ? formatMinorCurrency(holding.market_value_minor, holding.base_currency)
+          : "—"}
       </td>
       <td
+        title={provenanceTooltip}
         style={{
           padding: "14px 12px",
           textAlign: "right",
           minWidth: "120px",
         }}>
-        <div
-          className="flex items-center justify-end gap-1"
-          style={{
-            fontFamily: "'JetBrains Mono', monospace",
-            fontSize: "13px",
-            fontWeight: 600,
-            color: isPositive ? "var(--color-gain)" : "var(--color-loss)",
-          }}>
-          {isPositive ? (
-            <TrendingUp size={14} />
-          ) : (
-            <TrendingDown size={14} />
-          )}
-          <span>
-            {pnlPct != null
-              ? formatPercent(pnlPct)
-              : formatSignedMinorCurrency(
-                  holding.pnl_base_minor,
-                  holding.base_currency,
-                )}
-          </span>
-        </div>
-        <div
-          style={{
-            fontSize: "11px",
-            color: "var(--text-tertiary)",
-            textAlign: "right",
-            marginTop: "1px",
-          }}>
-          {formatSignedMinorCurrency(
-            holding.pnl_base_minor,
-            holding.base_currency,
-          )}
-        </div>
+        {marketDataAvailable ? (
+          <>
+            <div
+              className="flex items-center justify-end gap-1"
+              style={{
+                fontFamily: "'JetBrains Mono', monospace",
+                fontSize: "13px",
+                fontWeight: 600,
+                color: isPositive ? "var(--color-gain)" : "var(--color-loss)",
+              }}>
+              {isPositive ? (
+                <TrendingUp size={14} />
+              ) : (
+                <TrendingDown size={14} />
+              )}
+              <span>
+                {pnlPct != null
+                  ? formatPercent(pnlPct)
+                  : formatSignedMinorCurrency(
+                      holding.pnl_base_minor,
+                      holding.base_currency,
+                    )}
+              </span>
+            </div>
+            <div
+              style={{
+                fontSize: "11px",
+                color: "var(--text-tertiary)",
+                textAlign: "right",
+                marginTop: "1px",
+              }}>
+              {formatSignedMinorCurrency(
+                holding.pnl_base_minor,
+                holding.base_currency,
+              )}
+            </div>
+          </>
+        ) : (
+          <div
+            style={{
+              fontSize: "12px",
+              color: "var(--text-tertiary)",
+              textAlign: "right",
+              fontStyle: "italic",
+            }}>
+            —
+          </div>
+        )}
       </td>
       <td
         style={{
@@ -791,9 +907,28 @@ function PositionRow({
           textAlign: "center",
           minWidth: "30px",
         }}>
-        {holding.is_estimated && (
+        {!marketDataAvailable ? (
           <span
-            title="Valeur estimée — prix de marché ou taux de change manquant"
+            title={provenanceTooltip}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "2px",
+              fontSize: "10px",
+              fontWeight: 600,
+              color: "var(--color-loss)",
+              background:
+                "color-mix(in srgb, var(--color-loss) 12%, transparent)",
+              borderRadius: "var(--radius-md)",
+              padding: "2px 6px",
+              whiteSpace: "nowrap",
+            }}>
+            <AlertCircle size={10} />
+            Indispo.
+          </span>
+        ) : holding.is_estimated ? (
+          <span
+            title={`Valeur estimée — prix de marché ou taux de change manquant.\n${provenanceTooltip}`}
             style={{
               display: "inline-flex",
               alignItems: "center",
@@ -810,7 +945,7 @@ function PositionRow({
             <AlertTriangle size={10} />
             Est.
           </span>
-        )}
+        ) : null}
       </td>
     </tr>
   );

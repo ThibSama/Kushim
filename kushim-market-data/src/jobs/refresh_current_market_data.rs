@@ -58,8 +58,19 @@ impl<P: MarketDataProvider> Job for RefreshCurrentMarketDataJob<P> {
                     match asset_market_data::upsert_current(&state.pg_pool, asset.id_asset, &quote)
                         .await
                     {
-                        Ok(()) => {
-                            updated += 1;
+                        Ok(rows) => {
+                            if rows == 0 {
+                                // Incoming as_of was older than the stored
+                                // observation; the guard preserved the newer
+                                // row deliberately.
+                                tracing::debug!(
+                                    id_asset = %asset.id_asset,
+                                    "incoming quote was older than stored row, no overwrite"
+                                );
+                                skipped += 1;
+                            } else {
+                                updated += 1;
+                            }
                         }
                         Err(sqlx::Error::Database(db_err))
                             if db_err.code().as_deref() == Some("23503") =>

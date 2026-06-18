@@ -100,15 +100,23 @@ $script:Warnings  = [System.Collections.Generic.List[string]]::new()
 $script:Passed    = [System.Collections.Generic.List[string]]::new()
 $script:Failed    = [System.Collections.Generic.List[string]]::new()
 $script:DemoState = @{
-    Username         = ""
-    UserId           = ""
-    PortfolioId      = ""
-    AssetId          = ""
-    DepositOpId      = ""
-    BuyOpId          = ""
-    AccessToken      = ""
-    RefreshRequestId = ""
+    Username             = ""
+    UserId               = ""
+    PortfolioId          = ""
+    AssetId              = ""
+    DepositOpId          = ""
+    BuyOpId              = ""
+    AccessToken          = ""
+    RefreshRequestId     = ""
+    # P3 idempotency keys — one UUID per logical write, stable only for the
+    # duration of this script invocation. Repeated calls for the same logical
+    # write within this invocation reuse the same key. A new invocation
+    # generates new keys.
+    # Required for operation creation and correction endpoints, but not posting.
+    DepositIdempotencyKey = [guid]::NewGuid().ToString()
+    BuyIdempotencyKey     = [guid]::NewGuid().ToString()
 }
+
 
 # Compute backfill end date: one day before snapshot date if not provided
 if ($BackfillDateTo -eq "") {
@@ -212,6 +220,30 @@ function Invoke-ApiPostNoBody {
 
 function Get-AuthHeaders {
     return @{ Authorization = "Bearer $($script:DemoState.AccessToken)" }
+}
+
+# Headers for endpoints that REQUIRE the P3 idempotency contract — combines
+# Authorization + Idempotency-Key. The key must be a valid UUID; we never
+# print the access token. We DO print the key (it is non-secret by design;
+# the API records it and uses it as a deduplication signature).
+function Get-WriteHeaders {
+    param(
+        [Parameter(Mandatory = $true)][string]$IdempotencyKey,
+        [string]$LogicalOp = "operation-write"
+    )
+    if ([string]::IsNullOrWhiteSpace($IdempotencyKey)) {
+        throw "Get-WriteHeaders: IdempotencyKey is empty (logical op: $LogicalOp)"
+    }
+    # Validate the UUID shape locally so a malformed key fails fast with a
+    # readable error rather than as an HTTP 400 from the API.
+    if ($IdempotencyKey -notmatch '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$') {
+        throw "Get-WriteHeaders: IdempotencyKey '$IdempotencyKey' is not a valid UUID"
+    }
+    Write-Info "Using Idempotency-Key for ${LogicalOp}: $IdempotencyKey"
+    return @{
+        Authorization     = "Bearer $($script:DemoState.AccessToken)"
+        'Idempotency-Key' = $IdempotencyKey
+    }
 }
 
 function Assert-True {
@@ -582,7 +614,10 @@ $depositBody = @{
 }
 
 try {
-    $depositResponse = Invoke-ApiPost -Url "$BaseUrlApi/v1/portfolios/$($script:DemoState.PortfolioId)/operations" -Headers (Get-AuthHeaders) -Body $depositBody
+    $depositResponse = Invoke-ApiPost `
+        -Url "$BaseUrlApi/v1/portfolios/$($script:DemoState.PortfolioId)/operations" `
+        -Headers (Get-WriteHeaders -IdempotencyKey $script:DemoState.DepositIdempotencyKey -LogicalOp "deposit-create") `
+        -Body $depositBody
     $script:DemoState.DepositOpId = $depositResponse.operation.id_portfolio_operation
     Write-Success "Deposit created: id=$($script:DemoState.DepositOpId) (status=$($depositResponse.operation.operation_status))"
 } catch {
@@ -616,7 +651,10 @@ $buyBody = @{
 }
 
 try {
-    $buyResponse = Invoke-ApiPost -Url "$BaseUrlApi/v1/portfolios/$($script:DemoState.PortfolioId)/operations" -Headers (Get-AuthHeaders) -Body $buyBody
+    $buyResponse = Invoke-ApiPost `
+        -Url "$BaseUrlApi/v1/portfolios/$($script:DemoState.PortfolioId)/operations" `
+        -Headers (Get-WriteHeaders -IdempotencyKey $script:DemoState.BuyIdempotencyKey -LogicalOp "buy-create") `
+        -Body $buyBody
     $script:DemoState.BuyOpId = $buyResponse.operation.id_portfolio_operation
     Write-Success "Buy created: id=$($script:DemoState.BuyOpId) (status=$($buyResponse.operation.operation_status))"
 } catch {

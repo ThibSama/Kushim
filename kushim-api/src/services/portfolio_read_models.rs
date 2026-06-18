@@ -3,6 +3,7 @@ use crate::{
         asset::AssetClass,
         portfolio_read_model::{
             PortfolioHolding, PortfolioHoldingsFilters, PortfolioHoldingsSort, PortfolioSummary,
+            PortfolioValuationStatus,
         },
     },
     repositories::{
@@ -97,11 +98,29 @@ impl PortfolioReadModelService {
             .map_err(map_read_model_repository_error)?;
 
         Ok(match summary {
-            Some(summary) => PortfolioSummaryView {
-                data_available: true,
-                summary: Some(summary),
-                reason: None,
-            },
+            Some(mut summary) => {
+                // The summary row itself does not carry the market-data join.
+                // We compute the breakdown via a dedicated read-only query so
+                // the API can expose an objective `valuation_status` derived
+                // strictly from `position_status = 'open'` and the presence of
+                // a matching row in `asset_market_data`.
+                let breakdown = self
+                    .portfolio_read_model_repository
+                    .valuation_breakdown(input.id_portfolio)
+                    .await
+                    .map_err(map_read_model_repository_error)?;
+                summary.positions_total = breakdown.open_positions;
+                summary.positions_valued = breakdown.valued_positions;
+                summary.valuation_status = PortfolioValuationStatus::from_counts(
+                    breakdown.open_positions,
+                    breakdown.valued_positions,
+                );
+                PortfolioSummaryView {
+                    data_available: true,
+                    summary: Some(summary),
+                    reason: None,
+                }
+            }
             None => PortfolioSummaryView {
                 data_available: false,
                 summary: None,

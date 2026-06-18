@@ -3,8 +3,8 @@ use crate::{
     domain::{
         asset::{Asset, AssetClass},
         portfolio_read_model::{
-            PortfolioHolding, PortfolioHoldingPositionStatus, PortfolioHoldingsSort,
-            PortfolioSummary, PortfolioSummaryStatus,
+            HoldingMarketDataQuality, PortfolioHolding, PortfolioHoldingPositionStatus,
+            PortfolioHoldingsSort, PortfolioSummary, PortfolioSummaryStatus,
         },
     },
     errors::ApiError,
@@ -42,6 +42,13 @@ pub struct PortfolioSummaryResponse {
     pub is_estimated: bool,
     pub as_of: String,
     pub updated_at: String,
+    /// Aggregate valuation status derived from open holdings vs. matching
+    /// `asset_market_data` rows. Stable enum codes: `complete`, `partial`,
+    /// `unavailable`, `empty`. Distinct from `portfolio_status` which only
+    /// reflects the lifecycle of the portfolio container.
+    pub valuation_status: String,
+    pub positions_total: i64,
+    pub positions_valued: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -63,6 +70,46 @@ pub struct HoldingAssetResponse {
     pub native_currency: Option<String>,
 }
 
+/// Per-holding valuation provenance. All values come from
+/// `rm_portfolio_holdings` — the API never joins the live `asset_market_data`
+/// cache at read time, so a P2 quote written after the rebuild cannot appear
+/// beside a `market_value_minor` computed from P1.
+///
+/// The legacy `fetched_at` field has been **removed**: no actual fetch
+/// timestamp is stored. The new `record_updated_at` reflects only the
+/// wall-clock time at which the `asset_market_data` row was last written
+/// (captured at rebuild time).
+#[derive(Debug, Serialize)]
+pub struct HoldingMarketDataResponse {
+    /// True only when the holding was actually valued from a compatible
+    /// market-data row. False for missing, unsupported_currency, and legacy
+    /// rows.
+    pub available: bool,
+    /// Stable code — `market_data` | `invested_cost_fallback`. `None` for
+    /// legacy rows persisted before the migration.
+    pub valuation_source: Option<&'static str>,
+    /// `available` | `unavailable`. No `stale` value is emitted.
+    pub status: &'static str,
+    /// Stable reason code when `status = unavailable`. One of:
+    /// `market_data_missing`, `unsupported_market_data_currency`,
+    /// `valuation_provenance_missing`.
+    pub unavailable_reason: Option<&'static str>,
+    /// Exact price used (or rejected, for unsupported_currency). Null
+    /// otherwise.
+    pub price_minor: Option<i64>,
+    /// Currency of `price_minor`.
+    pub currency: Option<String>,
+    pub provider: Option<String>,
+    /// RFC 3339 — market-quote timestamp reported by the provider
+    /// (`asset_market_data.as_of`, captured at rebuild time).
+    pub market_data_as_of: Option<String>,
+    /// RFC 3339 — wall-clock time at which `kushim-market-data` last wrote
+    /// the row (`asset_market_data.updated_at`, captured at rebuild time).
+    /// This is intentionally **not** named `fetched_at` because no real fetch
+    /// timestamp exists upstream.
+    pub record_updated_at: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct PortfolioHoldingResponse {
     pub id_asset: Uuid,
@@ -79,6 +126,7 @@ pub struct PortfolioHoldingResponse {
     pub is_estimated: bool,
     pub as_of: String,
     pub updated_at: String,
+    pub market_data: HoldingMarketDataResponse,
 }
 
 #[derive(Debug, Serialize)]
@@ -156,6 +204,25 @@ impl From<PortfolioSummary> for PortfolioSummaryResponse {
             is_estimated: value.is_estimated,
             as_of: format_datetime(value.as_of),
             updated_at: format_datetime(value.updated_at),
+            valuation_status: value.valuation_status.as_str().to_string(),
+            positions_total: value.positions_total,
+            positions_valued: value.positions_valued,
+        }
+    }
+}
+
+impl From<HoldingMarketDataQuality> for HoldingMarketDataResponse {
+    fn from(value: HoldingMarketDataQuality) -> Self {
+        Self {
+            available: value.available,
+            valuation_source: value.valuation_source,
+            status: value.status,
+            unavailable_reason: value.unavailable_reason,
+            price_minor: value.price_minor,
+            currency: value.currency,
+            provider: value.provider,
+            market_data_as_of: value.market_data_as_of.map(format_datetime),
+            record_updated_at: value.record_updated_at.map(format_datetime),
         }
     }
 }
@@ -196,6 +263,7 @@ impl From<PortfolioHolding> for PortfolioHoldingResponse {
             is_estimated: value.is_estimated,
             as_of: format_datetime(value.as_of),
             updated_at: format_datetime(value.updated_at),
+            market_data: HoldingMarketDataResponse::from(value.market_data),
         }
     }
 }
@@ -435,6 +503,10 @@ mod tests {
         as_of: &'a str,
     }
 
+    /// Legacy fixture — inserts a holding WITHOUT valuation provenance, i.e.
+    /// the same shape a row would have if it was written before the
+    /// `003_holding_valuation_provenance` migration. The API must surface
+    /// such rows as `valuation_provenance_missing`.
     async fn insert_holding(pool: &PgPool, input: HoldingFixture<'_>) {
         sqlx::query(
             r#"
@@ -469,6 +541,173 @@ mod tests {
         .execute(pool)
         .await
         .expect("holding should be inserted");
+    }
+
+    /// Inserts a holding WITH persisted valuation provenance, mimicking what
+    /// the worker writes after a rebuild. Used by the temporal-consistency
+    /// and provenance-readout tests.
+    #[allow(clippy::too_many_arguments)]
+    async fn insert_holding_valued_by_market_data(
+        pool: &PgPool,
+        id_portfolio: Uuid,
+        id_asset: Uuid,
+        market_value_minor: i64,
+        invested_base_minor: i64,
+        market_data_price_minor: i64,
+        market_data_currency: &str,
+        market_data_provider: Option<&str>,
+        market_data_as_of: &str,
+        market_data_record_updated_at: &str,
+    ) {
+        sqlx::query(
+            r#"
+            INSERT INTO rm_portfolio_holdings (
+                id_portfolio, id_asset, base_currency,
+                quantity, avg_cost_minor, invested_base_minor,
+                market_value_minor, pnl_base_minor,
+                pnl_pct, weight_pct, position_status,
+                is_estimated, as_of,
+                valuation_source, market_data_status,
+                market_data_price_minor, market_data_currency,
+                market_data_provider, market_data_as_of,
+                market_data_record_updated_at
+            )
+            VALUES (
+                $1, $2, 'EUR',
+                '1.0000000000'::numeric, 1000, $3,
+                $4, $5,
+                '0.0000'::numeric, '100.0000'::numeric, 'open',
+                false, now(),
+                'market_data', 'available',
+                $6, $7,
+                $8, $9::timestamptz,
+                $10::timestamptz
+            )
+            "#,
+        )
+        .bind(id_portfolio)
+        .bind(id_asset)
+        .bind(invested_base_minor)
+        .bind(market_value_minor)
+        .bind(market_value_minor - invested_base_minor)
+        .bind(market_data_price_minor)
+        .bind(market_data_currency)
+        .bind(market_data_provider)
+        .bind(market_data_as_of)
+        .bind(market_data_record_updated_at)
+        .execute(pool)
+        .await
+        .expect("holding with provenance should be inserted");
+    }
+
+    async fn insert_holding_invested_cost_missing(
+        pool: &PgPool,
+        id_portfolio: Uuid,
+        id_asset: Uuid,
+        invested_base_minor: i64,
+    ) {
+        sqlx::query(
+            r#"
+            INSERT INTO rm_portfolio_holdings (
+                id_portfolio, id_asset, base_currency,
+                quantity, avg_cost_minor, invested_base_minor,
+                market_value_minor, pnl_base_minor,
+                pnl_pct, weight_pct, position_status,
+                is_estimated, as_of,
+                valuation_source, market_data_status
+            )
+            VALUES (
+                $1, $2, 'EUR',
+                '1.0000000000'::numeric, 1000, $3,
+                $3, 0,
+                '0.0000'::numeric, NULL, 'open',
+                true, now(),
+                'invested_cost_fallback', 'missing'
+            )
+            "#,
+        )
+        .bind(id_portfolio)
+        .bind(id_asset)
+        .bind(invested_base_minor)
+        .execute(pool)
+        .await
+        .expect("missing-md holding should be inserted");
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn insert_holding_invested_cost_unsupported_currency(
+        pool: &PgPool,
+        id_portfolio: Uuid,
+        id_asset: Uuid,
+        invested_base_minor: i64,
+        md_price_minor: i64,
+        md_currency: &str,
+        md_provider: Option<&str>,
+        md_as_of: &str,
+        md_record_updated_at: &str,
+    ) {
+        sqlx::query(
+            r#"
+            INSERT INTO rm_portfolio_holdings (
+                id_portfolio, id_asset, base_currency,
+                quantity, avg_cost_minor, invested_base_minor,
+                market_value_minor, pnl_base_minor,
+                pnl_pct, weight_pct, position_status,
+                is_estimated, as_of,
+                valuation_source, market_data_status,
+                market_data_price_minor, market_data_currency,
+                market_data_provider, market_data_as_of,
+                market_data_record_updated_at
+            )
+            VALUES (
+                $1, $2, 'EUR',
+                '1.0000000000'::numeric, 1000, $3,
+                $3, 0,
+                '0.0000'::numeric, NULL, 'open',
+                true, now(),
+                'invested_cost_fallback', 'unsupported_currency',
+                $4, $5,
+                $6, $7::timestamptz,
+                $8::timestamptz
+            )
+            "#,
+        )
+        .bind(id_portfolio)
+        .bind(id_asset)
+        .bind(invested_base_minor)
+        .bind(md_price_minor)
+        .bind(md_currency)
+        .bind(md_provider)
+        .bind(md_as_of)
+        .bind(md_record_updated_at)
+        .execute(pool)
+        .await
+        .expect("unsupported-currency holding should be inserted");
+    }
+
+    async fn update_market_data_row(
+        pool: &PgPool,
+        id_asset: Uuid,
+        new_price_minor: i64,
+        new_as_of: &str,
+    ) {
+        // Mutate an existing asset_market_data row in place to simulate a
+        // P1 → P2 quote refresh without running another worker rebuild.
+        sqlx::query(
+            r#"
+            UPDATE asset_market_data
+            SET price_minor = $2,
+                as_of = $3::timestamptz,
+                updated_at = now()
+            WHERE id_asset = $1
+            "#,
+        )
+        .bind(id_asset)
+        .bind(new_price_minor)
+        .bind(new_as_of)
+        .execute(pool)
+        .await
+        .expect("update should succeed");
     }
 
     async fn cleanup_tree(
@@ -1136,6 +1375,511 @@ mod tests {
         let body = response_json(response).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(body["error"]["code"], "invalid_query_parameters");
+
+        cleanup_tree(&pool, &[portfolio_id], &[], &[user_id]).await;
+    }
+
+    async fn insert_market_data(
+        pool: &PgPool,
+        id_asset: Uuid,
+        provider: &str,
+        price_minor: i64,
+        currency: &str,
+        as_of: &str,
+    ) {
+        sqlx::query(
+            r#"
+            INSERT INTO asset_market_data (id_asset, price_minor, currency, data_source, as_of)
+            VALUES ($1, $2, $3, $4, $5::timestamptz)
+            ON CONFLICT (id_asset) DO UPDATE SET
+                price_minor = EXCLUDED.price_minor,
+                currency = EXCLUDED.currency,
+                data_source = EXCLUDED.data_source,
+                as_of = EXCLUDED.as_of,
+                updated_at = now()
+            "#,
+        )
+        .bind(id_asset)
+        .bind(price_minor)
+        .bind(currency)
+        .bind(provider)
+        .bind(as_of)
+        .execute(pool)
+        .await
+        .expect("market data row should insert");
+    }
+
+    async fn cleanup_market_data(pool: &PgPool, asset_ids: &[Uuid]) {
+        if asset_ids.is_empty() {
+            return;
+        }
+        sqlx::query("DELETE FROM asset_market_data WHERE id_asset = ANY($1)")
+            .bind(asset_ids)
+            .execute(pool)
+            .await
+            .ok();
+    }
+
+    // ---------------------------------------------------------------
+    // Persisted-provenance contract tests (Phase 8/9/10 of the
+    // valuation-provenance pass).
+    // ---------------------------------------------------------------
+
+    #[tokio::test]
+    async fn holdings_with_legacy_provenance_are_reported_as_missing_until_rebuilt() {
+        // Legacy fixture inserts a row with NULL valuation_source — exactly
+        // the shape a row would have after the migration but before the
+        // worker has rebuilt the read model.
+        let pool = test_pool().await;
+        let handle = format!("lgp{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let user_id = create_user(&pool, &handle).await;
+        let portfolio_id = create_portfolio(&pool, user_id, "Legacy Row").await;
+        let asset = insert_asset(&pool, "Legacy", "LGCY", "US8000000001", "equity").await;
+        insert_summary(&pool, portfolio_id, 50_000).await;
+        insert_holding(
+            &pool,
+            HoldingFixture {
+                id_portfolio: portfolio_id,
+                id_asset: asset,
+                quantity: "1.0000000000",
+                invested_base_minor: 50_000,
+                market_value_minor: 50_000,
+                pnl_base_minor: 0,
+                pnl_pct: "0.0000",
+                weight_pct: "100.0000",
+                position_status: "open",
+                as_of: "2026-06-10T10:00:00Z",
+            },
+        )
+        .await;
+        let app = crate::http::router(test_state(pool.clone()).await);
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/portfolios/{portfolio_id}/holdings"))
+                    .header(
+                        AUTHORIZATION,
+                        format!("Bearer {}", build_access_token(user_id, &handle)),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("response should be built");
+        let body = response_json(response).await;
+        let md = &body["holdings"][0]["market_data"];
+        assert_eq!(md["available"], false);
+        assert!(md["valuation_source"].is_null());
+        assert_eq!(md["status"], "unavailable");
+        assert_eq!(md["unavailable_reason"], "valuation_provenance_missing");
+        assert!(md["price_minor"].is_null());
+        assert!(md["currency"].is_null());
+
+        // Summary aggregate must not count legacy NULL provenance as valued.
+        let summary = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/portfolios/{portfolio_id}/summary"))
+                    .header(
+                        AUTHORIZATION,
+                        format!("Bearer {}", build_access_token(user_id, &handle)),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("summary response built");
+        let summary_body = response_json(summary).await;
+        assert_eq!(summary_body["summary"]["valuation_status"], "unavailable");
+        assert_eq!(summary_body["summary"]["positions_total"], 1);
+        assert_eq!(summary_body["summary"]["positions_valued"], 0);
+
+        cleanup_tree(&pool, &[portfolio_id], &[asset], &[user_id]).await;
+    }
+
+    #[tokio::test]
+    async fn holdings_with_persisted_market_data_provenance_expose_exact_inputs() {
+        let pool = test_pool().await;
+        let handle = format!("pmd{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let user_id = create_user(&pool, &handle).await;
+        let portfolio_id = create_portfolio(&pool, user_id, "Persisted MD").await;
+        let asset = insert_asset(&pool, "Priced", "PRCD", "US8100000001", "equity").await;
+        insert_summary(&pool, portfolio_id, 60_000).await;
+        insert_holding_valued_by_market_data(
+            &pool,
+            portfolio_id,
+            asset,
+            60_000,
+            50_000,
+            60_000,
+            "EUR",
+            Some("test-static"),
+            "2026-06-10T09:30:00Z",
+            "2026-06-10T09:30:05Z",
+        )
+        .await;
+        let app = crate::http::router(test_state(pool.clone()).await);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/portfolios/{portfolio_id}/holdings"))
+                    .header(
+                        AUTHORIZATION,
+                        format!("Bearer {}", build_access_token(user_id, &handle)),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("response built");
+        let body = response_json(response).await;
+        let md = &body["holdings"][0]["market_data"];
+        assert_eq!(md["available"], true);
+        assert_eq!(md["valuation_source"], "market_data");
+        assert_eq!(md["status"], "available");
+        assert!(md["unavailable_reason"].is_null());
+        assert_eq!(md["price_minor"], 60_000);
+        assert_eq!(md["currency"], "EUR");
+        assert_eq!(md["provider"], "test-static");
+        assert_rfc3339_string(&md["market_data_as_of"]);
+        assert_rfc3339_string(&md["record_updated_at"]);
+        // fetched_at must NOT exist any more
+        assert!(md.get("fetched_at").is_none(), "fetched_at must be removed");
+
+        cleanup_tree(&pool, &[portfolio_id], &[asset], &[user_id]).await;
+    }
+
+    #[tokio::test]
+    async fn temporal_consistency_p2_quote_does_not_pollute_p1_holding_until_rebuild() {
+        // THE architectural-fix regression test: prove the API never joins a
+        // later `asset_market_data` quote (P2) onto a holding whose value was
+        // calculated from an earlier quote (P1).
+        let pool = test_pool().await;
+        let handle = format!("p1p2{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let user_id = create_user(&pool, &handle).await;
+        let portfolio_id = create_portfolio(&pool, user_id, "P1/P2 Temporal").await;
+        let asset = insert_asset(&pool, "Temporal", "TMPR", "US8200000001", "equity").await;
+        insert_summary(&pool, portfolio_id, 60_000).await;
+
+        // 1) Worker rebuild with P1 — persist the holding using P1 inputs.
+        insert_holding_valued_by_market_data(
+            &pool,
+            portfolio_id,
+            asset,
+            60_000, // market_value_minor computed from P1
+            50_000, // invested
+            60_000, // P1 price
+            "EUR",
+            Some("test-static"),
+            "2026-06-10T09:00:00Z", // P1 market timestamp
+            "2026-06-10T09:00:05Z", // P1 record updated_at
+        )
+        .await;
+        // 2) Live asset_market_data row also at P1 (this is what the worker
+        //    snapshotted into rm_portfolio_holdings).
+        insert_market_data(
+            &pool,
+            asset,
+            "test-static",
+            60_000,
+            "EUR",
+            "2026-06-10T09:00:00Z",
+        )
+        .await;
+        let app = crate::http::router(test_state(pool.clone()).await);
+
+        // First read — both should describe P1 consistently.
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/portfolios/{portfolio_id}/holdings"))
+                    .header(
+                        AUTHORIZATION,
+                        format!("Bearer {}", build_access_token(user_id, &handle)),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = response_json(response).await;
+        let md = &body["holdings"][0]["market_data"];
+        assert_eq!(md["price_minor"], 60_000, "must read P1 price");
+        assert_eq!(body["holdings"][0]["market_value_minor"], 60_000);
+
+        // 3) Mutate the live cache to P2 — DO NOT trigger any rebuild.
+        update_market_data_row(&pool, asset, 99_999, "2026-06-10T12:00:00Z").await;
+
+        // 4) The API must still describe the holding via P1 — neither value
+        //    nor provenance must drift to P2.
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/portfolios/{portfolio_id}/holdings"))
+                    .header(
+                        AUTHORIZATION,
+                        format!("Bearer {}", build_access_token(user_id, &handle)),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = response_json(response).await;
+        let md = &body["holdings"][0]["market_data"];
+        assert_eq!(
+            md["price_minor"], 60_000,
+            "API must still expose P1 — temporal coupling regressed"
+        );
+        assert_eq!(md["market_data_as_of"], "2026-06-10T09:00:00Z");
+        assert_eq!(body["holdings"][0]["market_value_minor"], 60_000);
+
+        // 5) Now simulate a worker rebuild capturing P2 inputs — replace the
+        //    persisted provenance to mimic the same atomic write the real
+        //    worker performs.
+        sqlx::query("DELETE FROM rm_portfolio_holdings WHERE id_portfolio = $1")
+            .bind(portfolio_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        insert_holding_valued_by_market_data(
+            &pool,
+            portfolio_id,
+            asset,
+            99_999,
+            50_000,
+            99_999,
+            "EUR",
+            Some("test-static"),
+            "2026-06-10T12:00:00Z",
+            "2026-06-10T12:00:05Z",
+        )
+        .await;
+
+        // 6) Now the API must reflect P2 — value AND provenance moved
+        //    together because the read model was rebuilt.
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/portfolios/{portfolio_id}/holdings"))
+                    .header(
+                        AUTHORIZATION,
+                        format!("Bearer {}", build_access_token(user_id, &handle)),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = response_json(response).await;
+        let md = &body["holdings"][0]["market_data"];
+        assert_eq!(md["price_minor"], 99_999);
+        assert_eq!(md["market_data_as_of"], "2026-06-10T12:00:00Z");
+        assert_eq!(body["holdings"][0]["market_value_minor"], 99_999);
+
+        cleanup_market_data(&pool, &[asset]).await;
+        cleanup_tree(&pool, &[portfolio_id], &[asset], &[user_id]).await;
+    }
+
+    #[tokio::test]
+    async fn summary_counts_only_persisted_market_data_status_available() {
+        // Three holdings: one available, one missing, one unsupported_currency.
+        // Expected: valuation_status="partial", positions_valued=1.
+        let pool = test_pool().await;
+        let handle = format!("svm{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let user_id = create_user(&pool, &handle).await;
+        let portfolio_id = create_portfolio(&pool, user_id, "Mixed Persisted").await;
+        let a1 = insert_asset(&pool, "Avail", "AV01", "US8300000001", "equity").await;
+        let a2 = insert_asset(&pool, "Missing", "MI01", "US8300000002", "equity").await;
+        let a3 = insert_asset(&pool, "Unsup", "UN01", "US8300000003", "equity").await;
+        insert_summary(&pool, portfolio_id, 200_000).await;
+        insert_holding_valued_by_market_data(
+            &pool,
+            portfolio_id,
+            a1,
+            60_000,
+            50_000,
+            60_000,
+            "EUR",
+            Some("test-static"),
+            "2026-06-10T09:00:00Z",
+            "2026-06-10T09:00:05Z",
+        )
+        .await;
+        insert_holding_invested_cost_missing(&pool, portfolio_id, a2, 40_000).await;
+        insert_holding_invested_cost_unsupported_currency(
+            &pool,
+            portfolio_id,
+            a3,
+            30_000,
+            70_000,
+            "USD",
+            Some("test-static"),
+            "2026-06-10T09:00:00Z",
+            "2026-06-10T09:00:05Z",
+        )
+        .await;
+        let app = crate::http::router(test_state(pool.clone()).await);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/portfolios/{portfolio_id}/summary"))
+                    .header(
+                        AUTHORIZATION,
+                        format!("Bearer {}", build_access_token(user_id, &handle)),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = response_json(response).await;
+        assert_eq!(body["summary"]["valuation_status"], "partial");
+        assert_eq!(body["summary"]["positions_total"], 3);
+        assert_eq!(body["summary"]["positions_valued"], 1);
+
+        cleanup_tree(&pool, &[portfolio_id], &[a1, a2, a3], &[user_id]).await;
+    }
+
+    #[tokio::test]
+    async fn holdings_unsupported_currency_persists_provenance_but_not_available() {
+        let pool = test_pool().await;
+        let handle = format!("hus{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let user_id = create_user(&pool, &handle).await;
+        let portfolio_id = create_portfolio(&pool, user_id, "Unsup Currency").await;
+        let asset = insert_asset(&pool, "USD Only", "USDO", "US8400000001", "equity").await;
+        insert_summary(&pool, portfolio_id, 50_000).await;
+        insert_holding_invested_cost_unsupported_currency(
+            &pool,
+            portfolio_id,
+            asset,
+            30_000,
+            70_000,
+            "USD",
+            Some("test-static"),
+            "2026-06-10T09:00:00Z",
+            "2026-06-10T09:00:05Z",
+        )
+        .await;
+        let app = crate::http::router(test_state(pool.clone()).await);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/portfolios/{portfolio_id}/holdings"))
+                    .header(
+                        AUTHORIZATION,
+                        format!("Bearer {}", build_access_token(user_id, &handle)),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = response_json(response).await;
+        let md = &body["holdings"][0]["market_data"];
+        assert_eq!(md["available"], false);
+        assert_eq!(md["valuation_source"], "invested_cost_fallback");
+        assert_eq!(md["status"], "unavailable");
+        assert_eq!(md["unavailable_reason"], "unsupported_market_data_currency");
+        // Incompatible provenance preserved
+        assert_eq!(md["price_minor"], 70_000);
+        assert_eq!(md["currency"], "USD");
+
+        cleanup_tree(&pool, &[portfolio_id], &[asset], &[user_id]).await;
+    }
+
+    #[tokio::test]
+    async fn summary_valuation_status_is_unavailable_when_only_incompatible_currency_rows_exist() {
+        let pool = test_pool().await;
+        let handle = format!("vui{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let user_id = create_user(&pool, &handle).await;
+        let portfolio_id = create_portfolio(&pool, user_id, "All Incompatible").await;
+        let asset_a =
+            insert_asset(&pool, "USD Only Legacy", "USDL", "US7200000001", "equity").await;
+        insert_summary(&pool, portfolio_id, 100_000).await;
+        insert_holding(
+            &pool,
+            HoldingFixture {
+                id_portfolio: portfolio_id,
+                id_asset: asset_a,
+                quantity: "1.0000000000",
+                invested_base_minor: 50_000,
+                market_value_minor: 50_000,
+                pnl_base_minor: 0,
+                pnl_pct: "0.0000",
+                weight_pct: "100.0000",
+                position_status: "open",
+                as_of: "2026-06-10T10:00:00Z",
+            },
+        )
+        .await;
+        insert_market_data(
+            &pool,
+            asset_a,
+            "test-static",
+            55_000,
+            "USD",
+            "2026-06-10T09:30:00Z",
+        )
+        .await;
+        let app = crate::http::router(test_state(pool.clone()).await);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/portfolios/{portfolio_id}/summary"))
+                    .header(
+                        AUTHORIZATION,
+                        format!("Bearer {}", build_access_token(user_id, &handle)),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("response should be built");
+        let body = response_json(response).await;
+
+        assert_eq!(body["summary"]["valuation_status"], "unavailable");
+        assert_eq!(body["summary"]["positions_total"], 1);
+        assert_eq!(body["summary"]["positions_valued"], 0);
+
+        cleanup_market_data(&pool, &[asset_a]).await;
+        cleanup_tree(&pool, &[portfolio_id], &[asset_a], &[user_id]).await;
+    }
+
+    #[tokio::test]
+    async fn summary_valuation_status_is_empty_when_no_open_positions_exist() {
+        let pool = test_pool().await;
+        let handle = format!("vse{}", &Uuid::new_v4().simple().to_string()[..12]);
+        let user_id = create_user(&pool, &handle).await;
+        let portfolio_id = create_portfolio(&pool, user_id, "Empty Val").await;
+        insert_summary(&pool, portfolio_id, 0).await;
+        let app = crate::http::router(test_state(pool.clone()).await);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/portfolios/{portfolio_id}/summary"))
+                    .header(
+                        AUTHORIZATION,
+                        format!("Bearer {}", build_access_token(user_id, &handle)),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("response should be built");
+        let body = response_json(response).await;
+
+        assert_eq!(body["summary"]["valuation_status"], "empty");
+        assert_eq!(body["summary"]["positions_total"], 0);
+        assert_eq!(body["summary"]["positions_valued"], 0);
 
         cleanup_tree(&pool, &[portfolio_id], &[], &[user_id]).await;
     }
