@@ -428,6 +428,55 @@ jobs:
             fi
           done
 
+  # ─── Migration: holding valuation provenance ────────────────────────
+  # Bootstraps the COMMITTED HEAD's `infra/postgres/init/*.sql`, inserts a
+  # representative legacy `rm_portfolio_holdings` row, then applies
+  # `infra/postgres/upgrades/003_holding_valuation_provenance.sql` twice on a
+  # disposable `kushim_test_migval_*` database created on the service
+  # container. Proves: additive ALTERs apply cleanly, idempotence holds, the
+  # five new CHECK constraints are present, every original financial field is
+  # preserved byte-for-byte, the seven new provenance columns remain NULL for
+  # legacy rows, and a forbidden provenance combination is rejected by the
+  # combination CHECK.
+  #
+  # Runs under `pwsh` (preinstalled on ubuntu-latest GitHub runners) using
+  # the script's `-CiMode` switch, which talks to the postgres service
+  # directly via PG* env vars instead of `docker exec`. The job uses its own
+  # isolated postgres service so it cannot interfere with `fresh-db-bootstrap`.
+  holding-valuation-provenance-migration:
+    name: "Existing-schema migration validation"
+    runs-on: ubuntu-latest
+    services:
+      # The service database itself is named `kushim_test_ci_admin` (matches
+      # the safety regex `^kushim_test_[A-Za-z0-9_]+$`) so that admin queries
+      # against it from the validator pass the same fail-closed check the
+      # disposable child database has to satisfy.
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: kushim
+          POSTGRES_PASSWORD: kushim_secret_dev
+          POSTGRES_DB: kushim_test_ci_admin
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U kushim"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: kushim
+      PGPASSWORD: kushim_secret_dev
+      PGDATABASE: kushim_test_ci_admin
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run holding-valuation-provenance migration validator (pwsh + CI mode)
+        shell: pwsh
+        run: pwsh -NoProfile -File ./scripts/test/validate-holding-valuation-provenance-migration.ps1 -CiMode
+
   rust-audit:
     name: "Rust advisory audit"
     runs-on: ubuntu-latest
