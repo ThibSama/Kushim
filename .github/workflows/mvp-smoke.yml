@@ -472,17 +472,74 @@ jobs:
       PGDATABASE: kushim_test_ci_admin
     steps:
       # `fetch-depth: 0` is required: the validator reads the pre-migration
-      # schema via `git show origin/main:infra/postgres/init/*.sql`, which is
-      # only resolvable when the runner has fetched main's history. The
-      # default `fetch-depth: 1` only checks out the PR's merge commit and
-      # `git show origin/main:...` would fail with "fatal: bad revision".
+      # schema via `git show <baseRef>:infra/postgres/init/*.sql`. The
+      # baseRef comes from event metadata (PR base SHA or push `before`
+      # SHA) and is only resolvable when the runner has fetched enough
+      # history. `fetch-depth: 0` keeps the full history.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
+      # Resolve the pre-migration baseline strictly from event metadata.
+      # This avoids the post-merge defect where `git merge-base HEAD
+      # origin/main` returns HEAD itself once the PR has been merged into
+      # main (HEAD == origin/main == the merge commit), and the validator
+      # would then bootstrap the post-migration schema and reject it.
+      - name: Resolve pre-migration baseline ref
+        id: baseline
+        shell: pwsh
+        run: |
+          $event = '${{ github.event_name }}'
+          Write-Host "Event: $event"
+          $baseRef = $null
+          switch ($event) {
+            'pull_request' {
+              # The PR's target-branch state BEFORE the PR commits. Stable,
+              # always resolvable, always pre-migration for a PR that
+              # introduces the migration.
+              $baseRef = '${{ github.event.pull_request.base.sha }}'
+              Write-Host "pull_request: using pull_request.base.sha = $baseRef"
+            }
+            'push' {
+              # The previous tip of the pushed ref. For a normal merge push
+              # to main, this is the pre-migration commit. GitHub may set
+              # this to all-zeros for branch creations and force-pushes —
+              # in that case fall back to HEAD^1 when HEAD is a merge.
+              $before = '${{ github.event.before }}'
+              if ($before -and $before -notmatch '^0+$') {
+                $baseRef = $before
+                Write-Host "push: using github.event.before = $baseRef"
+              } else {
+                $parent = (git rev-parse --verify --quiet 'HEAD^1' 2>$null)
+                if ($LASTEXITCODE -eq 0 -and $parent) {
+                  $baseRef = $parent.Trim()
+                  Write-Host "push: github.event.before is empty/zero, fell back to HEAD^1 = $baseRef"
+                } else {
+                  throw 'push event: github.event.before is empty/zero AND HEAD has no parent commit. Pass -BaseRef manually.'
+                }
+              }
+            }
+            default {
+              # workflow_dispatch / schedule / repository_dispatch: pick the
+              # first parent of HEAD if HEAD is a merge commit, otherwise
+              # fail with a clear remediation.
+              $parent = (git rev-parse --verify --quiet 'HEAD^1' 2>$null)
+              if ($LASTEXITCODE -eq 0 -and $parent) {
+                $baseRef = $parent.Trim()
+                Write-Host "$event: defaulting to HEAD^1 = $baseRef"
+              } else {
+                throw "$event: cannot resolve a pre-migration baseline automatically. Pass -BaseRef as an input."
+              }
+            }
+          }
+          if (-not $baseRef) {
+            throw "Failed to resolve baseRef for event $event"
+          }
+          "baseRef=$baseRef" | Out-File -Append -Encoding ascii $env:GITHUB_OUTPUT
+
       - name: Run holding-valuation-provenance migration validator (pwsh + CI mode)
         shell: pwsh
-        run: pwsh -NoProfile -File ./scripts/test/validate-holding-valuation-provenance-migration.ps1 -CiMode
+        run: pwsh -NoProfile -File ./scripts/test/validate-holding-valuation-provenance-migration.ps1 -CiMode -BaseRef '${{ steps.baseline.outputs.baseRef }}'
 
   rust-audit:
     name: "Rust advisory audit"
