@@ -106,7 +106,9 @@ impl ReadModelRebuildRepository {
                 id_asset,
                 price_minor,
                 currency,
-                as_of
+                data_source,
+                as_of,
+                updated_at
             FROM asset_market_data
             WHERE id_asset = ANY($1)
             "#,
@@ -121,6 +123,9 @@ impl ReadModelRebuildRepository {
                 id_asset: row.try_get("id_asset")?,
                 price_minor: row.try_get("price_minor")?,
                 currency: trim_currency(row.try_get::<String, _>("currency")?),
+                data_source: row.try_get::<Option<String>, _>("data_source")?,
+                as_of: row.try_get("as_of")?,
+                record_updated_at: row.try_get("updated_at")?,
             };
             market_data.insert(value.id_asset, value);
         }
@@ -167,6 +172,10 @@ impl ReadModelRebuildRepository {
         holdings: &[RebuiltPortfolioHolding],
     ) -> Result<(), WorkerError> {
         for holding in holdings {
+            // Provenance is written in the SAME row insert as the financial
+            // values — atomicity is enforced by `replace_read_models_for_portfolio`
+            // wrapping the delete + insert + summary upsert in a single
+            // transaction. No post-write second pass.
             sqlx::query(
                 r#"
                 INSERT INTO rm_portfolio_holdings (
@@ -182,7 +191,14 @@ impl ReadModelRebuildRepository {
                     weight_pct,
                     position_status,
                     is_estimated,
-                    as_of
+                    as_of,
+                    valuation_source,
+                    market_data_status,
+                    market_data_price_minor,
+                    market_data_currency,
+                    market_data_provider,
+                    market_data_as_of,
+                    market_data_record_updated_at
                 )
                 VALUES (
                     $1,
@@ -197,7 +213,14 @@ impl ReadModelRebuildRepository {
                     $10::numeric,
                     $11,
                     $12,
-                    $13
+                    $13,
+                    $14,
+                    $15,
+                    $16,
+                    $17,
+                    $18,
+                    $19,
+                    $20
                 )
                 "#,
             )
@@ -214,6 +237,13 @@ impl ReadModelRebuildRepository {
             .bind(holding.position_status)
             .bind(holding.is_estimated)
             .bind(holding.as_of)
+            .bind(holding.valuation_provenance.valuation_source.as_str())
+            .bind(holding.valuation_provenance.market_data_status.as_str())
+            .bind(holding.valuation_provenance.market_data_price_minor)
+            .bind(holding.valuation_provenance.market_data_currency.as_deref())
+            .bind(holding.valuation_provenance.market_data_provider.as_deref())
+            .bind(holding.valuation_provenance.market_data_as_of)
+            .bind(holding.valuation_provenance.market_data_record_updated_at)
             .execute(transaction.as_mut())
             .await?;
         }

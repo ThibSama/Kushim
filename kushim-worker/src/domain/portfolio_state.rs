@@ -69,6 +69,75 @@ pub struct AssetMarketValue {
     pub id_asset: Uuid,
     pub price_minor: i64,
     pub currency: String,
+    /// Provider that produced the quote (e.g. "test-static", "finnhub"). The
+    /// underlying `asset_market_data.data_source` column is nullable so this
+    /// is `Option<String>`.
+    pub data_source: Option<String>,
+    /// Market-quote timestamp reported by the provider (`asset_market_data.as_of`).
+    pub as_of: OffsetDateTime,
+    /// Wall-clock time at which the `asset_market_data` row was last written
+    /// (`asset_market_data.updated_at`). The worker captures this so the API
+    /// can expose an accurate `record_updated_at` per holding without ever
+    /// re-reading the live market-data cache.
+    pub record_updated_at: OffsetDateTime,
+}
+
+/// Stable persisted value for `rm_portfolio_holdings.valuation_source`.
+/// `as_str` returns the exact varchar stored in PostgreSQL.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ValuationSource {
+    MarketData,
+    InvestedCostFallback,
+}
+
+impl ValuationSource {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::MarketData => "market_data",
+            Self::InvestedCostFallback => "invested_cost_fallback",
+        }
+    }
+}
+
+/// Stable persisted value for `rm_portfolio_holdings.market_data_status`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MarketDataStatus {
+    Available,
+    Missing,
+    UnsupportedCurrency,
+}
+
+impl MarketDataStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Available => "available",
+            Self::Missing => "missing",
+            Self::UnsupportedCurrency => "unsupported_currency",
+        }
+    }
+}
+
+/// Snapshot of the exact market-data row that the worker consumed (or
+/// rejected) when computing a holding. Persisted alongside the holding so the
+/// API can expose provenance without ever re-reading `asset_market_data`.
+///
+/// Combinations honour the database CHECK constraint
+/// `chk_rm_portfolio_holdings_provenance_combination`:
+///
+/// - `MarketData` + `Available`         → all `market_data` fields populated.
+/// - `InvestedCostFallback` + `Missing` → all `market_data` fields `None`.
+/// - `InvestedCostFallback` + `UnsupportedCurrency` → all `market_data`
+///   fields populated (the incompatible row is preserved verbatim for
+///   transparency).
+#[derive(Debug, Clone)]
+pub struct HoldingValuationProvenance {
+    pub valuation_source: ValuationSource,
+    pub market_data_status: MarketDataStatus,
+    pub market_data_price_minor: Option<i64>,
+    pub market_data_currency: Option<String>,
+    pub market_data_provider: Option<String>,
+    pub market_data_as_of: Option<OffsetDateTime>,
+    pub market_data_record_updated_at: Option<OffsetDateTime>,
 }
 
 #[derive(Debug, Clone)]
@@ -118,6 +187,10 @@ pub struct RebuiltPortfolioHolding {
     pub position_status: &'static str,
     pub is_estimated: bool,
     pub as_of: OffsetDateTime,
+    /// Captured at rebuild time so the API can expose the exact market-data
+    /// version that produced `market_value_minor` without ever joining the
+    /// live `asset_market_data` cache.
+    pub valuation_provenance: HoldingValuationProvenance,
 }
 
 #[derive(Debug, Clone)]
@@ -287,6 +360,17 @@ impl PortfolioState {
 
             let mut market_value_minor = 0_i128;
             let mut holding_is_estimated = self.estimated_assets.contains(id_asset);
+            // Provenance defaults to "missing" — overwritten below when the
+            // worker actually finds a row, even an incompatible one.
+            let mut provenance = HoldingValuationProvenance {
+                valuation_source: ValuationSource::InvestedCostFallback,
+                market_data_status: MarketDataStatus::Missing,
+                market_data_price_minor: None,
+                market_data_currency: None,
+                market_data_provider: None,
+                market_data_as_of: None,
+                market_data_record_updated_at: None,
+            };
 
             if let Some(market_value) = market_data.get(id_asset) {
                 if market_value.currency.trim() == self.portfolio.base_currency {
@@ -294,11 +378,35 @@ impl PortfolioState {
                         i128::from(market_value.price_minor),
                         position.quantity_scaled,
                     );
+                    // Successful valuation: capture the exact inputs used.
+                    provenance = HoldingValuationProvenance {
+                        valuation_source: ValuationSource::MarketData,
+                        market_data_status: MarketDataStatus::Available,
+                        market_data_price_minor: Some(market_value.price_minor),
+                        market_data_currency: Some(market_value.currency.trim().to_string()),
+                        market_data_provider: market_value.data_source.clone(),
+                        market_data_as_of: Some(market_value.as_of),
+                        market_data_record_updated_at: Some(market_value.record_updated_at),
+                    };
                 } else {
                     holding_is_estimated = true;
+                    // Row exists but currency does not match — fallback to
+                    // invested cost AND preserve the incompatible row's
+                    // provenance so the API can surface it explicitly.
+                    provenance = HoldingValuationProvenance {
+                        valuation_source: ValuationSource::InvestedCostFallback,
+                        market_data_status: MarketDataStatus::UnsupportedCurrency,
+                        market_data_price_minor: Some(market_value.price_minor),
+                        market_data_currency: Some(market_value.currency.trim().to_string()),
+                        market_data_provider: market_value.data_source.clone(),
+                        market_data_as_of: Some(market_value.as_of),
+                        market_data_record_updated_at: Some(market_value.record_updated_at),
+                    };
                 }
             } else {
                 holding_is_estimated = true;
+                // provenance stays at the Missing default — no fabricated
+                // provider / timestamp.
             }
 
             // Deterministic fallback when no compatible live price is available:
@@ -343,6 +451,7 @@ impl PortfolioState {
                     position_status: "open",
                     is_estimated: holding_is_estimated,
                     as_of,
+                    valuation_provenance: provenance,
                 },
             ));
         }
@@ -656,6 +765,163 @@ mod tests {
         assert_eq!(format_scaled(105000000000, 10), "10.5000000000");
     }
 
+    // -----------------------------------------------------------------
+    // Valuation-provenance unit tests (Phase 7).
+    // Exercise `finalize` directly and assert the per-holding
+    // `valuation_provenance` snapshot matches the documented contract
+    // for the three combinations enforced by the database CHECK.
+    // -----------------------------------------------------------------
+
+    fn build_buy(state: &mut PortfolioState, asset: Uuid, quantity: &str, cash: i64) {
+        let mut deposit = operation(OperationType::Deposit);
+        deposit.cash_amount_minor = cash * 10; // generous deposit
+        state.apply(&deposit).unwrap();
+        let mut buy = operation(OperationType::Buy);
+        buy.id_asset = Some(asset);
+        buy.quantity = Some(quantity.into());
+        buy.cash_amount_minor = cash;
+        state.apply(&buy).unwrap();
+    }
+
+    #[test]
+    fn provenance_compatible_price_captures_exact_inputs() {
+        let mut state = portfolio_state();
+        let asset = Uuid::new_v4();
+        build_buy(&mut state, asset, "2.0000000000", 1_000);
+
+        let fixed = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+        let mut market_data = HashMap::new();
+        market_data.insert(
+            asset,
+            AssetMarketValue {
+                id_asset: asset,
+                price_minor: 600,
+                currency: "EUR".into(),
+                data_source: Some("finnhub".into()),
+                as_of: fixed,
+                record_updated_at: fixed + time::Duration::seconds(5),
+            },
+        );
+
+        let rebuilt = state
+            .finalize(&market_data, OffsetDateTime::now_utc())
+            .unwrap();
+        let p = &rebuilt.holdings[0].valuation_provenance;
+        assert_eq!(p.valuation_source.as_str(), "market_data");
+        assert_eq!(p.market_data_status.as_str(), "available");
+        assert_eq!(p.market_data_price_minor, Some(600));
+        assert_eq!(p.market_data_currency.as_deref(), Some("EUR"));
+        assert_eq!(p.market_data_provider.as_deref(), Some("finnhub"));
+        assert_eq!(p.market_data_as_of, Some(fixed));
+        assert_eq!(
+            p.market_data_record_updated_at,
+            Some(fixed + time::Duration::seconds(5))
+        );
+        // Compatible price was actually used:
+        assert_eq!(rebuilt.holdings[0].market_value_minor, 1_200);
+    }
+
+    #[test]
+    fn provenance_missing_price_falls_back_with_null_provenance() {
+        let mut state = portfolio_state();
+        let asset = Uuid::new_v4();
+        build_buy(&mut state, asset, "1.0000000000", 500);
+
+        let market_data: HashMap<Uuid, AssetMarketValue> = HashMap::new();
+        let rebuilt = state
+            .finalize(&market_data, OffsetDateTime::now_utc())
+            .unwrap();
+        let p = &rebuilt.holdings[0].valuation_provenance;
+        assert_eq!(p.valuation_source.as_str(), "invested_cost_fallback");
+        assert_eq!(p.market_data_status.as_str(), "missing");
+        assert!(p.market_data_price_minor.is_none());
+        assert!(p.market_data_currency.is_none());
+        assert!(p.market_data_provider.is_none());
+        assert!(p.market_data_as_of.is_none());
+        assert!(p.market_data_record_updated_at.is_none());
+        // Fallback in effect:
+        assert_eq!(
+            rebuilt.holdings[0].market_value_minor,
+            rebuilt.holdings[0].invested_base_minor
+        );
+        assert!(rebuilt.holdings[0].is_estimated);
+    }
+
+    #[test]
+    fn provenance_incompatible_currency_persists_visible_provenance_with_fallback() {
+        let mut state = portfolio_state();
+        let asset = Uuid::new_v4();
+        build_buy(&mut state, asset, "1.0000000000", 500);
+
+        let fixed = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+        let mut market_data = HashMap::new();
+        market_data.insert(
+            asset,
+            AssetMarketValue {
+                id_asset: asset,
+                price_minor: 99_999,
+                currency: "USD".into(), // portfolio is EUR
+                data_source: Some("finnhub".into()),
+                as_of: fixed,
+                record_updated_at: fixed,
+            },
+        );
+
+        let rebuilt = state
+            .finalize(&market_data, OffsetDateTime::now_utc())
+            .unwrap();
+        let p = &rebuilt.holdings[0].valuation_provenance;
+        assert_eq!(p.valuation_source.as_str(), "invested_cost_fallback");
+        assert_eq!(p.market_data_status.as_str(), "unsupported_currency");
+        // Incompatible row's provenance must remain visible:
+        assert_eq!(p.market_data_price_minor, Some(99_999));
+        assert_eq!(p.market_data_currency.as_deref(), Some("USD"));
+        assert_eq!(p.market_data_provider.as_deref(), Some("finnhub"));
+        // But the value falls back to invested cost:
+        assert_eq!(
+            rebuilt.holdings[0].market_value_minor,
+            rebuilt.holdings[0].invested_base_minor
+        );
+        assert!(rebuilt.holdings[0].is_estimated);
+    }
+
+    #[test]
+    fn provenance_is_deterministic_under_identical_inputs() {
+        // Two finalisations from identical state must produce identical
+        // valuation provenance bytes — proves the worker captures inputs
+        // deterministically rather than reading `now()` into provenance.
+        let mut state_a = portfolio_state();
+        let mut state_b = portfolio_state();
+        let asset = Uuid::new_v4();
+        build_buy(&mut state_a, asset, "1.0000000000", 500);
+        build_buy(&mut state_b, asset, "1.0000000000", 500);
+
+        let fixed = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+        let value = AssetMarketValue {
+            id_asset: asset,
+            price_minor: 1_000,
+            currency: "EUR".into(),
+            data_source: Some("finnhub".into()),
+            as_of: fixed,
+            record_updated_at: fixed,
+        };
+        let mut md_a = HashMap::new();
+        md_a.insert(asset, value.clone());
+        let mut md_b = HashMap::new();
+        md_b.insert(asset, value);
+
+        let r_a = state_a.finalize(&md_a, OffsetDateTime::now_utc()).unwrap();
+        let r_b = state_b.finalize(&md_b, OffsetDateTime::now_utc()).unwrap();
+        assert_eq!(
+            r_a.holdings[0].valuation_provenance.market_data_as_of,
+            r_b.holdings[0].valuation_provenance.market_data_as_of
+        );
+        assert_eq!(
+            r_a.holdings[0].valuation_provenance.market_data_price_minor,
+            r_b.holdings[0].valuation_provenance.market_data_price_minor
+        );
+    }
+
     #[test]
     fn deposit_increases_cash() {
         let mut state = portfolio_state();
@@ -710,6 +976,9 @@ mod tests {
                 id_asset: asset,
                 price_minor: 600,
                 currency: "EUR".into(),
+                data_source: Some("test-fixture".into()),
+                as_of: OffsetDateTime::UNIX_EPOCH,
+                record_updated_at: OffsetDateTime::UNIX_EPOCH,
             },
         );
 
@@ -923,6 +1192,9 @@ mod tests {
                 id_asset: asset,
                 price_minor: 50_000,
                 currency: "USD".into(),
+                data_source: Some("test-fixture".into()),
+                as_of: OffsetDateTime::UNIX_EPOCH,
+                record_updated_at: OffsetDateTime::UNIX_EPOCH,
             },
         );
 
@@ -982,6 +1254,9 @@ mod tests {
                 id_asset: aapl,
                 price_minor: 19_523,
                 currency: "USD".into(),
+                data_source: Some("test-fixture".into()),
+                as_of: OffsetDateTime::UNIX_EPOCH,
+                record_updated_at: OffsetDateTime::UNIX_EPOCH,
             },
         );
         market_data.insert(
@@ -990,6 +1265,9 @@ mod tests {
                 id_asset: msft,
                 price_minor: 42_150,
                 currency: "USD".into(),
+                data_source: Some("test-fixture".into()),
+                as_of: OffsetDateTime::UNIX_EPOCH,
+                record_updated_at: OffsetDateTime::UNIX_EPOCH,
             },
         );
 
@@ -1058,6 +1336,9 @@ mod tests {
                 id_asset: asset_a,
                 price_minor: 400,
                 currency: "EUR".into(),
+                data_source: Some("test-fixture".into()),
+                as_of: OffsetDateTime::UNIX_EPOCH,
+                record_updated_at: OffsetDateTime::UNIX_EPOCH,
             },
         );
         market_data.insert(
@@ -1066,6 +1347,9 @@ mod tests {
                 id_asset: asset_b,
                 price_minor: 700,
                 currency: "EUR".into(),
+                data_source: Some("test-fixture".into()),
+                as_of: OffsetDateTime::UNIX_EPOCH,
+                record_updated_at: OffsetDateTime::UNIX_EPOCH,
             },
         );
 

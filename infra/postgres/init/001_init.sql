@@ -703,6 +703,20 @@ CREATE TABLE rm_portfolio_holdings (
     is_estimated boolean NOT NULL DEFAULT false,
     as_of timestamptz NOT NULL,
     updated_at timestamptz NOT NULL DEFAULT now(),
+    -- ----------------------------------------------------------------------
+    -- Valuation provenance (persisted by `kushim-worker` atomically with the
+    -- holding value). Nullable for legacy rows created before the migration;
+    -- new rows written by the updated worker MUST populate both
+    -- `valuation_source` and `market_data_status`. The API treats legacy
+    -- NULLs as `valuation_provenance_missing`. See
+    -- `documentation/architecture/market-data-quality-contract.md`.
+    valuation_source varchar(32),
+    market_data_status varchar(32),
+    market_data_price_minor bigint,
+    market_data_currency char(3),
+    market_data_provider varchar(50),
+    market_data_as_of timestamptz,
+    market_data_record_updated_at timestamptz,
     CONSTRAINT fk_rm_portfolio_holdings_portfolio_id_portfolio
         FOREIGN KEY (id_portfolio) REFERENCES portfolios (id_portfolio) ON DELETE CASCADE,
     CONSTRAINT fk_rm_portfolio_holdings_asset_id_asset
@@ -717,7 +731,53 @@ CREATE TABLE rm_portfolio_holdings (
     CONSTRAINT chk_rm_portfolio_holdings_position_status
         CHECK (position_status IN ('open', 'closed')),
     CONSTRAINT chk_rm_portfolio_holdings_weight_pct_range
-        CHECK (weight_pct IS NULL OR (weight_pct >= 0 AND weight_pct <= 100))
+        CHECK (weight_pct IS NULL OR (weight_pct >= 0 AND weight_pct <= 100)),
+    CONSTRAINT chk_rm_portfolio_holdings_valuation_source CHECK (
+        valuation_source IS NULL
+        OR valuation_source IN ('market_data', 'invested_cost_fallback')
+    ),
+    CONSTRAINT chk_rm_portfolio_holdings_market_data_status CHECK (
+        market_data_status IS NULL
+        OR market_data_status IN ('available', 'missing', 'unsupported_currency')
+    ),
+    CONSTRAINT chk_rm_portfolio_holdings_md_price_non_negative CHECK (
+        market_data_price_minor IS NULL OR market_data_price_minor >= 0
+    ),
+    CONSTRAINT chk_rm_portfolio_holdings_md_currency_format CHECK (
+        market_data_currency IS NULL OR market_data_currency ~ '^[A-Z]{3}$'
+    ),
+    -- A row's provenance must be consistent: either fully legacy (both NULL),
+    -- or one of the three documented combinations. `market_data_provider` is
+    -- allowed to be NULL even when status='available' because
+    -- `asset_market_data.data_source` itself is nullable.
+    CONSTRAINT chk_rm_portfolio_holdings_provenance_combination CHECK (
+        (valuation_source IS NULL AND market_data_status IS NULL)
+        OR (
+            valuation_source = 'market_data'
+            AND market_data_status = 'available'
+            AND market_data_price_minor IS NOT NULL
+            AND market_data_currency IS NOT NULL
+            AND market_data_as_of IS NOT NULL
+            AND market_data_record_updated_at IS NOT NULL
+        )
+        OR (
+            valuation_source = 'invested_cost_fallback'
+            AND market_data_status = 'missing'
+            AND market_data_price_minor IS NULL
+            AND market_data_currency IS NULL
+            AND market_data_provider IS NULL
+            AND market_data_as_of IS NULL
+            AND market_data_record_updated_at IS NULL
+        )
+        OR (
+            valuation_source = 'invested_cost_fallback'
+            AND market_data_status = 'unsupported_currency'
+            AND market_data_price_minor IS NOT NULL
+            AND market_data_currency IS NOT NULL
+            AND market_data_as_of IS NOT NULL
+            AND market_data_record_updated_at IS NOT NULL
+        )
+    )
 );
 
 CREATE INDEX idx_rm_portfolio_holdings_portfolio_weight
