@@ -37,23 +37,35 @@
     reads `infra/postgres/init/*.sql` from that ref to bootstrap the old
     schema.
 
-    Resolution order when not explicitly provided:
+    This script is bound to **migration 003**
+    (`infra/postgres/upgrades/003_holding_valuation_provenance.sql`). Its
+    correct pre-migration baseline is therefore **immutable**: the commit
+    that was the head of `main` immediately before migration 003 was
+    introduced. That commit is `bcf8a009e1e7147f02335bfb1a676ad3c2dd84e8`
+    and is hard-coded in `$Migration003BaselineRef` below.
 
-      1. `-BaseRef <commit>` passed by the caller.
-      2. CI passes the event-specific ref explicitly:
-           * `pull_request` -> `github.event.pull_request.base.sha`
-           * `push`         -> `github.event.before` (falls back to HEAD^1
-                               on the zero SHA edge case)
-      3. Local manual fallback: `HEAD^1`, ONLY when HEAD is a merge
-         commit (i.e. has a first parent that differs from itself).
-      4. Otherwise throw with explicit remediation.
+    Resolution order:
 
-    `git merge-base HEAD origin/main` is NOT a safe default: once the PR
-    has been merged into main, HEAD and origin/main both point to the
-    merge commit, so the merge-base returns HEAD itself (the
-    post-migration schema). The validator now rejects any candidate
-    whose `infra/postgres/init/001_init.sql` already contains the seven
-    provenance columns, before creating the disposable database.
+      1. `-BaseRef <commit>` passed by the caller (manual override / diag).
+      2. Otherwise the migration-003 immutable baseline.
+
+    NO topology-based fallback is ever used. Specifically, the validator
+    NEVER consults:
+        - `HEAD`, `HEAD^1`
+        - `git merge-base HEAD origin/main`
+        - `github.event.pull_request.base.sha`
+        - `github.event.before`
+    Once migration 003 is on main, all of those degenerate to a
+    post-migration commit and would silently invalidate the test. The
+    content guard would still catch it, but the right answer for a
+    migration-specific historical validator is to pin the baseline at the
+    migration's pre-image.
+
+    The content guard (`infra/postgres/init/001_init.sql` at the chosen
+    ref must contain zero provenance column declarations) still runs and
+    rejects any candidate that is already post-migration, regardless of
+    how it was selected — this protects against an operator passing a
+    bad `-BaseRef`.
 
 .EXAMPLE
     # Local developer (Docker Desktop, uncommitted WIP):
@@ -75,35 +87,21 @@ param(
     [string]$BaseRef = ''
 )
 
-# Resolve $BaseRef when the caller did not pass one explicitly. CI is
-# expected to ALWAYS pass it (derived from event metadata in the workflow);
-# this local fallback is for manual operator runs only and is deliberately
-# narrow: HEAD^1 if HEAD is a merge commit, otherwise stop.
-#
-# We DO NOT silently fall back to `git merge-base HEAD origin/main`: once a
-# PR has merged into main, HEAD == origin/main == the merge commit, and the
-# merge-base returns HEAD itself (the post-migration schema). This was the
-# root cause of the post-merge CI regression.
+# --------------------------------------------------------------------------
+# IMMUTABLE BASELINE for migration 003.
+# This is the commit that was the head of `main` immediately before
+# `infra/postgres/upgrades/003_holding_valuation_provenance.sql` was added.
+# It does not depend on the current branch, the current event, or whether
+# the migration has been merged. Updating this value requires editing this
+# script — that's intentional: the validator is migration-003-specific and
+# the baseline is part of its contract.
+# --------------------------------------------------------------------------
+$Migration003BaselineRef = 'bcf8a009e1e7147f02335bfb1a676ad3c2dd84e8'
+
 $repoRootInit = (Resolve-Path "$PSScriptRoot\..\..").Path
 if ([string]::IsNullOrWhiteSpace($BaseRef)) {
-    $headSha = ((git -C $repoRootInit rev-parse HEAD 2>$null) -join '').Trim()
-    $parent  = ((git -C $repoRootInit rev-parse --verify --quiet 'HEAD^1' 2>$null) -join '').Trim()
-    if ($LASTEXITCODE -eq 0 -and $parent -and $parent -ne $headSha) {
-        $BaseRef = $parent
-        Write-Host "[validator] BaseRef defaulted to HEAD^1 = $BaseRef (HEAD is a merge commit at $headSha)"
-    } else {
-        throw @"
-Could not resolve a pre-migration baseline ref automatically.
-HEAD ($headSha) is not a merge commit, so HEAD^1 is not a meaningful
-pre-migration snapshot.
-
-Remediation options:
-  * Pass -BaseRef <commit> explicitly (e.g. `git rev-parse origin/main~1`).
-  * In CI, derive the baseline from event metadata
-    (github.event.pull_request.base.sha or github.event.before) and pass
-    it as -BaseRef.
-"@
-    }
+    $BaseRef = $Migration003BaselineRef
+    Write-Host "[validator] BaseRef defaulted to Migration003BaselineRef = $BaseRef"
 }
 
 # Resolve the ref to a stable SHA and reject candidates that are already
@@ -131,19 +129,24 @@ if ($alreadyPresent -gt 0) {
     throw @"
 BaseRef '$BaseRef' ($resolvedSha) ALREADY contains $alreadyPresent provenance column declaration(s) in infra/postgres/init/001_init.sql.
 
-This is NOT a pre-migration baseline. The validator refuses to use it
-because bootstrapping it would mask whatever the upgrade is supposed to
-add, and the post-migration assertions would also fail or be vacuous.
+This is NOT a pre-migration baseline for migration 003. The validator
+refuses to use it because bootstrapping it would mask whatever the
+upgrade is supposed to add, and the post-migration assertions would
+also fail or be vacuous.
 
-Most common cause: a CI step computed the baseline as
-``git merge-base HEAD origin/main`` *after* the PR was merged. Once the
-merge commit is on main, HEAD and origin/main are the same commit and
-the merge-base degenerates to HEAD.
+This script is migration-003-specific. Its baseline is the IMMUTABLE
+commit pinned at $Migration003BaselineRef -- set deliberately so it
+cannot drift as main moves forward.
 
 Remediation:
-  * pull_request event -> use github.event.pull_request.base.sha
-  * push event         -> use github.event.before (or HEAD^1 if zero)
-  * manual / local     -> pass -BaseRef <pre-migration-commit>
+  * Most operators: run without -BaseRef so the immutable baseline is
+    used.
+  * Diagnostic / manual override: pass -BaseRef <pre-migration commit>
+    where the chosen commit's infra/postgres/init/001_init.sql does
+    NOT yet contain the seven provenance columns.
+  * Do NOT pass HEAD, HEAD^1, origin/main, or any derivative of the
+    current branch topology -- once migration 003 is on main, those
+    refs are all post-migration.
 "@
 }
 Write-Host "[validator] BaseRef content check: 0 provenance column declarations (pre-migration confirmed)."
