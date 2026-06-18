@@ -37,18 +37,35 @@
     reads `infra/postgres/init/*.sql` from that ref to bootstrap the old
     schema.
 
-    Default: `git merge-base HEAD origin/main` — the divergence point of
-    the current branch from main. This is the right baseline both locally
-    AND in CI: it's the commit on main that pre-dates the migration being
-    proposed by this branch.
+    This script is bound to **migration 003**
+    (`infra/postgres/upgrades/003_holding_valuation_provenance.sql`). Its
+    correct pre-migration baseline is therefore **immutable**: the commit
+    that was the head of `main` immediately before migration 003 was
+    introduced. That commit is `bcf8a009e1e7147f02335bfb1a676ad3c2dd84e8`
+    and is hard-coded in `$Migration003BaselineRef` below.
 
-    Caveats:
-      * `origin/main` must be reachable. CI sets `fetch-depth: 0` so
-        history is complete. Locally you may need `git fetch origin main`
-        once if the clone is shallow.
-      * If you really want to validate against an uncommitted WIP only
-        (no committed migration yet on the branch), pass `-BaseRef HEAD`
-        explicitly.
+    Resolution order:
+
+      1. `-BaseRef <commit>` passed by the caller (manual override / diag).
+      2. Otherwise the migration-003 immutable baseline.
+
+    NO topology-based fallback is ever used. Specifically, the validator
+    NEVER consults:
+        - `HEAD`, `HEAD^1`
+        - `git merge-base HEAD origin/main`
+        - `github.event.pull_request.base.sha`
+        - `github.event.before`
+    Once migration 003 is on main, all of those degenerate to a
+    post-migration commit and would silently invalidate the test. The
+    content guard would still catch it, but the right answer for a
+    migration-specific historical validator is to pin the baseline at the
+    migration's pre-image.
+
+    The content guard (`infra/postgres/init/001_init.sql` at the chosen
+    ref must contain zero provenance column declarations) still runs and
+    rejects any candidate that is already post-migration, regardless of
+    how it was selected — this protects against an operator passing a
+    bad `-BaseRef`.
 
 .EXAMPLE
     # Local developer (Docker Desktop, uncommitted WIP):
@@ -70,30 +87,69 @@ param(
     [string]$BaseRef = ''
 )
 
-# Pick a sane default for $BaseRef when the caller did not specify one.
-# The migration being validated has typically already been committed on the
-# branch (locally OR in CI on a PR branch), so HEAD = post-migration in both
-# environments. The pre-migration baseline is the divergence point with main
-# (`git merge-base HEAD origin/main`). If `origin/main` is not reachable
-# (shallow clone with no fetch yet), we fall back to plain `main`, then
-# bail out with a remediation hint if neither resolves.
+# --------------------------------------------------------------------------
+# IMMUTABLE BASELINE for migration 003.
+# This is the commit that was the head of `main` immediately before
+# `infra/postgres/upgrades/003_holding_valuation_provenance.sql` was added.
+# It does not depend on the current branch, the current event, or whether
+# the migration has been merged. Updating this value requires editing this
+# script — that's intentional: the validator is migration-003-specific and
+# the baseline is part of its contract.
+# --------------------------------------------------------------------------
+$Migration003BaselineRef = 'bcf8a009e1e7147f02335bfb1a676ad3c2dd84e8'
+
 $repoRootInit = (Resolve-Path "$PSScriptRoot\..\..").Path
 if ([string]::IsNullOrWhiteSpace($BaseRef)) {
-    foreach ($candidate in @('origin/main', 'main')) {
-        $resolved = (git -C $repoRootInit rev-parse --verify --quiet "$candidate" 2>$null) -join ''
-        if ($LASTEXITCODE -eq 0 -and $resolved) {
-            $mergeBase = (git -C $repoRootInit merge-base HEAD $candidate 2>$null) -join ''
-            if ($LASTEXITCODE -eq 0 -and $mergeBase) {
-                $BaseRef = $mergeBase.Trim()
-                Write-Host "[validator] BaseRef defaulted to merge-base(HEAD, $candidate) = $BaseRef"
-                break
-            }
-        }
-    }
-    if ([string]::IsNullOrWhiteSpace($BaseRef)) {
-        throw "Could not resolve a baseline ref. Run ``git fetch origin main`` and retry, or pass -BaseRef explicitly."
-    }
+    $BaseRef = $Migration003BaselineRef
+    Write-Host "[validator] BaseRef defaulted to Migration003BaselineRef = $BaseRef"
 }
+
+# Resolve the ref to a stable SHA and reject candidates that are already
+# post-migration. The content check reads `infra/postgres/init/001_init.sql`
+# from $BaseRef and looks for the seven provenance column NAMES. This is
+# safer than relying solely on commit topology, which can lie after merges,
+# rebases, force-pushes, or when -BaseRef is misused.
+$resolvedSha = ((git -C $repoRootInit rev-parse --verify "$BaseRef" 2>$null) -join '').Trim()
+if ($LASTEXITCODE -ne 0 -or -not $resolvedSha) {
+    throw "BaseRef '$BaseRef' does not resolve to any commit. Run ``git fetch`` and retry, or pass a different -BaseRef."
+}
+Write-Host "[validator] BaseRef = $BaseRef (resolved SHA = $resolvedSha)"
+
+$candidateInit = (git -C $repoRootInit show "${BaseRef}:infra/postgres/init/001_init.sql" 2>&1) -join "`n"
+if ($LASTEXITCODE -ne 0) {
+    throw "Cannot read infra/postgres/init/001_init.sql from BaseRef '$BaseRef': $candidateInit"
+}
+# Match a *column definition* (column name followed by a SQL type keyword
+# at the start of a line), not arbitrary mentions of these names elsewhere
+# in the file. This avoids false positives if the names appear as
+# comments, strings or CHECK constraint expressions.
+$provenanceColumnPattern = '(?m)^\s+(valuation_source|market_data_status|market_data_price_minor|market_data_currency|market_data_provider|market_data_as_of|market_data_record_updated_at)\s+(varchar|bigint|char|timestamptz)'
+$alreadyPresent = ([regex]::Matches($candidateInit, $provenanceColumnPattern)).Count
+if ($alreadyPresent -gt 0) {
+    throw @"
+BaseRef '$BaseRef' ($resolvedSha) ALREADY contains $alreadyPresent provenance column declaration(s) in infra/postgres/init/001_init.sql.
+
+This is NOT a pre-migration baseline for migration 003. The validator
+refuses to use it because bootstrapping it would mask whatever the
+upgrade is supposed to add, and the post-migration assertions would
+also fail or be vacuous.
+
+This script is migration-003-specific. Its baseline is the IMMUTABLE
+commit pinned at $Migration003BaselineRef -- set deliberately so it
+cannot drift as main moves forward.
+
+Remediation:
+  * Most operators: run without -BaseRef so the immutable baseline is
+    used.
+  * Diagnostic / manual override: pass -BaseRef <pre-migration commit>
+    where the chosen commit's infra/postgres/init/001_init.sql does
+    NOT yet contain the seven provenance columns.
+  * Do NOT pass HEAD, HEAD^1, origin/main, or any derivative of the
+    current branch topology -- once migration 003 is on main, those
+    refs are all post-migration.
+"@
+}
+Write-Host "[validator] BaseRef content check: 0 provenance column declarations (pre-migration confirmed)."
 
 $ErrorActionPreference = 'Stop'
 

@@ -443,6 +443,23 @@ jobs:
   # the script's `-CiMode` switch, which talks to the postgres service
   # directly via PG* env vars instead of `docker exec`. The job uses its own
   # isolated postgres service so it cannot interfere with `fresh-db-bootstrap`.
+  #
+  # IMMUTABLE BASELINE — Migration 003 specifically.
+  # The validator must bootstrap the schema that existed *immediately before*
+  # `infra/postgres/upgrades/003_holding_valuation_provenance.sql` was added.
+  # That commit is `bcf8a009...` (the merge of PR #7 into main, which was
+  # the head of main right before PR #8 introduced migration 003).
+  #
+  # Earlier hotfixes tried to derive this baseline from
+  # `git merge-base HEAD origin/main` and later from event metadata
+  # (`github.event.pull_request.base.sha`, `github.event.before`). Both
+  # approaches break the moment migration 003 itself is part of main:
+  #   * merge-base degenerates to the merge commit (post-migration);
+  #   * event refs on a hotfix PR opened against current main point to a
+  #     main tip that already contains migration 003.
+  # The schema-content guard then correctly rejects the resulting baseline,
+  # but for the wrong reason. The right answer for a migration-specific
+  # validator is an immutable migration-specific baseline, set here.
   holding-valuation-provenance-migration:
     name: "Existing-schema migration validation"
     runs-on: ubuntu-latest
@@ -470,19 +487,26 @@ jobs:
       PGUSER: kushim
       PGPASSWORD: kushim_secret_dev
       PGDATABASE: kushim_test_ci_admin
+      # Immutable pre-migration baseline for migration
+      # `infra/postgres/upgrades/003_holding_valuation_provenance.sql`.
+      # Identical on every event (pull_request, push, workflow_dispatch,
+      # schedule). Never derived from current branch topology.
+      HOLDING_VALUATION_PROVENANCE_BASE_REF: bcf8a009e1e7147f02335bfb1a676ad3c2dd84e8
     steps:
       # `fetch-depth: 0` is required: the validator reads the pre-migration
-      # schema via `git show origin/main:infra/postgres/init/*.sql`, which is
-      # only resolvable when the runner has fetched main's history. The
-      # default `fetch-depth: 1` only checks out the PR's merge commit and
-      # `git show origin/main:...` would fail with "fatal: bad revision".
+      # schema via `git show $HOLDING_VALUATION_PROVENANCE_BASE_REF:...` and
+      # that commit may be older than the default shallow checkout depth.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Run holding-valuation-provenance migration validator (pwsh + CI mode)
         shell: pwsh
-        run: pwsh -NoProfile -File ./scripts/test/validate-holding-valuation-provenance-migration.ps1 -CiMode
+        run: >
+          pwsh -NoProfile
+          -File ./scripts/test/validate-holding-valuation-provenance-migration.ps1
+          -CiMode
+          -BaseRef $env:HOLDING_VALUATION_PROVENANCE_BASE_REF
 
   rust-audit:
     name: "Rust advisory audit"
