@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from 'react';
-import { Terminal, Layers, Calculator, Shield, Check, Lock, ShieldCheck } from 'lucide-react';
+import { Terminal, Layers, Calculator, Shield, Check, Database, ShieldCheck } from 'lucide-react';
 import { Card } from '../components/Card';
 import { Button } from '../components/Button';
 import { Badge } from '../components/Badge';
@@ -16,8 +16,8 @@ const perfData = [
 
 const allocData = [
   { name: 'Actions', value: 42, color: '#60A5FA' },
-  { name: 'Crypto', value: 28, color: '#A78BFA' },
-  { name: 'ETF', value: 20, color: '#FBBF24' },
+  { name: 'ETF', value: 28, color: '#A78BFA' },
+  { name: 'Liquidités', value: 20, color: '#FBBF24' },
   { name: 'Autre', value: 10, color: '#71717A' },
 ];
 
@@ -116,7 +116,7 @@ export function Landing() {
               color: 'var(--text-secondary)',
             }}
           >
-            Kushim est l'outil de suivi patrimonial indépendant. Multi-actifs. Transparent. Sans compromis.
+            Centralisez vos portefeuilles, vos positions et leurs valorisations estimées dans une interface claire et indépendante.
           </p>
 
           <div
@@ -152,7 +152,7 @@ export function Landing() {
             <HeroCard delay={0}>
               <div className="flex flex-col h-full" style={{ minHeight: 'clamp(240px, 35vw, 280px)' }}>
                 <span style={{ fontSize: 'clamp(12px, 2vw, 13px)', fontWeight: 500, color: 'var(--text-secondary)' }}>
-                  Macro Performance
+                  Évolution estimée
                 </span>
                 <div ref={perfChart.ref} className="flex-1 mt-4 mb-4" style={{ minHeight: 'clamp(120px, 20vw, 140px)' }}>
                   {chartsReady && perfChart.size.width > 0 && perfChart.size.height > 0 && (
@@ -231,15 +231,15 @@ export function Landing() {
                 </div>
               </HeroCard>
 
-              {/* Zero-Knowledge */}
+              {/* Data model */}
               <HeroCard delay={220}>
                 <div className="flex flex-col gap-1">
                   <span style={{ fontSize: 'clamp(13px, 2vw, 14px)', fontWeight: 600, color: 'var(--text-primary)' }}>
-                    Zero-Knowledge
+                    Données centralisées
                   </span>
                   <span className="flex items-center gap-1.5" style={{ fontSize: 'clamp(11px, 2vw, 12px)', color: 'var(--text-tertiary)' }}>
-                    <Lock size={12} />
-                    Encrypted Vault
+                    <Database size={12} />
+                    Portefeuilles et positions
                   </span>
                 </div>
               </HeroCard>
@@ -285,7 +285,7 @@ export function Landing() {
                   color: 'var(--text-secondary)',
                 }}
               >
-                Regroupez vos actions, cryptos et ETF dans un espace unifié.
+                Créez plusieurs portefeuilles et consultez leurs positions dans un espace unifié.
               </p>
             </Card>
 
@@ -305,7 +305,7 @@ export function Landing() {
                   color: 'var(--text-primary)',
                 }}
               >
-                Calculs au centime
+                Valorisation lisible
               </h3>
               <p
                 style={{
@@ -314,7 +314,7 @@ export function Landing() {
                   color: 'var(--text-secondary)',
                 }}
               >
-                Architecture transactionnelle. Chaque calcul est traçable et vérifiable.
+                Les opérations enregistrées alimentent des vues de valorisation, avec des états indisponibles lorsque les données manquent.
               </p>
             </Card>
 
@@ -334,7 +334,7 @@ export function Landing() {
                   color: 'var(--text-primary)',
                 }}
               >
-                Privacy radicale
+                Inscription sans e-mail
               </h3>
               <p
                 style={{
@@ -343,7 +343,7 @@ export function Landing() {
                   color: 'var(--text-secondary)',
                 }}
               >
-                Pas d'email. Pas d'identité. Vos données restent vôtres.
+                Créez votre accès avec un nom d’utilisateur et un mot de passe, sans adresse e-mail.
               </p>
             </Card>
           </div>
@@ -369,7 +369,7 @@ export function Landing() {
               color: 'var(--text-primary)',
             }}
           >
-            Sécurité radicale
+            Une authentification adaptée au MVP
           </h2>
           <p
             className="text-center px-4"
@@ -379,7 +379,7 @@ export function Landing() {
               marginTop: 'clamp(8px, 1.5vw, 12px)',
             }}
           >
-            Aucune donnée personnelle. Aucun compromis.
+            Un accès par nom d’utilisateur, mot de passe et phrase de récupération.
           </p>
 
           <div
@@ -396,9 +396,9 @@ export function Landing() {
             >
               {[
                 'Aucun email requis',
-                'Mot de passe + code de récupération',
-                'Phrases de récupération personnelles',
-                'Base de données non exploitable',
+                'Nom d’utilisateur et mot de passe',
+                'Phrase de récupération à conserver',
+                'Jetons d’accès et de renouvellement séparés',
               ].map((item) => (
                 <div
                   key={item}
@@ -441,7 +441,7 @@ export function Landing() {
                   color: 'var(--text-primary)',
                 }}
               >
-                Conçu pour la confidentialité
+                Données d’accès limitées
               </h3>
               <p
                 style={{
@@ -451,8 +451,7 @@ export function Landing() {
                   lineHeight: '1.6',
                 }}
               >
-                Kushim ne collecte ni email, ni identité. En cas de compromission de nos serveurs,
-                vos données personnelles restent protégées par conception.
+                L’inscription actuelle ne demande pas d’adresse e-mail. Les données de portefeuille sont servies uniquement après authentification.
               </p>
             </Card>
           </div>
