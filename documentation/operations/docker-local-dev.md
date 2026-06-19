@@ -6,6 +6,8 @@ This document gives the current local Docker workflow for Kushim.
 
 It is for development and validation, not for production deployment.
 
+For restart choices, safe diagnostics, existing-volume upgrades, worktree port collisions, and the explicitly destructive local reset procedure, see [Local reset and diagnostics](local-reset-and-diagnostics.md).
+
 ## Canonical URLs (Docker vs direct dev)
 
 In Docker the browser must use the nginx domains (the internal ports 3000 /

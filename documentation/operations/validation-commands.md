@@ -35,6 +35,8 @@ npm run test   # vitest run — covers tokenStorage, sessionGate, authenticatedR
 
 ### Level 0.5 - Controlled short-TTL auth-api (P0.3 session layer)
 
+The behavior and limitations exercised by this procedure are described in [Authentication session lifecycle](auth-session-lifecycle.md).
+
 The single-flight refresh + retry-at-most-once contract on the `kushim-app`
 side can only be exercised end-to-end when the access token actually expires
 within a manual test window. Use a one-shot Docker override; never commit a
@@ -51,7 +53,7 @@ docker compose exec kushim-auth-api printenv ACCESS_TOKEN_TTL_SECONDS  # -> 10
 # 3. Restore the canonical 900-second default and verify.
 Remove-Item Env:ACCESS_TOKEN_TTL_SECONDS
 docker compose up -d --force-recreate kushim-auth-api
-docker compose exec kushim-auth-api printenv ACCESS_TOKEN_TTL_SECONDS  # -> 900 (or unset → service default)
+docker compose exec kushim-auth-api printenv ACCESS_TOKEN_TTL_SECONDS  # -> 900
 ```
 
 Never shorten `REFRESH_TOKEN_TTL_SECONDS`. The refresh token TTL is what
@@ -75,6 +77,8 @@ Run for changed services before a PR:
 ### Level 2 - Local DB-backed checks
 
 Requires Docker Desktop, PostgreSQL, and Redis:
+
+For dependency failures, readiness checks, or reset decisions, use [Local reset and diagnostics](local-reset-and-diagnostics.md) before considering a destructive reset.
 
 ```powershell
 cd E:\Kushim
