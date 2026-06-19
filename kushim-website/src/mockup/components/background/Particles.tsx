@@ -73,6 +73,7 @@ export function Particles() {
     if (!context) {
       return;
     }
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
     const handleResize = () => {
       const width = window.innerWidth;
@@ -147,11 +148,17 @@ export function Particles() {
         context.fill();
       }
 
-      animationFrameRef.current = window.requestAnimationFrame(drawFrame);
+      if (!reducedMotion) {
+        animationFrameRef.current = window.requestAnimationFrame(drawFrame);
+      }
     };
 
     handleResize();
-    animationFrameRef.current = window.requestAnimationFrame(drawFrame);
+    if (reducedMotion) {
+      drawFrame(0);
+    } else {
+      animationFrameRef.current = window.requestAnimationFrame(drawFrame);
+    }
 
     window.addEventListener("resize", handleResize);
     window.addEventListener("mousemove", handleMouseMove);

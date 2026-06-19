@@ -25,6 +25,10 @@ function HeroCard({ delay = 0, children }: { delay?: number; children: React.Rea
   const [visible, setVisible] = useState(false);
 
   useEffect(() => {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      setVisible(true);
+      return;
+    }
     const t = setTimeout(() => setVisible(true), delay + 100);
     return () => clearTimeout(t);
   }, [delay]);
@@ -73,11 +77,13 @@ function useMeasuredChart() {
 export function Landing() {
   const authUrl = process.env.NEXT_PUBLIC_AUTH_URL ?? 'http://localhost:3001';
   const [chartsReady, setChartsReady] = useState(false);
+  const [reducedMotion, setReducedMotion] = useState(false);
   const perfChart = useMeasuredChart();
   const allocChart = useMeasuredChart();
 
   useEffect(() => {
     setChartsReady(true);
+    setReducedMotion(window.matchMedia('(prefers-reduced-motion: reduce)').matches);
   }, []);
 
   return (
@@ -139,7 +145,9 @@ export function Landing() {
               className="w-full sm:w-auto min-h-[44px]"
               onClick={(e) => {
                 e.preventDefault();
-                document.querySelector('#securite')?.scrollIntoView({ behavior: 'smooth' });
+                document.querySelector('#securite')?.scrollIntoView({
+                  behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+                });
               }}
             >
               Notre approche sécurité
@@ -148,15 +156,16 @@ export function Landing() {
 
           {/* Dashboard preview */}
           <div className="max-w-[1100px] mx-auto grid grid-cols-1 lg:grid-cols-[1fr_0.48fr] gap-4 sm:gap-6 px-4">
+            <p className="sr-only">Aperçu illustratif d’une évolution estimée et d’une allocation de portefeuille.</p>
             {/* Left: Macro Performance */}
             <HeroCard delay={0}>
               <div className="flex flex-col h-full" style={{ minHeight: 'clamp(240px, 35vw, 280px)' }}>
                 <span style={{ fontSize: 'clamp(12px, 2vw, 13px)', fontWeight: 500, color: 'var(--text-secondary)' }}>
                   Évolution estimée
                 </span>
-                <div ref={perfChart.ref} className="flex-1 mt-4 mb-4" style={{ minHeight: 'clamp(120px, 20vw, 140px)' }}>
+                <div ref={perfChart.ref} aria-hidden="true" className="flex-1 mt-4 mb-4" style={{ minHeight: 'clamp(120px, 20vw, 140px)' }}>
                   {chartsReady && perfChart.size.width > 0 && perfChart.size.height > 0 && (
-                    <AreaChart data={perfData} width={perfChart.size.width} height={perfChart.size.height}>
+                    <AreaChart accessibilityLayer={false} data={perfData} width={perfChart.size.width} height={perfChart.size.height}>
                       <defs>
                         <linearGradient id="heroGainFill" x1="0" y1="0" x2="0" y2="1">
                           <stop offset="0%" stopColor="var(--color-gain)" stopOpacity={0.10} />
@@ -170,7 +179,7 @@ export function Landing() {
                         strokeWidth={2}
                         fill="url(#heroGainFill)"
                         dot={false}
-                        isAnimationActive={true}
+                        isAnimationActive={!reducedMotion}
                         animationDuration={800}
                       />
                     </AreaChart>
@@ -208,9 +217,9 @@ export function Landing() {
                 <span style={{ fontSize: 'clamp(12px, 2vw, 13px)', fontWeight: 500, color: 'var(--text-secondary)' }}>
                   Allocation
                 </span>
-                <div ref={allocChart.ref} className="flex justify-center mt-3" style={{ height: 'clamp(100px, 15vw, 120px)' }}>
+                <div ref={allocChart.ref} aria-hidden="true" className="flex justify-center mt-3" style={{ height: 'clamp(100px, 15vw, 120px)' }}>
                   {chartsReady && allocChart.size.width > 0 && allocChart.size.height > 0 && (
-                    <PieChart width={allocChart.size.width} height={allocChart.size.height}>
+                    <PieChart accessibilityLayer={false} width={allocChart.size.width} height={allocChart.size.height}>
                       <Pie
                         data={allocData}
                         cx="50%"
@@ -219,7 +228,7 @@ export function Landing() {
                         outerRadius={52}
                         dataKey="value"
                         stroke="none"
-                        isAnimationActive={true}
+                        isAnimationActive={!reducedMotion}
                         animationDuration={700}
                       >
                         {allocData.map((entry, i) => (
@@ -259,6 +268,7 @@ export function Landing() {
         }}
       >
         <div className="max-w-[1440px] mx-auto">
+          <h2 className="sr-only">Fonctionnalités du MVP</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
             <Card level={1}>
               <Layers

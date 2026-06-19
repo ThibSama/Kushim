@@ -71,7 +71,7 @@
   --ghost-text: #3f3f46;
   --ghost-hover-bg: rgba(255, 255, 255, 0.28);
 
-  --focus-ring: rgba(16, 185, 129, 0.35);
+  --focus-ring: #047857;
 
   /* Spacing (base 4px) */
   --space-1: 4px;
@@ -194,7 +194,7 @@
   --ghost-text: #a1a1aa;
   --ghost-hover-bg: rgba(255, 255, 255, 0.08);
 
-  --focus-ring: rgba(16, 185, 129, 0.45);
+  --focus-ring: #34d399;
 }
 
 html {
