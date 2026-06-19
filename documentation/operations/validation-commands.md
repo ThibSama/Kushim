@@ -76,6 +76,8 @@ Run for changed services before a PR:
 
 Requires Docker Desktop, PostgreSQL, and Redis:
 
+For dependency failures, readiness checks, or reset decisions, use [Local reset and diagnostics](local-reset-and-diagnostics.md) before considering a destructive reset.
+
 ```powershell
 cd E:\Kushim
 .\scripts\validation\check-local-services.ps1 -Start

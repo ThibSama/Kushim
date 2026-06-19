@@ -23,6 +23,7 @@ Core onboarding documents:
 - [MVP scope](mvp/mvp-scope.md)
 - [Deferred TODOs](mvp/deferred-todos.md)
 - [Docker local development](operations/docker-local-dev.md)
+- [Local reset and diagnostics](operations/local-reset-and-diagnostics.md)
 - [Validation commands](operations/validation-commands.md)
 - [Backend MVP demo runbook](operations/backend-demo-e2e.md)
 
@@ -47,6 +48,7 @@ Core onboarding documents:
 ### Operations
 
 - [operations/docker-local-dev.md](operations/docker-local-dev.md)
+- [operations/local-reset-and-diagnostics.md](operations/local-reset-and-diagnostics.md)
 - [operations/validation-commands.md](operations/validation-commands.md)
 - [operations/backend-demo-e2e.md](operations/backend-demo-e2e.md)
 
