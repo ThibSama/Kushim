@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { Link } from '@/lib/router-shim';
+import { BrandMark } from './BrandMark';
 
 const navColumns = [
   {
@@ -52,17 +53,9 @@ export function Footer() {
         >
           {/* Left: Brand block */}
           <div className="md:w-1/3 flex flex-col items-center md:items-start text-center md:text-left">
-            <span
-              className="uppercase tracking-wider"
-              style={{
-                fontSize: 'clamp(15px, 2.5vw, 16px)',
-                fontWeight: 800,
-                color: 'var(--text-primary)',
-                letterSpacing: '0.04em',
-              }}
-            >
-              KUSHIM
-            </span>
+            <Link to="/" aria-label="Kushim — Accueil" className="flex min-h-[44px] items-center">
+              <BrandMark variant="standard" />
+            </Link>
             <span
               className="mt-2"
               style={{

@@ -17,6 +17,7 @@ import {
   CreditCard,
 } from "lucide-react";
 import { ENABLE_DISCOVER } from "../config/features";
+import { BrandMark } from "./BrandMark";
 
 interface NavbarProps {
   isAuthenticated?: boolean;
@@ -108,16 +109,12 @@ export function Navbar({
                 });
               }
             }}
-            className="uppercase tracking-wider shrink-0 flex min-h-[44px] items-center"
+            aria-label="Kushim — Accueil"
+            className="shrink-0 flex min-h-[44px] items-center"
             style={{
-              fontSize: "clamp(14px, 2.5vw, 16px)",
-              color: "var(--text-primary)",
-              letterSpacing: "0.04em",
-              fontWeight: 800,
               paddingInline: "clamp(6px, 1vw, 8px)",
-              whiteSpace: "nowrap",
             }}>
-            KUSHIM
+            <BrandMark variant="compact" />
           </Link>
 
           <div
@@ -350,11 +347,7 @@ export function Navbar({
             <div
               className="flex justify-between items-center"
               style={{ marginBottom: "clamp(16px, 3vw, 20px)" }}>
-              <span
-                className="uppercase tracking-wider font-extrabold"
-                style={{ fontSize: "clamp(14px, 2.5vw, 16px)" }}>
-                KUSHIM
-              </span>
+              <BrandMark variant="compact" />
               <button
                 type="button"
                 onClick={() => setMobileMenuOpen(false)}
