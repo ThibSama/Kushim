@@ -4,6 +4,7 @@ import Link from "next/link";
 import { ArrowLeft, Home } from "lucide-react";
 import { Button } from "@/mockup/components/Button";
 import { Card } from "@/mockup/components/Card";
+import { BrandMark } from "@/mockup/components/BrandMark";
 
 export function PlaceholderPage({ title }: { title: string }) {
   const goBack = () => {
@@ -29,6 +30,7 @@ export function PlaceholderPage({ title }: { title: string }) {
       <div className="mx-auto max-w-[680px]">
         <Card level={1}>
           <div className="text-center py-6 sm:py-10 px-2 sm:px-6">
+            <BrandMark variant="symbol" className="mb-5 justify-center" />
             <h1
               style={{
                 color: "var(--text-primary)",

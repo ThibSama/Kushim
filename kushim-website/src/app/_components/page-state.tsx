@@ -4,6 +4,7 @@ import Link from "next/link";
 import { ArrowLeft, Home, RotateCcw } from "lucide-react";
 import { Button } from "@/mockup/components/Button";
 import { Card } from "@/mockup/components/Card";
+import { BrandMark } from "@/mockup/components/BrandMark";
 
 type PageStateProps = {
   title: string;
@@ -26,6 +27,7 @@ export function PageState({ title, description, onRetry, showBack = false }: Pag
       <div className="mx-auto max-w-[680px]">
         <Card level={1}>
           <div className="text-center py-6 sm:py-10 px-2 sm:px-6">
+            <BrandMark variant="symbol" className="mb-5 justify-center" />
             <h1 style={{ color: "var(--text-primary)", fontSize: "clamp(28px, 6vw, 42px)", fontWeight: 800, lineHeight: 1.15 }}>
               {title}
             </h1>
