@@ -2,6 +2,8 @@
 
 Service d'authentification Rust/Axum pour Kushim.
 
+Le cycle de vie complet des tokens, la rotation, le stockage navigateur et les limites courantes sont documentes dans [Authentication session lifecycle](../../documentation/operations/auth-session-lifecycle.md).
+
 Il gere :
 - l'inscription
 - la connexion

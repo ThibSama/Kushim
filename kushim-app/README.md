@@ -37,6 +37,8 @@ limitation is tracked in `documentation/mvp/deferred-todos.md` (Frontend).
 
 ## Session layer (P0.3)
 
+See [Authentication session lifecycle](../documentation/operations/auth-session-lifecycle.md) for the end-to-end backend issuance, reactive refresh, rotation, logout, storage, and limitation contract.
+
 Layering (no circular imports):
 
 1. `src/lib/api/httpClient.ts` — raw `apiRequest`; no interception.
