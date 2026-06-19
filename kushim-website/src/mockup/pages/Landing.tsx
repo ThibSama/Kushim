@@ -472,72 +472,45 @@ export function Landing() {
         <div className="max-w-[90vw] sm:max-w-[420px] mx-auto">
           <Card level={1}>
             <div className="text-center" style={{ marginBottom: 'clamp(20px, 3vw, 24px)' }}>
-              <div
-                className="flex items-baseline justify-center gap-2 mb-2"
-                style={{ flexWrap: 'wrap' }}
+              <h2
+                className="mb-3"
+                style={{
+                  fontSize: 'clamp(24px, 5vw, 32px)',
+                  fontWeight: 800,
+                  lineHeight: '1.15',
+                  color: 'var(--text-primary)',
+                }}
               >
-                <span
-                  style={{
-                    fontFamily: "'JetBrains Mono', monospace",
-                    fontSize: 'clamp(36px, 8vw, 48px)',
-                    fontWeight: 800,
-                    color: 'var(--text-primary)',
-                  }}
-                >
-                  €3.49
-                </span>
-                <span
-                  style={{
-                    fontSize: 'clamp(13px, 2.5vw, 14px)',
-                    color: 'var(--text-secondary)',
-                  }}
-                >
-                  /mois
-                </span>
-              </div>
+                Une offre payante est prévue
+              </h2>
+              <p
+                style={{
+                  fontSize: 'clamp(14px, 2.5vw, 16px)',
+                  lineHeight: '1.6',
+                  color: 'var(--text-secondary)',
+                }}
+              >
+                Kushim proposera un abonnement pour financer le développement et l’exploitation du service. Le tarif et les modalités sont encore en cours de définition.
+              </p>
             </div>
 
-            <div
-              className="mb-6"
-              style={{ display: 'flex', flexDirection: 'column', gap: 'clamp(10px, 2vw, 12px)' }}
+            <p
+              className="mb-6 text-center"
+              style={{
+                fontSize: 'clamp(13px, 2.5vw, 14px)',
+                lineHeight: '1.6',
+                color: 'var(--text-tertiary)',
+              }}
             >
-              {[
-                'Lorem ipsum dolor sit amet',
-                'Consectetur adipiscing elit',
-                'Sed do eiusmod tempor incididunt',
-                'Ut enim ad minim veniam',
-              ].map((feature) => (
-                <div
-                  key={feature}
-                  className="flex items-start sm:items-center"
-                  style={{ gap: 'clamp(8px, 1.5vw, 10px)', minHeight: '44px' }}
-                >
-                  <Check
-                    size={16}
-                    style={{
-                      color: 'var(--color-gain)',
-                      flexShrink: 0,
-                      marginTop: '2px',
-                    }}
-                  />
-                  <span
-                    style={{
-                      fontSize: 'clamp(13px, 2.5vw, 14px)',
-                      color: 'var(--text-primary)',
-                    }}
-                  >
-                    {feature}
-                  </span>
-                </div>
-              ))}
-            </div>
+              Les détails seront annoncés avant le lancement de l’offre.
+            </p>
 
             <Button
               href={`${authUrl}/inscription`}
               variant="primary"
               className="w-full min-h-[44px]"
             >
-              Commencer
+              Accéder à l’alpha
             </Button>
           </Card>
         </div>
