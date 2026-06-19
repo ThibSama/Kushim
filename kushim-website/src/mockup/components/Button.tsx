@@ -120,7 +120,7 @@ export function Button({
         style={sharedStyle}
         {...hoverHandlers}
       >
-        {Icon && <Icon size={16} />}
+        {Icon && <Icon size={16} aria-hidden="true" />}
         {children}
       </a>
     );
@@ -137,7 +137,7 @@ export function Button({
       style={sharedStyle}
       {...props}
     >
-      {Icon && <Icon size={16} />}
+      {Icon && <Icon size={16} aria-hidden="true" />}
       {children}
     </button>
   );

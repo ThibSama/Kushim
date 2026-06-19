@@ -36,6 +36,7 @@ const legalLinks = [
 export function Footer() {
   return (
     <footer
+      aria-label="Pied de page"
       className="pb-12 px-4 sm:px-6"
       style={{
         paddingTop: 'clamp(80px, 15vw, 160px)',
@@ -83,7 +84,8 @@ export function Footer() {
           </div>
 
           {/* Right: Nav columns */}
-          <div
+          <nav
+            aria-label="Navigation secondaire"
             className="md:w-2/3 grid grid-cols-1 sm:grid-cols-3 text-center sm:text-left"
             style={{
               gap: 'clamp(32px, 5vw, 48px)',
@@ -91,7 +93,7 @@ export function Footer() {
           >
             {navColumns.map((col) => (
               <div key={col.heading}>
-                <h4
+                <h2
                   className="mb-4"
                   style={{
                     fontSize: 'clamp(13px, 2.2vw, 14px)',
@@ -100,23 +102,23 @@ export function Footer() {
                   }}
                 >
                   {col.heading}
-                </h4>
+                </h2>
                 <ul className="flex flex-col" style={{ gap: 'clamp(10px, 2vw, 12px)' }}>
                   {col.links.map((link) => (
                     <li key={link.label} style={{ minHeight: '44px', display: 'flex', alignItems: 'center', justifyContent: 'center' }} className="sm:justify-start">
                       <Link
                         to={link.href}
-                        className="transition-colors duration-200 no-underline"
+                        className="transition-colors duration-200 no-underline flex min-h-[44px] items-center"
                         style={{
                           fontSize: 'clamp(13px, 2.2vw, 14px)',
                           fontWeight: 400,
-                          color: 'var(--text-tertiary)',
+                          color: 'var(--text-secondary)',
                         }}
                         onMouseEnter={(e) => {
                           e.currentTarget.style.color = 'var(--text-primary)';
                         }}
                         onMouseLeave={(e) => {
-                          e.currentTarget.style.color = 'var(--text-tertiary)';
+                          e.currentTarget.style.color = 'var(--text-secondary)';
                         }}
                       >
                         {link.label}
@@ -126,11 +128,12 @@ export function Footer() {
                 </ul>
               </div>
             ))}
-          </div>
+          </nav>
         </div>
 
         {/* Legal row */}
-        <div
+        <nav
+          aria-label="Liens légaux"
           className="flex flex-wrap justify-center md:justify-end"
           style={{
             gap: 'clamp(16px, 3vw, 24px)',
@@ -143,22 +146,22 @@ export function Footer() {
               className="transition-colors duration-200 no-underline"
               style={{
                 fontSize: 'clamp(11px, 2vw, 12px)',
-                color: 'var(--text-tertiary)',
+                color: 'var(--text-secondary)',
                 minHeight: '44px',
                 display: 'flex',
                 alignItems: 'center',
               }}
               onMouseEnter={(e) => {
-                e.currentTarget.style.color = 'var(--text-secondary)';
+                e.currentTarget.style.color = 'var(--text-primary)';
               }}
               onMouseLeave={(e) => {
-                e.currentTarget.style.color = 'var(--text-tertiary)';
+                e.currentTarget.style.color = 'var(--text-secondary)';
               }}
             >
               {link.label}
             </Link>
           ))}
-        </div>
+        </nav>
       </div>
     </footer>
   );

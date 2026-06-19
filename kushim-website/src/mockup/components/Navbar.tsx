@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "@/lib/router-shim";
 import {
   LayoutDashboard,
@@ -45,13 +45,13 @@ export function Navbar({
     if (location.pathname === basePath) {
       e.preventDefault();
       const el = document.querySelector(hash);
-      if (el) el.scrollIntoView({ behavior: "smooth" });
+      if (el) el.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
     } else {
       e.preventDefault();
       navigate(basePath);
       setTimeout(() => {
         const el = document.querySelector(hash);
-        if (el) el.scrollIntoView({ behavior: "smooth" });
+        if (el) el.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
       }, 100);
     }
   };
@@ -74,6 +74,15 @@ export function Navbar({
 
   const links = isAuthenticated ? appLinks : publicLinks;
 
+  useEffect(() => {
+    if (!mobileMenuOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMobileMenuOpen(false);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [mobileMenuOpen]);
+
   return (
     <>
       <nav
@@ -93,10 +102,13 @@ export function Navbar({
             onClick={(e: React.MouseEvent) => {
               if (!isAuthenticated && location.pathname === "/") {
                 e.preventDefault();
-                window.scrollTo({ top: 0, behavior: "smooth" });
+                window.scrollTo({
+                  top: 0,
+                  behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+                });
               }
             }}
-            className="uppercase tracking-wider shrink-0"
+            className="uppercase tracking-wider shrink-0 flex min-h-[44px] items-center"
             style={{
               fontSize: "clamp(14px, 2.5vw, 16px)",
               color: "var(--text-primary)",
@@ -141,7 +153,7 @@ export function Navbar({
                       ? "1px solid var(--glass-border)"
                       : "1px solid transparent",
                     boxShadow: active ? "var(--glass-highlight)" : "none",
-                    minHeight: "36px",
+                    minHeight: "44px",
                     display: "flex",
                     alignItems: "center",
                     padding: "0 14px",
@@ -182,10 +194,8 @@ export function Navbar({
               className="rounded-full flex items-center justify-center shrink-0 transition-all duration-200"
               style={{
                 color: "var(--text-secondary)",
-                minWidth: "36px",
-                minHeight: "36px",
-                width: "clamp(36px, 6vw, 40px)",
-                height: "clamp(36px, 6vw, 40px)",
+                minWidth: "44px",
+                minHeight: "44px",
               }}
               onMouseEnter={(e) => {
                 e.currentTarget.style.background =
@@ -194,32 +204,22 @@ export function Navbar({
               onMouseLeave={(e) => {
                 e.currentTarget.style.background = "transparent";
               }}
-              aria-label="Changer le thème">
-              {isDark ? <Sun size={16} /> : <Moon size={16} />}
+              aria-label={isDark ? "Activer le thème clair" : "Activer le thème sombre"}>
+              {isDark ? <Sun size={16} aria-hidden="true" /> : <Moon size={16} aria-hidden="true" />}
             </button>
 
-            <button
-              type="button"
+            <span
               className="rounded-full flex items-center justify-center shrink-0 transition-all duration-200"
               style={{
                 color: "var(--text-secondary)",
                 fontSize: "clamp(11px, 2vw, 12px)",
                 fontWeight: 600,
-                minWidth: "36px",
-                minHeight: "36px",
-                width: "clamp(36px, 6vw, 40px)",
-                height: "clamp(36px, 6vw, 40px)",
+                minWidth: "44px",
+                minHeight: "44px",
               }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.background =
-                  "linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02)), var(--surface-2-bg)";
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = "transparent";
-              }}
-              aria-label="Langue">
+              aria-label="Langue actuelle : français">
               FR
-            </button>
+            </span>
 
             <div
               className="hidden md:flex items-center shrink-0"
@@ -244,7 +244,7 @@ export function Navbar({
                       fontSize: "clamp(13px, 2vw, 14px)",
                       fontWeight: 500,
                       color: "var(--text-secondary)",
-                      minHeight: "36px",
+                      minHeight: "44px",
                       whiteSpace: "nowrap",
                       display: "flex",
                       alignItems: "center",
@@ -265,7 +265,7 @@ export function Navbar({
                       color: isDark ? "#09090B" : "#FFFFFF",
                       fontSize: "clamp(13px, 2vw, 14px)",
                       fontWeight: 600,
-                      minHeight: "36px",
+                      minHeight: "44px",
                       whiteSpace: "nowrap",
                       padding: "0 clamp(16px, 3vw, 20px)",
                     }}>
@@ -310,10 +310,8 @@ export function Navbar({
               className="md:hidden rounded-full flex items-center justify-center transition-all duration-200"
               style={{
                 color: "var(--text-secondary)",
-                minWidth: "36px",
-                minHeight: "36px",
-                width: "clamp(36px, 6vw, 40px)",
-                height: "clamp(36px, 6vw, 40px)",
+                minWidth: "44px",
+                minHeight: "44px",
               }}
               onMouseEnter={(e) => {
                 e.currentTarget.style.background =
@@ -322,8 +320,10 @@ export function Navbar({
               onMouseLeave={(e) => {
                 e.currentTarget.style.background = "transparent";
               }}
-              aria-label="Menu">
-              <Menu size={20} />
+              aria-label="Ouvrir le menu"
+              aria-expanded={mobileMenuOpen}
+              aria-controls="mobile-navigation">
+              <Menu size={20} aria-hidden="true" />
             </button>
           </div>
         </div>
@@ -335,9 +335,14 @@ export function Navbar({
             className="fixed inset-0 z-40"
             style={{ background: "rgba(0, 0, 0, 0.30)", backdropFilter: "blur(8px)" }}
             onClick={() => setMobileMenuOpen(false)}
+            aria-hidden="true"
           />
 
           <div
+            id="mobile-navigation"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Navigation principale"
             className="glass-strong fixed top-0 left-0 right-0 z-50 rounded-b-[var(--radius-xl)]"
             style={{
               padding: "clamp(16px, 4vw, 20px)",
@@ -360,7 +365,7 @@ export function Navbar({
                   color: "var(--text-primary)",
                 }}
                 aria-label="Fermer le menu">
-                <X size={20} />
+                <X size={20} aria-hidden="true" />
               </button>
             </div>
 
@@ -390,7 +395,7 @@ export function Navbar({
                       minHeight: "44px",
                       fontSize: "clamp(14px, 2.5vw, 15px)",
                     }}>
-                    <Icon size={20} />
+                    <Icon size={20} aria-hidden="true" />
                     {link.label}
                   </Link>
                 );

@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from 'react';
-import { Terminal, Layers, Calculator, Shield, Check, Lock, ShieldCheck } from 'lucide-react';
+import { Terminal, Layers, Calculator, Shield, Check, Database, ShieldCheck } from 'lucide-react';
 import { Card } from '../components/Card';
 import { Button } from '../components/Button';
 import { Badge } from '../components/Badge';
@@ -16,8 +16,8 @@ const perfData = [
 
 const allocData = [
   { name: 'Actions', value: 42, color: '#60A5FA' },
-  { name: 'Crypto', value: 28, color: '#A78BFA' },
-  { name: 'ETF', value: 20, color: '#FBBF24' },
+  { name: 'ETF', value: 28, color: '#A78BFA' },
+  { name: 'Liquidités', value: 20, color: '#FBBF24' },
   { name: 'Autre', value: 10, color: '#71717A' },
 ];
 
@@ -25,6 +25,10 @@ function HeroCard({ delay = 0, children }: { delay?: number; children: React.Rea
   const [visible, setVisible] = useState(false);
 
   useEffect(() => {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      setVisible(true);
+      return;
+    }
     const t = setTimeout(() => setVisible(true), delay + 100);
     return () => clearTimeout(t);
   }, [delay]);
@@ -73,11 +77,13 @@ function useMeasuredChart() {
 export function Landing() {
   const authUrl = process.env.NEXT_PUBLIC_AUTH_URL ?? 'http://localhost:3001';
   const [chartsReady, setChartsReady] = useState(false);
+  const [reducedMotion, setReducedMotion] = useState(false);
   const perfChart = useMeasuredChart();
   const allocChart = useMeasuredChart();
 
   useEffect(() => {
     setChartsReady(true);
+    setReducedMotion(window.matchMedia('(prefers-reduced-motion: reduce)').matches);
   }, []);
 
   return (
@@ -116,7 +122,7 @@ export function Landing() {
               color: 'var(--text-secondary)',
             }}
           >
-            Kushim est l'outil de suivi patrimonial indépendant. Multi-actifs. Transparent. Sans compromis.
+            Centralisez vos portefeuilles, vos positions et leurs valorisations estimées dans une interface claire et indépendante.
           </p>
 
           <div
@@ -139,7 +145,9 @@ export function Landing() {
               className="w-full sm:w-auto min-h-[44px]"
               onClick={(e) => {
                 e.preventDefault();
-                document.querySelector('#securite')?.scrollIntoView({ behavior: 'smooth' });
+                document.querySelector('#securite')?.scrollIntoView({
+                  behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+                });
               }}
             >
               Notre approche sécurité
@@ -148,15 +156,16 @@ export function Landing() {
 
           {/* Dashboard preview */}
           <div className="max-w-[1100px] mx-auto grid grid-cols-1 lg:grid-cols-[1fr_0.48fr] gap-4 sm:gap-6 px-4">
+            <p className="sr-only">Aperçu illustratif d’une évolution estimée et d’une allocation de portefeuille.</p>
             {/* Left: Macro Performance */}
             <HeroCard delay={0}>
               <div className="flex flex-col h-full" style={{ minHeight: 'clamp(240px, 35vw, 280px)' }}>
                 <span style={{ fontSize: 'clamp(12px, 2vw, 13px)', fontWeight: 500, color: 'var(--text-secondary)' }}>
-                  Macro Performance
+                  Évolution estimée
                 </span>
-                <div ref={perfChart.ref} className="flex-1 mt-4 mb-4" style={{ minHeight: 'clamp(120px, 20vw, 140px)' }}>
+                <div ref={perfChart.ref} aria-hidden="true" className="flex-1 mt-4 mb-4" style={{ minHeight: 'clamp(120px, 20vw, 140px)' }}>
                   {chartsReady && perfChart.size.width > 0 && perfChart.size.height > 0 && (
-                    <AreaChart data={perfData} width={perfChart.size.width} height={perfChart.size.height}>
+                    <AreaChart accessibilityLayer={false} data={perfData} width={perfChart.size.width} height={perfChart.size.height}>
                       <defs>
                         <linearGradient id="heroGainFill" x1="0" y1="0" x2="0" y2="1">
                           <stop offset="0%" stopColor="var(--color-gain)" stopOpacity={0.10} />
@@ -170,7 +179,7 @@ export function Landing() {
                         strokeWidth={2}
                         fill="url(#heroGainFill)"
                         dot={false}
-                        isAnimationActive={true}
+                        isAnimationActive={!reducedMotion}
                         animationDuration={800}
                       />
                     </AreaChart>
@@ -208,9 +217,9 @@ export function Landing() {
                 <span style={{ fontSize: 'clamp(12px, 2vw, 13px)', fontWeight: 500, color: 'var(--text-secondary)' }}>
                   Allocation
                 </span>
-                <div ref={allocChart.ref} className="flex justify-center mt-3" style={{ height: 'clamp(100px, 15vw, 120px)' }}>
+                <div ref={allocChart.ref} aria-hidden="true" className="flex justify-center mt-3" style={{ height: 'clamp(100px, 15vw, 120px)' }}>
                   {chartsReady && allocChart.size.width > 0 && allocChart.size.height > 0 && (
-                    <PieChart width={allocChart.size.width} height={allocChart.size.height}>
+                    <PieChart accessibilityLayer={false} width={allocChart.size.width} height={allocChart.size.height}>
                       <Pie
                         data={allocData}
                         cx="50%"
@@ -219,7 +228,7 @@ export function Landing() {
                         outerRadius={52}
                         dataKey="value"
                         stroke="none"
-                        isAnimationActive={true}
+                        isAnimationActive={!reducedMotion}
                         animationDuration={700}
                       >
                         {allocData.map((entry, i) => (
@@ -231,15 +240,15 @@ export function Landing() {
                 </div>
               </HeroCard>
 
-              {/* Zero-Knowledge */}
+              {/* Data model */}
               <HeroCard delay={220}>
                 <div className="flex flex-col gap-1">
                   <span style={{ fontSize: 'clamp(13px, 2vw, 14px)', fontWeight: 600, color: 'var(--text-primary)' }}>
-                    Zero-Knowledge
+                    Données centralisées
                   </span>
                   <span className="flex items-center gap-1.5" style={{ fontSize: 'clamp(11px, 2vw, 12px)', color: 'var(--text-tertiary)' }}>
-                    <Lock size={12} />
-                    Encrypted Vault
+                    <Database size={12} />
+                    Portefeuilles et positions
                   </span>
                 </div>
               </HeroCard>
@@ -259,6 +268,7 @@ export function Landing() {
         }}
       >
         <div className="max-w-[1440px] mx-auto">
+          <h2 className="sr-only">Fonctionnalités du MVP</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
             <Card level={1}>
               <Layers
@@ -285,7 +295,7 @@ export function Landing() {
                   color: 'var(--text-secondary)',
                 }}
               >
-                Regroupez vos actions, cryptos et ETF dans un espace unifié.
+                Créez plusieurs portefeuilles et consultez leurs positions dans un espace unifié.
               </p>
             </Card>
 
@@ -305,7 +315,7 @@ export function Landing() {
                   color: 'var(--text-primary)',
                 }}
               >
-                Calculs au centime
+                Valorisation lisible
               </h3>
               <p
                 style={{
@@ -314,7 +324,7 @@ export function Landing() {
                   color: 'var(--text-secondary)',
                 }}
               >
-                Architecture transactionnelle. Chaque calcul est traçable et vérifiable.
+                Les opérations enregistrées alimentent des vues de valorisation, avec des états indisponibles lorsque les données manquent.
               </p>
             </Card>
 
@@ -334,7 +344,7 @@ export function Landing() {
                   color: 'var(--text-primary)',
                 }}
               >
-                Privacy radicale
+                Inscription sans e-mail
               </h3>
               <p
                 style={{
@@ -343,7 +353,7 @@ export function Landing() {
                   color: 'var(--text-secondary)',
                 }}
               >
-                Pas d'email. Pas d'identité. Vos données restent vôtres.
+                Créez votre accès avec un nom d’utilisateur et un mot de passe, sans adresse e-mail.
               </p>
             </Card>
           </div>
@@ -369,7 +379,7 @@ export function Landing() {
               color: 'var(--text-primary)',
             }}
           >
-            Sécurité radicale
+            Une authentification adaptée au MVP
           </h2>
           <p
             className="text-center px-4"
@@ -379,7 +389,7 @@ export function Landing() {
               marginTop: 'clamp(8px, 1.5vw, 12px)',
             }}
           >
-            Aucune donnée personnelle. Aucun compromis.
+            Un accès par nom d’utilisateur, mot de passe et phrase de récupération.
           </p>
 
           <div
@@ -396,9 +406,9 @@ export function Landing() {
             >
               {[
                 'Aucun email requis',
-                'Mot de passe + code de récupération',
-                'Phrases de récupération personnelles',
-                'Base de données non exploitable',
+                'Nom d’utilisateur et mot de passe',
+                'Phrase de récupération à conserver',
+                'Jetons d’accès et de renouvellement séparés',
               ].map((item) => (
                 <div
                   key={item}
@@ -441,7 +451,7 @@ export function Landing() {
                   color: 'var(--text-primary)',
                 }}
               >
-                Conçu pour la confidentialité
+                Données d’accès limitées
               </h3>
               <p
                 style={{
@@ -451,8 +461,7 @@ export function Landing() {
                   lineHeight: '1.6',
                 }}
               >
-                Kushim ne collecte ni email, ni identité. En cas de compromission de nos serveurs,
-                vos données personnelles restent protégées par conception.
+                L’inscription actuelle ne demande pas d’adresse e-mail. Les données de portefeuille sont servies uniquement après authentification.
               </p>
             </Card>
           </div>
@@ -472,72 +481,45 @@ export function Landing() {
         <div className="max-w-[90vw] sm:max-w-[420px] mx-auto">
           <Card level={1}>
             <div className="text-center" style={{ marginBottom: 'clamp(20px, 3vw, 24px)' }}>
-              <div
-                className="flex items-baseline justify-center gap-2 mb-2"
-                style={{ flexWrap: 'wrap' }}
+              <h2
+                className="mb-3"
+                style={{
+                  fontSize: 'clamp(24px, 5vw, 32px)',
+                  fontWeight: 800,
+                  lineHeight: '1.15',
+                  color: 'var(--text-primary)',
+                }}
               >
-                <span
-                  style={{
-                    fontFamily: "'JetBrains Mono', monospace",
-                    fontSize: 'clamp(36px, 8vw, 48px)',
-                    fontWeight: 800,
-                    color: 'var(--text-primary)',
-                  }}
-                >
-                  €3.49
-                </span>
-                <span
-                  style={{
-                    fontSize: 'clamp(13px, 2.5vw, 14px)',
-                    color: 'var(--text-secondary)',
-                  }}
-                >
-                  /mois
-                </span>
-              </div>
+                Une offre payante est prévue
+              </h2>
+              <p
+                style={{
+                  fontSize: 'clamp(14px, 2.5vw, 16px)',
+                  lineHeight: '1.6',
+                  color: 'var(--text-secondary)',
+                }}
+              >
+                Kushim proposera un abonnement pour financer le développement et l’exploitation du service. Le tarif et les modalités sont encore en cours de définition.
+              </p>
             </div>
 
-            <div
-              className="mb-6"
-              style={{ display: 'flex', flexDirection: 'column', gap: 'clamp(10px, 2vw, 12px)' }}
+            <p
+              className="mb-6 text-center"
+              style={{
+                fontSize: 'clamp(13px, 2.5vw, 14px)',
+                lineHeight: '1.6',
+                color: 'var(--text-tertiary)',
+              }}
             >
-              {[
-                'Lorem ipsum dolor sit amet',
-                'Consectetur adipiscing elit',
-                'Sed do eiusmod tempor incididunt',
-                'Ut enim ad minim veniam',
-              ].map((feature) => (
-                <div
-                  key={feature}
-                  className="flex items-start sm:items-center"
-                  style={{ gap: 'clamp(8px, 1.5vw, 10px)', minHeight: '44px' }}
-                >
-                  <Check
-                    size={16}
-                    style={{
-                      color: 'var(--color-gain)',
-                      flexShrink: 0,
-                      marginTop: '2px',
-                    }}
-                  />
-                  <span
-                    style={{
-                      fontSize: 'clamp(13px, 2.5vw, 14px)',
-                      color: 'var(--text-primary)',
-                    }}
-                  >
-                    {feature}
-                  </span>
-                </div>
-              ))}
-            </div>
+              Les détails seront annoncés avant le lancement de l’offre.
+            </p>
 
             <Button
               href={`${authUrl}/inscription`}
               variant="primary"
               className="w-full min-h-[44px]"
             >
-              Commencer
+              Accéder à l’alpha
             </Button>
           </Card>
         </div>
