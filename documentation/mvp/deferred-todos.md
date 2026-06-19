@@ -110,6 +110,71 @@ Use these labels:
 - richer FX support needs a price-source and restatement policy
 - queues, distributed locks, and production scheduling should be chosen together with the deployment model
 
+## Historical performance contract
+
+The normative documents are
+[`documentation/architecture/portfolio-performance-contract.md`](../architecture/portfolio-performance-contract.md),
+[`documentation/architecture/cashflow-classification.md`](../architecture/cashflow-classification.md)
+and
+[`documentation/architecture/historical-valuation-provenance.md`](../architecture/historical-valuation-provenance.md).
+The items below are explicitly deferred and not implemented by the
+documentation PR.
+
+### Deferred
+
+- **Explicit transfer subtype and counterparty semantics.** Until
+  `transfer_in` / `transfer_out` carry an explicit subtype
+  (`asset_in_kind`, `cash_in_kind`, `internal_account_move`, …) and a
+  linked portfolio / account / external broker reference, every day
+  containing one of these operations is recorded with
+  `aggregate_valuation_status = unsupported_operation_semantics` and
+  `daily_return = NULL`. See
+  [cashflow-classification.md, note 2](../architecture/cashflow-classification.md).
+- **Historical FX provider selection.** The performance contract is
+  provider-agnostic. Selecting a concrete provider for current and
+  historical FX rates belongs to a later market-data implementation PR
+  (cross-referenced with the existing **FX rate provider selection and
+  integration** entry under Market-data).
+- **Historical FX cache and provenance schema.** Storage of historical
+  FX rates with carry-forward tolerance, provider provenance, rate
+  direction and missing-rate status. Mirrors the historical price cache
+  pattern but for currency pairs.
+- **Late-arriving market-data invalidation.** A late or corrected entry
+  in `asset_price_history_cache` (or in the future FX cache) must trigger
+  a targeted recomputation of every affected portfolio history range. No
+  signal exists today from `kushim-market-data` to `kushim-worker`.
+- **Targeted `invalidate_from_date` refresh requests.** The current
+  `portfolio_refresh_requests` row carries only `id_portfolio` — there is
+  no way to express "recompute from this date forward". MVP recomputes
+  the full history; richer refresh metadata is deferred.
+- **Adjusted-price and corporate-action provider strategy.** The
+  performance contract uses raw (unadjusted) close prices. Adjusted-price
+  feeds (splits, dividends applied at source) and corporate-action
+  metadata (rights issues, mergers) are deferred.
+- **Exact intraday time-weighted return (TWR).** The MVP metric is
+  daily Modified Dietz chain-linked over complete days. Exact intraday
+  TWR (subdividing each day at every flow) is deferred.
+- **Money-weighted return / IRR.** Newton-Raphson root finding on signed
+  cash-flow series. Deferred.
+- **Benchmark comparison.** No index history is persisted by Kushim
+  today. Benchmark wiring requires an index-history feed and a contract
+  PR.
+- **Generation-based large-history publication.** The MVP transactional
+  rebuild writes the affected range in one PostgreSQL transaction. For
+  very long ranges across many portfolios, a generation-based mechanism
+  (write into a new generation table and swap a pointer) may become
+  necessary. Deferred as a scalability option.
+- **Per-portfolio reconstruction trace persistence.** The contract
+  references `unsupported_operation_id uuid` on the daily row for
+  auditability. Persisting a richer reconstruction trace (which
+  operations contributed to a given day, which adjustments were
+  collapsed) is deferred.
+- **Volatility, Sharpe ratio, maximum drawdown.** Out of MVP scope.
+- **Explicit dividend withholding tax modeling.** The MVP keeps generic
+  transaction tax distinct from dividend withholding and does not
+  silently infer the latter. A future operation contract extension may
+  add a `withholding_tax_minor` field on `dividend` operations.
+
 ## Market-data
 
 ### Implemented with mock and guarded Finnhub providers
