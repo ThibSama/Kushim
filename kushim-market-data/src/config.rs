@@ -1,4 +1,4 @@
-use crate::{errors::MarketDataError, symbol_filter::SymbolAllowlist};
+use crate::{domain::fx_rate::Currency, errors::MarketDataError, symbol_filter::SymbolAllowlist};
 use std::{collections::HashMap, env, net::IpAddr, str::FromStr, time::Duration};
 use time::{Date, Month};
 
@@ -39,6 +39,7 @@ pub enum MarketDataJob {
     Noop,
     RefreshCurrentMarketData,
     FillMissingPriceHistoryCache,
+    FillMissingFxHistoryCache,
 }
 
 impl MarketDataJob {
@@ -47,6 +48,7 @@ impl MarketDataJob {
             Self::Noop => "noop",
             Self::RefreshCurrentMarketData => "refresh_current_market_data",
             Self::FillMissingPriceHistoryCache => "fill_missing_price_history_cache",
+            Self::FillMissingFxHistoryCache => "fill_missing_fx_history_cache",
         }
     }
 }
@@ -59,8 +61,37 @@ impl FromStr for MarketDataJob {
             "noop" => Ok(Self::Noop),
             "refresh_current_market_data" => Ok(Self::RefreshCurrentMarketData),
             "fill_missing_price_history_cache" => Ok(Self::FillMissingPriceHistoryCache),
+            "fill_missing_fx_history_cache" => Ok(Self::FillMissingFxHistoryCache),
             _ => Err(MarketDataError::Config(format!(
-                "MARKET_DATA_JOB must be one of noop, refresh_current_market_data, fill_missing_price_history_cache; got `{value}`"
+                "MARKET_DATA_JOB must be one of noop, refresh_current_market_data, fill_missing_price_history_cache, fill_missing_fx_history_cache; got `{value}`"
+            ))),
+        }
+    }
+}
+
+/// FX-history provider selector. Only the mock provider is registered in
+/// PR004; real provider selection is deferred.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FxHistoryProviderKind {
+    Mock,
+}
+
+impl FxHistoryProviderKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Mock => "mock",
+        }
+    }
+}
+
+impl FromStr for FxHistoryProviderKind {
+    type Err = MarketDataError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "mock" => Ok(Self::Mock),
+            _ => Err(MarketDataError::Config(format!(
+                "FX_HISTORY_PROVIDER must be `mock` (only mock is registered in PR004); got `{value}`"
             ))),
         }
     }
@@ -114,6 +145,12 @@ pub struct Config {
     pub provider_symbol_map: HashMap<String, String>,
     pub http_timeout: Duration,
     pub provider_delay: Duration,
+    pub fx_history_provider: FxHistoryProviderKind,
+    pub fx_history_currencies: Option<Vec<Currency>>,
+    pub fx_history_date_from: Option<Date>,
+    pub fx_history_date_to: Option<Date>,
+    pub fx_history_max_carry_days: i64,
+    pub fx_history_chunk_days: usize,
 }
 
 impl Config {
@@ -167,6 +204,40 @@ impl Config {
             Duration::from_secs(parse_positive_u64("MARKET_DATA_HTTP_TIMEOUT_SECONDS", 10)?);
         let provider_delay =
             Duration::from_millis(parse_u64("MARKET_DATA_PROVIDER_DELAY_MS", 1_100)?);
+
+        let fx_history_provider: FxHistoryProviderKind = env::var("FX_HISTORY_PROVIDER")
+            .unwrap_or_else(|_| "mock".to_string())
+            .parse()?;
+        let fx_history_currencies = optional_currency_list_env("FX_HISTORY_CURRENCIES")?;
+        let fx_history_date_from = optional_date_env("FX_HISTORY_DATE_FROM")?;
+        let fx_history_date_to = optional_date_env("FX_HISTORY_DATE_TO")?;
+        let fx_history_max_carry_days = parse_positive_u64("FX_HISTORY_MAX_CARRY_DAYS", 7)? as i64;
+        let fx_history_chunk_days = parse_positive_u64("FX_HISTORY_CHUNK_DAYS", 366)? as usize;
+
+        if job == MarketDataJob::FillMissingFxHistoryCache {
+            let from = fx_history_date_from.ok_or_else(|| {
+                MarketDataError::Config(
+                    "FX_HISTORY_DATE_FROM is required for fill_missing_fx_history_cache"
+                        .to_string(),
+                )
+            })?;
+            let to = fx_history_date_to.ok_or_else(|| {
+                MarketDataError::Config(
+                    "FX_HISTORY_DATE_TO is required for fill_missing_fx_history_cache".to_string(),
+                )
+            })?;
+            if from > to {
+                return Err(MarketDataError::Config(format!(
+                    "FX_HISTORY_DATE_FROM ({from}) must be <= FX_HISTORY_DATE_TO ({to})"
+                )));
+            }
+            let range_days = (to - from).whole_days() + 1;
+            if range_days > 366 {
+                return Err(MarketDataError::Config(format!(
+                    "FX history date range must be at most 366 days; got {range_days}"
+                )));
+            }
+        }
 
         if job == MarketDataJob::FillMissingPriceHistoryCache {
             let from = history_date_from.ok_or_else(|| {
@@ -232,8 +303,39 @@ impl Config {
             provider_symbol_map,
             http_timeout,
             provider_delay,
+            fx_history_provider,
+            fx_history_currencies,
+            fx_history_date_from,
+            fx_history_date_to,
+            fx_history_max_carry_days,
+            fx_history_chunk_days,
         })
     }
+}
+
+fn optional_currency_list_env(key: &str) -> Result<Option<Vec<Currency>>, MarketDataError> {
+    let Some(value) = optional_nonblank_env(key) else {
+        return Ok(None);
+    };
+
+    let mut seen = std::collections::BTreeSet::new();
+    let mut out = Vec::new();
+    for token in value.split(',') {
+        let token = token.trim();
+        if token.is_empty() {
+            continue;
+        }
+        let currency = Currency::parse(token).map_err(|e| {
+            MarketDataError::Config(format!("{key} contains invalid currency `{token}`: {e}"))
+        })?;
+        if seen.insert(currency) {
+            out.push(currency);
+        }
+    }
+    if out.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(out))
 }
 
 fn required_env(key: &str) -> Result<String, MarketDataError> {

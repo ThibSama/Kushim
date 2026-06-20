@@ -1,3 +1,4 @@
+pub mod fill_missing_fx_history_cache;
 pub mod fill_missing_price_history_cache;
 pub mod noop;
 pub mod refresh_current_market_data;

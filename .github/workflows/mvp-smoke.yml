@@ -508,6 +508,63 @@ jobs:
           -CiMode
           -BaseRef $env:HOLDING_VALUATION_PROVENANCE_BASE_REF
 
+  # ─── Migration: FX rate history cache (PR004) ───────────────────────
+  # Validates `infra/postgres/upgrades/004_fx_rate_history_cache.sql` on a
+  # disposable database bootstrapped from the immutable pre-migration-004
+  # baseline. Proves the additive CREATE TABLE applies cleanly, idempotence
+  # holds on a second run, the six new CHECK constraints are present, the
+  # STORED GENERATED `inverse_rate` matches `ROUND(1/canonical_rate, 12)`,
+  # canonical pair ordering rejects USD>EUR, non-positive rates are
+  # rejected, multiple providers coexist for the same pair/date, and the
+  # unique (pair, date, provider) index rejects duplicates.
+  #
+  # IMMUTABLE BASELINE — Migration 004 specifically.
+  # The validator must bootstrap the schema that existed *immediately
+  # before* `infra/postgres/upgrades/004_fx_rate_history_cache.sql` was
+  # added. That commit is the head of main at the start of PR004
+  # implementation. Topology-based baselines (HEAD, merge-base, event
+  # metadata) are explicitly NOT consulted — they all degenerate to a
+  # post-migration commit once migration 004 is on main.
+  fx-rate-history-migration:
+    name: "FX rate history migration validation"
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: kushim
+          POSTGRES_PASSWORD: kushim_secret_dev
+          POSTGRES_DB: kushim_test_ci_admin
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U kushim"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: kushim
+      PGPASSWORD: kushim_secret_dev
+      PGDATABASE: kushim_test_ci_admin
+      # Immutable pre-migration baseline for migration 004
+      # (`infra/postgres/upgrades/004_fx_rate_history_cache.sql`).
+      # Identical on every event. Never derived from current branch topology.
+      FX_RATE_HISTORY_BASE_REF: 4d674d409a6bf560ec056fe8efcdf89741a83e13
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run fx-rate-history migration validator (pwsh + CI mode)
+        shell: pwsh
+        run: >
+          pwsh -NoProfile
+          -File ./scripts/test/validate-fx-rate-history-migration.ps1
+          -CiMode
+          -BaseRef $env:FX_RATE_HISTORY_BASE_REF
+
   rust-audit:
     name: "Rust advisory audit"
     runs-on: ubuntu-latest
