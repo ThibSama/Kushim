@@ -929,6 +929,70 @@ CREATE TRIGGER trg_rm_portfolio_holdings_set_updated_at
     FOR EACH ROW
     EXECUTE FUNCTION set_updated_at();
 
+-- =========================================================================
+-- Historical FX rate cache (migration 004 fully merged into fresh bootstrap).
+--
+-- Provider-agnostic. One canonical unordered currency-pair record per
+-- (pair, date, provider). inverse_rate is a STORED GENERATED column derived
+-- from canonical_rate so the two directions can never diverge. The
+-- supported currency set is not pinned in the schema — adding a new
+-- currency requires no migration.
+-- =========================================================================
+CREATE TABLE fx_rate_history_cache (
+    id_fx_rate_history_cache uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    rate_date date NOT NULL,
+    canonical_base_currency char(3) NOT NULL,
+    canonical_quote_currency char(3) NOT NULL,
+    canonical_rate numeric(28, 12) NOT NULL,
+    inverse_rate numeric(28, 12) GENERATED ALWAYS AS (
+        ROUND((1::numeric / canonical_rate)::numeric, 12)
+    ) STORED,
+    provider varchar(50) NOT NULL,
+    provider_as_of timestamptz,
+    dataset_version varchar(64) NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+
+    CONSTRAINT chk_fx_rate_history_cache_base_currency_format
+        CHECK (canonical_base_currency ~ '^[A-Z]{3}$'),
+    CONSTRAINT chk_fx_rate_history_cache_quote_currency_format
+        CHECK (canonical_quote_currency ~ '^[A-Z]{3}$'),
+    CONSTRAINT chk_fx_rate_history_cache_pair_canonical_ordering
+        CHECK (canonical_base_currency < canonical_quote_currency),
+    CONSTRAINT chk_fx_rate_history_cache_canonical_rate_positive
+        CHECK (canonical_rate > 0),
+    CONSTRAINT chk_fx_rate_history_cache_provider_not_blank
+        CHECK (btrim(provider) <> ''),
+    CONSTRAINT chk_fx_rate_history_cache_dataset_version_not_blank
+        CHECK (btrim(dataset_version) <> '')
+);
+
+CREATE UNIQUE INDEX uq_fx_rate_history_cache_pair_date_provider
+    ON fx_rate_history_cache (
+        canonical_base_currency,
+        canonical_quote_currency,
+        rate_date,
+        provider
+    );
+
+CREATE INDEX idx_fx_rate_history_cache_pair_date_desc
+    ON fx_rate_history_cache (
+        canonical_base_currency,
+        canonical_quote_currency,
+        rate_date DESC
+    );
+
+CREATE INDEX idx_fx_rate_history_cache_date_desc
+    ON fx_rate_history_cache (rate_date DESC);
+
+CREATE INDEX idx_fx_rate_history_cache_provider_date
+    ON fx_rate_history_cache (provider, rate_date DESC);
+
+CREATE TRIGGER trg_fx_rate_history_cache_set_updated_at
+    BEFORE UPDATE ON fx_rate_history_cache
+    FOR EACH ROW
+    EXECUTE FUNCTION set_updated_at();
+
 -- Reserved for future billing/subscription tables:
 -- subscription_plans
 -- billing_customers

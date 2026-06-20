@@ -1,5 +1,7 @@
 pub mod finnhub;
+pub mod fx_history_provider;
 pub mod mock;
+pub mod mock_fx_history;
 
 use crate::domain::{ActiveAsset, CurrentQuote, HistoricalQuote};
 use crate::errors::MarketDataError;

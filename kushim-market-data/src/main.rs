@@ -1,11 +1,17 @@
 use kushim_market_data::{
-    config::{Config, MarketDataJob, MarketDataMode, MarketDataProviderKind},
+    config::{
+        Config, FxHistoryProviderKind, MarketDataJob, MarketDataMode, MarketDataProviderKind,
+    },
     db, health,
     jobs::{
+        fill_missing_fx_history_cache::FillMissingFxHistoryCacheJob,
         fill_missing_price_history_cache::FillMissingPriceHistoryCacheJob, noop::NoopJob,
         refresh_current_market_data::RefreshCurrentMarketDataJob,
     },
-    providers::{finnhub::FinnhubProvider, mock::MockProvider},
+    providers::{
+        finnhub::FinnhubProvider, mock::MockProvider, mock_fx_history::MockFxHistoryProvider,
+        mock_fx_history::supported_currencies,
+    },
     runner::JobRunner,
     state::AppState,
 };
@@ -109,6 +115,25 @@ async fn run_job(
                         .clone()
                         .expect("validated in config"),
                 );
+                let runner = JobRunner::new(config.mode, config.run_interval, job);
+                runner.run(state, cancel).await
+            }
+        },
+        MarketDataJob::FillMissingFxHistoryCache => match config.fx_history_provider {
+            FxHistoryProviderKind::Mock => {
+                let date_from = config.fx_history_date_from.expect("validated in config");
+                let date_to = config.fx_history_date_to.expect("validated in config");
+                let currencies = config
+                    .fx_history_currencies
+                    .clone()
+                    .unwrap_or_else(supported_currencies);
+                let job = FillMissingFxHistoryCacheJob::for_currency_set(
+                    MockFxHistoryProvider,
+                    date_from,
+                    date_to,
+                    &currencies,
+                    config.fx_history_chunk_days,
+                )?;
                 let runner = JobRunner::new(config.mode, config.run_interval, job);
                 runner.run(state, cancel).await
             }

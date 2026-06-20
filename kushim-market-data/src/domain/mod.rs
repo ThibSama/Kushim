@@ -1,3 +1,5 @@
+pub mod fx_rate;
+
 use time::{Date, OffsetDateTime};
 use uuid::Uuid;
 
