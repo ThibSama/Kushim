@@ -301,8 +301,17 @@ After portfolio selection, the Transactions page and Dashboard load operations v
 **Shared operation modal:** `src/app/components/CreateOperationModal.tsx`
 
 - Extracted from Transactions page inline modal
-- Used by both Transactions page and Dashboard "Ajouter une transaction" action
+- Used by the Transactions page, the Dashboard "Ajouter une transaction" action,
+  the Dashboard "Ajouter un actif" quick action, and the AssetDetail
+  "Ajouter au portefeuille" action
 - Operation types grouped: asset operations (buy, sell, dividend) and cash operations (deposit, withdrawal, fee, tax, interest, transfer_in, transfer_out)
+- Optional initialization props (no second modal form):
+  - `initialOperationType` — preset the type (e.g. `"buy"` from "Ajouter un actif");
+    omitted preserves the generic `"deposit"` default
+  - `initialAsset` — preset the selected asset (e.g. the displayed asset on
+    AssetDetail); the user can still change or clear it
+  - Both presets seed only the initial mount state; a fresh mount per opening
+    guarantees no draft values leak between openings
 
 **Supported operation types after Pass 4:**
 
@@ -443,6 +452,16 @@ labels survive a full reload without any per-row `GET /v1/assets/{id}` call.
 - Metadata section: sector, industry, country, website (if present)
 - Aliases section (if present)
 - Loading, error, not-found states
+- "Ajouter au portefeuille" action: opens the shared `CreateOperationModal`
+  with `operation_type: "buy"` preselected and the displayed asset preset.
+  It records a **posted `buy` operation against the active portfolio** and tracks
+  the returned refresh request via `useRefreshTrackingStore`. It does **not**
+  create or modify any asset-catalogue row, does not infer an FX rate, and does
+  not copy the displayed market price into the execution price. When the
+  portfolio store is still idle (e.g. direct deep-link reload), AssetDetail
+  loads the portfolios itself before the action can open the modal; if there is
+  no portfolio, the action is explicitly disabled with a non-broken message.
+  A shared `RefreshNotice` renders the refresh status on the page.
 
 **Terminology / routing:**
 
@@ -558,6 +577,13 @@ npm run build
 - Dashboard allocation stats (open positions, best/worst perf): **connected** to `/holdings` read model (Pass 5b)
 - Dashboard notice banner: **accurate** (states that benchmark remains demo; all other blocks use real data)
 - Dashboard quick action "Catalogue d'actifs": **routes to `/assets`** instead of opening the old placeholder add-asset modal
+- Dashboard "Ajouter un actif" quick action: **implemented** — opens the shared
+  modal with `operation_type: "buy"` preselected and no asset preselected; records
+  a posted `buy` operation against the active portfolio and tracks the refresh;
+  does not modify the asset catalogue
+- AssetDetail "Ajouter au portefeuille" action: **implemented** — opens the shared
+  modal with `buy` preselected and the displayed asset preset, using the active
+  portfolio; missing-portfolio and loading states are explicit and non-broken
 - Asset display hydration in Transactions: **implemented** (Pass 5b) — on load, missing asset labels are resolved via `GET /v1/assets/{id}`, best-effort and non-blocking
 - Asset catalogue (`/assets`): **implemented** (real data, search, filters, pagination) (Pass 7)
 - Asset detail (`/assets/:id`): **implemented** (real data, identity, market data, metadata, aliases) (Pass 7)

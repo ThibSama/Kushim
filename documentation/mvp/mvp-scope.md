@@ -87,7 +87,6 @@ Remaining mock/UI-only areas:
 
 - dashboard benchmark remains demo/mock data;
 - settings preference/password/delete actions are UI-only;
-- dashboard "Ajouter un actif" modal may remain placeholder/UI-only;
 - complex operation UX such as split, spin-off, symbol change, and adjustment remains deferred.
 
 ## What is implemented with mock and guarded Finnhub providers

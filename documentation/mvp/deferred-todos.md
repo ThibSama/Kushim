@@ -283,7 +283,13 @@ documentation PR.
 - settings preference editing inside `kushim-app` (deferred to the dedicated auth frontend)
 - in-app password change (deferred to the dedicated auth frontend)
 - in-app account deletion (no backend contract; deferred)
-- dashboard "Ajouter un actif" production flow
+- ~~dashboard "Ajouter un actif" production flow~~ → **completed**: the
+  Dashboard "Ajouter un actif" quick action and the AssetDetail
+  "Ajouter au portefeuille" action now open the shared `CreateOperationModal`
+  (type `buy`, optional asset preset) and record a posted `buy` operation
+  against the active portfolio, reusing the existing idempotency-key lifecycle
+  and refresh tracking. No asset-catalogue write, no automatic FX or
+  execution-price inference is introduced.
 
 ### Known limitation
 
