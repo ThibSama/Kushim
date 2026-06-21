@@ -7,16 +7,18 @@
 1. Verifies all 4 backend services are healthy.
 2. Signs up a unique demo user via `kushim-auth-api`.
 3. Creates a USD portfolio via `kushim-api`.
-4. Seeds a demo AAPL asset in PostgreSQL (or finds an existing one).
-5. Creates and posts a deposit operation (10,000.00 USD).
-6. Creates and posts a buy operation (10 AAPL at 195.23 USD).
-7. Runs `kushim-market-data` to refresh current prices (mock provider).
-8. Runs `kushim-market-data` to fill historical price cache.
-9. Runs `kushim-worker` to rebuild read models.
-10. Runs `kushim-worker` to generate daily snapshots.
-11. Runs `kushim-worker` to backfill historical snapshots.
-12. Verifies all API read endpoints (summary, holdings, snapshots, operations).
-13. Prints a PASS/FAIL summary with all generated IDs.
+4. Resolves the canonical AAPL asset in PostgreSQL (reused, not created).
+5. Runs `kushim-market-data` to refresh current prices (mock provider).
+6. Runs `kushim-market-data` to fill historical price cache.
+7. Creates and posts a deposit operation (10,000.00 USD).
+8. Creates and posts a buy operation (10 AAPL at 195.23 USD).
+9. Polls the automatic refresh request until completed (no manual rebuild).
+10. Runs `kushim-worker` to backfill historical snapshots.
+11. Verifies all API read endpoints (summary, holdings, snapshots, operations).
+12. Prints a PASS/FAIL summary with all generated IDs.
+
+A Bash equivalent is available at `scripts/bash/demo/backend-e2e.sh`.
+Both implementations must preserve functional parity.
 
 ## Prerequisites
 
@@ -29,31 +31,31 @@
 
 ```powershell
 cd E:\Kushim
-.\scripts\demo\backend-e2e.ps1
+.\scripts\powershell\demo\backend-e2e.ps1
 ```
 
 With verbose JSON output:
 
 ```powershell
-.\scripts\demo\backend-e2e.ps1 -VerboseJson
+.\scripts\powershell\demo\backend-e2e.ps1 -VerboseJson
 ```
 
 Skip Docker jobs (useful when jobs were already run):
 
 ```powershell
-.\scripts\demo\backend-e2e.ps1 -SkipDockerJobs -VerboseJson
+.\scripts\powershell\demo\backend-e2e.ps1 -SkipDockerJobs -VerboseJson
 ```
 
 Custom prefix for demo data:
 
 ```powershell
-.\scripts\demo\backend-e2e.ps1 -DemoPrefix "jury_demo"
+.\scripts\powershell\demo\backend-e2e.ps1 -DemoPrefix "jury_demo"
 ```
 
 Dry run (health check only):
 
 ```powershell
-.\scripts\demo\backend-e2e.ps1 -DryRun
+.\scripts\powershell\demo\backend-e2e.ps1 -DryRun
 ```
 
 ## Safety policy

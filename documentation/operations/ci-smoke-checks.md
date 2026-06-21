@@ -70,7 +70,7 @@ Triggers: push to `main`, pull requests targeting `main`.
 ## What is intentionally not checked
 
 - **Finnhub provider calls**: CI uses mock provider only. No `FINNHUB_API_KEY` secret is configured.
-- **Backend E2E smoke test** (`scripts/demo/backend-e2e.ps1`): requires Docker Compose with all 6+ services built and running, uses `docker compose run` for job execution — deferred until a Docker-based CI pipeline is designed.
+- **Backend E2E smoke test** (`scripts/powershell/demo/backend-e2e.ps1`): requires Docker Compose with all 6+ services built and running, uses `docker compose run` for job execution — deferred until a Docker-based CI pipeline is designed.
 - **Frontend E2E**: no browser-based testing.
 - **Docker image builds**: not part of the smoke check workflow.
 - **Production deployment**: entirely out of scope.

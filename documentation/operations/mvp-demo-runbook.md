@@ -212,8 +212,14 @@ Pour une démo complète, créer :
 **Alternative rapide** : exécuter le smoke test backend qui fait tout automatiquement :
 
 ```powershell
-.\scripts\demo\backend-e2e.ps1
+.\scripts\powershell\demo\backend-e2e.ps1
 # → 18/18 assertions, portefeuille démo créé avec données
+```
+
+Ou en Bash (Linux/macOS/WSL) :
+
+```bash
+./scripts/bash/demo/backend-e2e.sh
 ```
 
 Puis récupérer le `portfolioId` affiché dans la sortie pour les commandes worker.
@@ -447,7 +453,8 @@ Après avoir exécuté le parcours complet :
 ## Références
 
 - [Backend E2E smoke test runbook](backend-demo-e2e.md)
-- [Backend E2E smoke test script](../../scripts/demo/backend-e2e.ps1)
+- [Backend E2E — PowerShell](../../scripts/powershell/demo/backend-e2e.ps1)
+- [Backend E2E — Bash](../../scripts/bash/demo/backend-e2e.sh)
 - [Audit MVP readiness](../reports/audit-mvp-readiness-2026-06-11.fr.md)
 - [MVP progress report (FR)](../reports/kushim-mvp-progress-report.fr.md)
 - [Docker local dev](docker-local-dev.md)

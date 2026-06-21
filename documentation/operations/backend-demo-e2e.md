@@ -22,7 +22,7 @@ The full chain proves:
 
 ### Automatic refresh (P0)
 
-`scripts/demo/backend-e2e.ps1` now validates the **automatic** refresh path:
+`scripts/powershell/demo/backend-e2e.ps1` now validates the **automatic** refresh path:
 posting an operation enqueues a durable `portfolio_refresh_requests` row
 (returned in the API response as `refresh_request`), and the `kushim-worker`
 service — running in loop mode with
@@ -598,16 +598,38 @@ Do not run bulk `DELETE` or `TRUNCATE` on shared tables.
 
 ## Automated script
 
-An automated PowerShell script implements this runbook:
+Both PowerShell and Bash implementations cover this runbook:
 
-- **`scripts/demo/backend-e2e.ps1`** — executes the full chain automatically with unique demo identifiers, Docker job execution, and API verification assertions.
-- See `scripts/demo/README.md` for usage and parameters.
+- **PowerShell:** `scripts/powershell/demo/backend-e2e.ps1`
+- **Bash:** `scripts/bash/demo/backend-e2e.sh`
+
+Both execute the full chain automatically with unique demo identifiers, Docker
+job execution, and API verification assertions. Both use the deterministic mock
+provider and must preserve functional parity.
+
+**PowerShell:**
 
 ```powershell
-.\scripts\demo\backend-e2e.ps1              # full run
-.\scripts\demo\backend-e2e.ps1 -VerboseJson # with JSON output
-.\scripts\demo\backend-e2e.ps1 -DryRun      # health check only
+.\scripts\powershell\demo\backend-e2e.ps1                # full run
+.\scripts\powershell\demo\backend-e2e.ps1 -VerboseJson   # with JSON output
+.\scripts\powershell\demo\backend-e2e.ps1 -DryRun         # health check only
 ```
+
+**Bash (Linux/macOS/WSL):**
+
+```bash
+./scripts/bash/demo/backend-e2e.sh                          # full run
+./scripts/bash/demo/backend-e2e.sh --verbose-json           # with JSON output
+./scripts/bash/demo/backend-e2e.sh --dry-run                 # health check only
+./scripts/bash/demo/backend-e2e.sh --skip-docker-jobs --verbose-json
+```
+
+Prerequisites for Bash: `bash`, `curl`, `jq`, `docker`, `docker compose`, `openssl`.
+Prerequisites for PowerShell: Docker Desktop, PowerShell 5.1+ or 7+.
+
+Both scripts are for local development and demo validation only. They do not
+modify application code, DDL, or Docker configuration. They never delete,
+truncate, reset, or clean application data.
 
 ## Future automation
 

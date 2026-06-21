@@ -140,9 +140,18 @@ Files under `infra/postgres/init/` initialize a fresh, empty PostgreSQL volume. 
 
 For an existing local database, use the repository helper:
 
+**PowerShell:**
+
 ```powershell
 docker compose up -d database
-./scripts/dev/apply-db-upgrades.ps1
+./scripts/powershell/dev/apply-db-upgrades.ps1
+```
+
+**Bash (Linux/macOS/WSL):**
+
+```bash
+docker compose up -d database
+./scripts/bash/dev/apply-db-upgrades.sh
 ```
 
 The helper:
@@ -171,7 +180,7 @@ The verification list is not a complete schema diff and currently does not prove
 | Host port already allocated | `docker ps --format "table {{.Names}}\t{{.Ports}}"` | Another container owns the fixed port | Stop the conflicting local stack or use an explicit isolated override | Yes |
 | Two worktrees expose the same ports | `git worktree list`; then the port inspection above | Separate Compose projects still share host ports | Keep one stack active or supply an explicit local override | Yes |
 | Environment value did not reach a container | `docker compose exec <service> printenv NON_SENSITIVE_NAME` | Container was not recreated or interpolation differs | Recreate the service with the intended non-sensitive override | Yes |
-| Database volume has an older schema | Run `./scripts/dev/apply-db-upgrades.ps1` and inspect its result | Init scripts did not rerun on the existing volume | Apply upgrades; reserve reset for disposable data | Yes |
+| Database volume has an older schema | Run `./scripts/powershell/dev/apply-db-upgrades.ps1` and inspect its result | Init scripts did not rerun on the existing volume | Apply upgrades; reserve reset for disposable data | Yes |
 | Frontend works directly but not through nginx | Direct frontend check, then canonical Host-header check | Nginx route/upstream/HMR path is failing | Inspect nginx config-mounted container and logs | Yes |
 
 Only use `printenv` for explicitly non-sensitive variables. Never print `AUTH_JWT_SECRET`, database passwords, provider keys, or tokens.
@@ -197,11 +206,19 @@ Stop the conflicting local stack, or use an explicit local Compose override main
 
 ## Scope of `check-local-services.ps1`
 
+**PowerShell:**
+
 ```powershell
-./scripts/validation/check-local-services.ps1 -Start
+./scripts/powershell/validation/check-local-services.ps1 -Start
 ```
 
-With `-Start`, the script:
+**Bash (Linux/macOS/WSL):**
+
+```bash
+./scripts/bash/validation/check-local-services.sh --start
+```
+
+With `-Start` (PowerShell) or `--start` (Bash), the script:
 
 1. verifies that `docker` and Compose are available;
 2. starts `database`, `redis`, `kushim-auth-api`, `kushim-api`, `kushim-worker`, and `kushim-market-data`;

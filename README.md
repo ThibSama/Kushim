@@ -38,7 +38,7 @@ Important:
 - the project is now **suitable for a supervised internal MVP demo**;
 - Scenario A mock dry-run passed end-to-end, including auth, portfolio creation, operations, market-data mock, worker rebuild, snapshots, backfill, dashboard, positions, transactions, assets, asset detail, settings, and logout;
 - browser validation during the dry-run showed zero blocking console errors;
-- the backend E2E chain is **demonstrable locally** via an automated smoke test (`scripts/demo/backend-e2e.ps1`, 18/18 assertions passed);
+- the backend E2E chain is **demonstrable locally** via an automated smoke test (`scripts/powershell/demo/backend-e2e.ps1`, 18/18 assertions passed);
 - `kushim-app` is largely wired to real backend data; remaining mock elements are isolated and labeled;
 - the project is **MVP-oriented**, not production-ready;
 - market data uses mock/seeded data for the supervised MVP demo; Finnhub current stock quotes are available for tightly allowlisted dev validation; FX is not implemented.
@@ -123,7 +123,13 @@ For a fast reproducible backend preflight before DB-backed Rust tests:
 
 ```powershell
 cd E:\Kushim
-.\scripts\validation\check-local-services.ps1 -Start
+.\scripts\powershell\validation\check-local-services.ps1 -Start
+```
+
+Linux/macOS/WSSL equivalent:
+
+```bash
+./scripts/bash/validation/check-local-services.sh --start
 ```
 
 This starts/verifies PostgreSQL, Redis, auth API, business API, worker, and market-data health endpoints. Run it before DB-backed Rust tests to avoid false `PoolTimedOut` failures caused by missing Docker/PostgreSQL.
@@ -144,7 +150,7 @@ Start here:
 - [Validation commands](documentation/operations/validation-commands.md)
 - [MVP demo runbook (frontend + backend)](documentation/operations/mvp-demo-runbook.md)
 - [Backend E2E demo runbook](documentation/operations/backend-demo-e2e.md)
-- [Backend E2E smoke test](scripts/demo/README.md)
+- [Backend E2E smoke test](scripts/powershell/demo/README.md)
 
 Current progress reports:
 
@@ -168,7 +174,7 @@ Main reasons:
 - observability, production secrets handling, and backup strategy are still incomplete;
 - some V1 business calculations intentionally remain conservative.
 
-Note: the backend E2E chain is validated locally via `scripts/demo/backend-e2e.ps1` (18/18 assertions), but this is a local debug/demo smoke test, not a production validation.
+Note: the backend E2E chain is validated locally via `scripts/powershell/demo/backend-e2e.ps1` (18/18 assertions), but this is a local debug/demo smoke test, not a production validation.
 
 This repository is the private project workspace and should be treated as the real working repository, including its documentation.
 

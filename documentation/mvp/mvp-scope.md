@@ -144,11 +144,12 @@ Browser validation during the dry-run showed zero blocking console errors.
 
 ### Backend E2E smoke test — validated locally
 
-The full backend MVP chain is now executable and automated via:
+The full backend MVP chain is now executable and automated via both implementations:
 
-- `scripts/demo/backend-e2e.ps1`
+- PowerShell: `scripts/powershell/demo/backend-e2e.ps1`
+- Bash: `scripts/bash/demo/backend-e2e.sh`
 
-The script exercises all four backend services in sequence (signup → portfolio → operations → market-data mock → worker rebuild/snapshots/backfill → API verification) and has been executed successfully with **18/18 assertions passing**.
+Both scripts exercise all four backend services in sequence (signup → portfolio → operations → market-data mock → worker rebuild/snapshots/backfill → API verification) and have been executed successfully with **18/18 assertions passing**. Both must preserve functional parity.
 
 This is a local debug/demo smoke test using the mock market-data provider. It is not a production validation.
 

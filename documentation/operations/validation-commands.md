@@ -82,7 +82,13 @@ For dependency failures, readiness checks, or reset decisions, use [Local reset 
 
 ```powershell
 cd E:\Kushim
-.\scripts\validation\check-local-services.ps1 -Start
+.\scripts\powershell\validation\check-local-services.ps1 -Start
+```
+
+Linux/macOS/WSL equivalent:
+
+```bash
+./scripts/bash/validation/check-local-services.sh --start
 ```
 
 Then run DB-backed Rust tests with:
@@ -97,10 +103,19 @@ If this prerequisite is skipped, DB-backed Rust tests may fail with connection t
 
 Run before an internal demo:
 
+**PowerShell:**
+
 ```powershell
 cd E:\Kushim
-.\scripts\validation\check-local-services.ps1 -Start
-.\scripts\demo\backend-e2e.ps1
+.\scripts\powershell\validation\check-local-services.ps1 -Start
+.\scripts\powershell\demo\backend-e2e.ps1
+```
+
+**Bash (Linux/macOS/WSL):**
+
+```bash
+./scripts/bash/validation/check-local-services.sh --start
+./scripts/bash/demo/backend-e2e.sh
 ```
 
 Then start `kushim-app` and do the manual frontend smoke described in `mvp-demo-runbook.md`.
@@ -137,7 +152,7 @@ Before a Rust service PR:
 
 ```powershell
 cd E:\Kushim
-.\scripts\validation\check-local-services.ps1 -Start
+.\scripts\powershell\validation\check-local-services.ps1 -Start
 cd E:\Kushim\<rust-service>
 cargo fmt --check
 $env:DATABASE_URL='postgresql://kushim:kushim_secret_dev@localhost:5432/kushim'
@@ -150,12 +165,20 @@ Before a supervised MVP demo:
 
 ```powershell
 cd E:\Kushim
-.\scripts\validation\check-local-services.ps1 -Start
-.\scripts\demo\backend-e2e.ps1
+.\scripts\powershell\validation\check-local-services.ps1 -Start
+.\scripts\powershell\demo\backend-e2e.ps1
 cd E:\Kushim\kushim-app
 npm run lint
 npm run build
 npm run dev -- --host 127.0.0.1
+```
+
+Bash equivalent for the backend E2E part:
+
+```bash
+./scripts/bash/validation/check-local-services.sh --start
+./scripts/bash/demo/backend-e2e.sh
+cd kushim-app && npm run lint && npm run build && npm run dev -- --host 127.0.0.1
 ```
 
 ## Common Rust validation pattern
@@ -181,7 +204,7 @@ Important:
 - integration tests for Rust services require PostgreSQL reachable from the host at the configured `DATABASE_URL`;
 - if Docker Desktop or PostgreSQL is not running, DB-backed tests can fail with connection timeouts even when unit tests and clippy pass;
 - initialize the local schema from `infra/postgres/init/001_init.sql` before treating DB-backed test results as meaningful;
-- use `.\scripts\validation\check-local-services.ps1 -Start` before DB-backed Rust tests to avoid false failures from missing Docker/PostgreSQL;
+- use `.\scripts\powershell\validation\check-local-services.ps1 -Start` before DB-backed Rust tests to avoid false failures from missing Docker/PostgreSQL;
 - do not print `.env` files or provider API keys while validating.
 
 ## `kushim-auth/api`
@@ -370,7 +393,13 @@ volume, apply the idempotent, non-destructive upgrade scripts (adds
 `portfolio_refresh_requests`):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts/dev/apply-db-upgrades.ps1
+powershell -ExecutionPolicy Bypass -File scripts/powershell/dev/apply-db-upgrades.ps1
+```
+
+Linux/macOS/WSL equivalent:
+
+```bash
+./scripts/bash/dev/apply-db-upgrades.sh
 ```
 
 Safe to run multiple times; never drops/truncates/deletes data.
@@ -386,7 +415,7 @@ the runtime path:
   `process portfolio refresh requests pass` lines
 - post an operation; the API response includes `refresh_request`; poll
   `GET /v1/portfolios/{id}/refresh-requests/{id}` until `completed`
-- `scripts/demo/backend-e2e.ps1` validates this end-to-end (18 assertions, no
+- `scripts/powershell/demo/backend-e2e.ps1` validates this end-to-end (18 assertions, no
   manual `rebuild_current_read_models` / `generate_daily_snapshots`)
 
 ## Documentation-only tasks
