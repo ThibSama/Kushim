@@ -191,7 +191,12 @@ export function Dashboard() {
   const [showCreatePortfolio, setShowCreatePortfolio] = useState(false);
 
   const [period, setPeriod] = useState("1Y");
-  const [showAddTransaction, setShowAddTransaction] = useState(false);
+  // Discriminated quick-action intent so the generic transaction flow and the
+  // add-asset flow cannot leak into each other. Each opening is a fresh mount
+  // of the modal via conditional render; `null` means no modal is open.
+  const [quickAction, setQuickAction] = useState<
+    "transaction" | "add-asset" | null
+  >(null);
   const periods = ["1M", "3M", "6M", "1Y", "MAX"];
 
   useEffect(() => {
@@ -436,12 +441,19 @@ export function Dashboard() {
               variant="primary"
               icon={Plus}
               className="w-full sm:w-auto"
-              onClick={() => setShowAddTransaction(true)}>
+              onClick={() => setQuickAction("transaction")}>
               Ajouter une transaction
             </Button>
             <Button
               variant="secondary"
               icon={PlusCircle}
+              className="w-full sm:w-auto"
+              onClick={() => setQuickAction("add-asset")}>
+              Ajouter un actif
+            </Button>
+            <Button
+              variant="secondary"
+              icon={Briefcase}
               className="w-full sm:w-auto"
               onClick={() => navigate("/assets")}>
               Catalogue d'actifs
@@ -989,11 +1001,14 @@ export function Dashboard() {
         <CreatePortfolioModal onClose={() => setShowCreatePortfolio(false)} />
       )}
 
-      {/* Add Transaction Modal — real operation creation */}
-      {showAddTransaction && activePortfolioId && (
+      {/* Operation modal — generic transaction OR "Ajouter un actif" (buy). Both
+          intents reuse the same component; `initialOperationType` selects the
+          starting type. Conditional render guarantees a fresh mount each time. */}
+      {quickAction && activePortfolioId && (
         <CreateOperationModal
           portfolioId={activePortfolioId}
-          onClose={() => setShowAddTransaction(false)}
+          initialOperationType={quickAction === "add-asset" ? "buy" : undefined}
+          onClose={() => setQuickAction(null)}
         />
       )}
 

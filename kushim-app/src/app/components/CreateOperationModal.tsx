@@ -85,9 +85,23 @@ function needsPrice(type: string): boolean {
 type Props = {
   portfolioId: string;
   onClose: () => void;
+  /// Optional preset for the operation type (e.g. "buy" from the "Ajouter un
+  /// actif" flow). When omitted, the generic default ("deposit") is preserved
+  /// so the existing transaction entry point is unchanged.
+  initialOperationType?: string;
+  /// Optional preselected asset (e.g. the asset shown on AssetDetail). When
+  /// omitted, no asset is preselected. The user can still change or clear the
+  /// selection. This does NOT copy any market price into the execution price
+  /// and does NOT infer a currency or FX rate.
+  initialAsset?: Asset | null;
 };
 
-export function CreateOperationModal({ portfolioId, onClose }: Props) {
+export function CreateOperationModal({
+  portfolioId,
+  onClose,
+  initialOperationType,
+  initialAsset,
+}: Props) {
   const { createOperation, operationTypes, loadReferenceData } =
     useOperationsStore();
   const trackRefresh = useRefreshTrackingStore((s) => s.track);
@@ -96,14 +110,20 @@ export function CreateOperationModal({ portfolioId, onClose }: Props) {
   );
 
   const baseCurrency = portfolio?.base_currency ?? "EUR";
-  const [opType, setOpType] = useState("deposit");
+  // Presets only seed the INITIAL mount state. The parent owns the lifecycle
+  // (conditional render → a fresh mount per opening), so closing and reopening
+  // always starts a clean form: no draft values leak between openings. Without
+  // a preset the generic default ("deposit") is preserved.
+  const [opType, setOpType] = useState(initialOperationType ?? "deposit");
   const [executedAt, setExecutedAt] = useState(
     new Date().toISOString().slice(0, 16),
   );
   // The operation defaults to the active portfolio's base currency.
   const [currency, setCurrency] = useState(baseCurrency);
   const [fxRate, setFxRate] = useState("");
-  const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null);
+  const [selectedAsset, setSelectedAsset] = useState<Asset | null>(
+    initialAsset ?? null,
+  );
   const [quantity, setQuantity] = useState("");
   const [price, setPrice] = useState("");
   const [grossAmount, setGrossAmount] = useState("");

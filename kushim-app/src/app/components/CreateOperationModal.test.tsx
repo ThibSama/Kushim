@@ -71,6 +71,7 @@ vi.mock("../../stores/refreshTracking", () => ({
 
 import { CreateOperationModal } from "./CreateOperationModal";
 import { listCurrencies } from "../../lib/api/businessApi";
+import type { Asset } from "../../lib/api/businessApi";
 
 const REFERENCE = [
   { value: "EUR", label: "Euro" },
@@ -308,6 +309,164 @@ describe("CreateOperationModal", () => {
         screen.getByText(/Cette devise n'est pas prise en charge/),
       ).toBeInTheDocument(),
     );
+  });
+
+  it("surfaces a visible contract error when refresh_request is missing from the response", async () => {
+    // A posted operation MUST come back with a refresh_request. If the backend
+    // omits it, the modal must NOT silently close — it surfaces a contract
+    // error so the user knows the portfolio update was not planned.
+    createOperationMock.mockResolvedValueOnce({
+      refresh_request: null,
+    });
+    const user = userEvent.setup();
+    render(<CreateOperationModal portfolioId="pf-eur" onClose={() => {}} />);
+    await setMontantBrut(user, "100");
+    await user.click(screen.getByRole("button", { name: /Enregistrer/ }));
+    await waitFor(() =>
+      expect(
+        screen.getByText(
+          /mise à jour du portefeuille n'a pas pu être planifiée/,
+        ),
+      ).toBeInTheDocument(),
+    );
+    // The modal stays open (onClose not called) and the operation was sent.
+    expect(createOperationMock).toHaveBeenCalledTimes(1);
+    // The refresh must NOT have been tracked — there is nothing to track.
+    expect(trackMock).not.toHaveBeenCalled();
+  });
+
+  // ===================================================================
+  // "Ajouter un actif" / AssetDetail initialization (initialOperationType,
+  // initialAsset). These presets only seed the mount; they do not weaken
+  // validation, minor-unit conversion, idempotency rotation, or FX rules.
+  // ===================================================================
+  describe("add-asset initialization (initialOperationType / initialAsset)", () => {
+    const sampleAsset: Asset = {
+      id_asset: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      name: "Apple Inc.",
+      ticker: "AAPL",
+      isin: null,
+      exchange: null,
+      symbol: null,
+      network: null,
+      asset_class: "equity",
+      status: "active",
+      native_currency: null,
+      created_at: "",
+      updated_at: "",
+      metadata: null,
+      market_data: null,
+      aliases: null,
+    };
+
+    it("without init props defaults to the generic operation type (deposit)", () => {
+      render(<CreateOperationModal portfolioId="pf-eur" onClose={() => {}} />);
+      expect(
+        (screen.getByRole("combobox") as HTMLSelectElement).value,
+      ).toBe("deposit");
+    });
+
+    it("initialOperationType='buy' initializes the selector to buy and leaves the asset empty", () => {
+      render(
+        <CreateOperationModal
+          portfolioId="pf-eur"
+          initialOperationType="buy"
+          onClose={() => {}}
+        />,
+      );
+      expect(
+        (screen.getByRole("combobox") as HTMLSelectElement).value,
+      ).toBe("buy");
+      // buy is an asset type → the asset search input is visible and empty
+      // (no preselection when no initialAsset is supplied).
+      expect(
+        screen.getByPlaceholderText("Rechercher un actif (ticker, nom, ISIN)…"),
+      ).toBeInTheDocument();
+    });
+
+    it("initialAsset is displayed as already selected", () => {
+      render(
+        <CreateOperationModal
+          portfolioId="pf-eur"
+          initialOperationType="buy"
+          initialAsset={sampleAsset}
+          onClose={() => {}}
+        />,
+      );
+      // The selected-asset chip shows the ticker.
+      expect(screen.getByText("AAPL")).toBeInTheDocument();
+      // The search input is NOT shown because an asset is already selected.
+      expect(
+        screen.queryByPlaceholderText("Rechercher un actif (ticker, nom, ISIN)…"),
+      ).not.toBeInTheDocument();
+    });
+
+    it("submits an initialized buy with the full posted payload and tracks the refresh", async () => {
+      const user = userEvent.setup();
+      render(
+        <CreateOperationModal
+          portfolioId="pf-eur"
+          initialOperationType="buy"
+          initialAsset={sampleAsset}
+          onClose={() => {}}
+        />,
+      );
+
+      const byLabel = (text: string) =>
+        screen
+          .getAllByRole("spinbutton")
+          .find((el) =>
+            el.previousElementSibling?.textContent?.includes(text),
+          ) as HTMLInputElement;
+
+      await user.type(byLabel("Quantité"), "10");
+      await user.type(byLabel("Prix unitaire"), "150.00");
+      await user.type(byLabel("Frais"), "2.50");
+
+      await user.click(screen.getByRole("button", { name: /Enregistrer/ }));
+      await waitFor(() => expect(createOperationMock).toHaveBeenCalled());
+
+      const [portfolioIdArg, payload, idempotencyKey] =
+        createOperationMock.mock.calls[0];
+      expect(portfolioIdArg).toBe("pf-eur");
+      expect(payload.operation_type).toBe("buy");
+      expect(payload.operation_status).toBe("posted");
+      expect(payload.id_asset).toBe(sampleAsset.id_asset);
+      expect(payload.quantity).toBe("10");
+      expect(payload.price_minor).toBe(15000); // 150.00 → minor
+      expect(payload.currency).toBe("EUR"); // portfolio base, no FX
+      expect(payload.gross_amount_minor).toBe(150000); // 10 × 150.00 → minor
+      expect(payload.fees_minor).toBe(250); // 2.50 → minor
+      expect(payload.executed_at).toBeTruthy();
+      // Same currency as the portfolio base → no FX rate, nothing invented.
+      expect(payload.fx_rate_to_portfolio).toBeUndefined();
+      // P3 idempotency key is still generated and forwarded.
+      expect(idempotencyKey).toBeTruthy();
+
+      // The returned refresh request is tracked against the active portfolio.
+      expect(trackMock).toHaveBeenCalledWith("pf-eur", "rr-1");
+    });
+
+    it("does not contaminate a later generic open after an initialized instance is closed", () => {
+      const { unmount } = render(
+        <CreateOperationModal
+          portfolioId="pf-eur"
+          initialOperationType="buy"
+          onClose={() => {}}
+        />,
+      );
+      expect(
+        (screen.getByRole("combobox") as HTMLSelectElement).value,
+      ).toBe("buy");
+      unmount();
+
+      // A fresh generic open must default to deposit — the buy preset must not
+      // leak across mount lifecycles (no global draft state).
+      render(<CreateOperationModal portfolioId="pf-eur" onClose={() => {}} />);
+      expect(
+        (screen.getByRole("combobox") as HTMLSelectElement).value,
+      ).toBe("deposit");
+    });
   });
 
   // ===================================================================
