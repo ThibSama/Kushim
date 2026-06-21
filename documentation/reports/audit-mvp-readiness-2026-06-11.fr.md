@@ -63,7 +63,7 @@ Kushim est prêt pour une démo MVP interne. Le backend est solide et démontrab
 - Architecture respectée : `kushim-api` lecture seule pour les read models
 - `kushim-worker` écrit les read models et snapshots
 - `kushim-market-data` mock provider, 7 symboles USD
-- Smoke test E2E backend : 18/18 assertions (`scripts/demo/backend-e2e.ps1`)
+- Smoke test E2E backend : 18/18 assertions (`scripts/powershell/demo/backend-e2e.ps1`)
 
 ---
 
@@ -90,7 +90,7 @@ Kushim n'est **pas** un broker, une plateforme d'exécution, un fournisseur de d
 
 ```powershell
 # Pré-requis : services Docker up
-scripts/demo/backend-e2e.ps1
+scripts/powershell/demo/backend-e2e.ps1
 # Résultat attendu : 18/18 assertions ✓
 ```
 
@@ -175,7 +175,7 @@ scripts/demo/backend-e2e.ps1
 
 ### Smoke test E2E
 
-- Script : `scripts/demo/backend-e2e.ps1`
+- Script : `scripts/powershell/demo/backend-e2e.ps1`
 - Résultat : **18/18 assertions passées**
 - Scénario : signup → portfolio → deposit → buy → market-data refresh → worker rebuild/snapshots/backfill → API verification
 - Limitation : mock provider uniquement, pas de frontend, pas de FX

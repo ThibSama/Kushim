@@ -6,7 +6,7 @@
 -- WHY THIS FILE EXISTS
 --   001_init.sql owns the database schema (source of truth).
 --   This file owns the minimal, stable catalogue of assets reused across:
---     - backend E2E demonstrations (scripts/demo/backend-e2e.ps1)
+--     - backend E2E demonstrations (scripts/powershell/demo/backend-e2e.ps1)
 --     - mock market-data refreshes
 --     - controlled Finnhub current-quote validations
 --     - worker read-model reconstruction

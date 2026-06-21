@@ -29,7 +29,7 @@ Incremental upgrades for EXISTING volumes:
   with:
 
   ```powershell
-  powershell -ExecutionPolicy Bypass -File scripts/dev/apply-db-upgrades.ps1
+  powershell -ExecutionPolicy Bypass -File scripts/powershell/dev/apply-db-upgrades.ps1
   ```
 
   Each upgrade script uses `IF NOT EXISTS` / guarded `DO` blocks and never drops,

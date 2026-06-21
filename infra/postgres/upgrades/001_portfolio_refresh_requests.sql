@@ -8,7 +8,7 @@
 --   directory is empty (fresh volume). Existing local volumes therefore do
 --   not get the new portfolio_refresh_requests table automatically. This
 --   script adds it safely. It can be applied with:
---     powershell -ExecutionPolicy Bypass -File scripts/dev/apply-db-upgrades.ps1
+--     powershell -ExecutionPolicy Bypass -File scripts/powershell/dev/apply-db-upgrades.ps1
 --
 -- SAFETY
 --   - Uses IF NOT EXISTS everywhere; re-running is a no-op.

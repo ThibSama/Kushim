@@ -14,7 +14,7 @@ Kushim a désormais un socle backend MVP sérieux autour d'une architecture clai
 L'état global du projet :
 
 - le backend principal est avancé et validé sur plusieurs axes ;
-- le backend E2E est désormais démontrable localement via un smoke test automatisé (`scripts/demo/backend-e2e.ps1`, 18/18 assertions passées) ;
+- le backend E2E est désormais démontrable localement via un smoke test automatisé (`scripts/powershell/demo/backend-e2e.ps1`, 18/18 assertions passées) ;
 - `kushim-market-data` dispose d'un mock provider (défaut sûr) et d'un provider Finnhub gardé par allowlist ; les quotes courantes Finnhub sont live-validées pour AAPL, MSFT et NVDA uniquement ;
 - `kushim-app` n'affiche plus aucune donnée financière simulée côté utilisateur : benchmark démo, swap simulé et formulaires Settings non fonctionnels ont été retirés ; toutes les valeurs visibles proviennent de l'API, des read models, des opérations persistées ou d'états explicitement indisponibles ;
 - le catalogue d'actifs MVP dispose d'un seed canonique stable (`infra/postgres/init/002_seed_canonical_assets.sql`) pour AAPL, MSFT et NVDA ; les démos backend, les validations Finnhub contrôlées et les tests d'intégration market-data réutilisent ces lignes au lieu d'en créer à chaque exécution ;
@@ -462,7 +462,7 @@ Compteurs observés dans le dépôt :
 
 Un script automatisé exécute la chaîne complète backend :
 
-- script : `scripts/demo/backend-e2e.ps1`
+- script : `scripts/powershell/demo/backend-e2e.ps1`
 - runbook : `documentation/operations/backend-demo-e2e.md`
 - résultat : **18/18 assertions passées**
 - services couverts : `kushim-auth/api`, `kushim-api`, `kushim-market-data`, `kushim-worker`
@@ -570,7 +570,7 @@ Le backend principal est à un niveau MVP solide et **démontrable de bout en bo
 - worker snapshots
 - backfill historique V1
 - market-data mock provider + Finnhub gardé (quotes courantes actions)
-- **smoke test E2E automatisé : 18/18 assertions passées** (`scripts/demo/backend-e2e.ps1`)
+- **smoke test E2E automatisé : 18/18 assertions passées** (`scripts/powershell/demo/backend-e2e.ps1`)
 
 Les quatre briques backend (`kushim-auth/api`, `kushim-api`, `kushim-market-data`, `kushim-worker`) sont intégrées dans le scénario de smoke test.
 
@@ -712,7 +712,7 @@ Stabiliser et étendre la stratégie market-data :
 
 ~~Ajouter un parcours E2E de démo~~ → **Fait.**
 
-Le smoke test backend E2E est implémenté et validé : `scripts/demo/backend-e2e.ps1` (18/18 assertions).
+Le smoke test backend E2E est implémenté et validé : `scripts/powershell/demo/backend-e2e.ps1` (18/18 assertions).
 
 ### Priorité 3 (nouvelle)
 
@@ -744,4 +744,4 @@ Décisions importantes à venir :
 - [Validation commands](../operations/validation-commands.md)
 - [MVP demo runbook (frontend + backend)](../operations/mvp-demo-runbook.md)
 - [Backend E2E demo runbook](../operations/backend-demo-e2e.md)
-- [Backend E2E smoke test script](../../scripts/demo/backend-e2e.ps1)
+- [Backend E2E smoke test script](../../scripts/powershell/demo/backend-e2e.ps1)
