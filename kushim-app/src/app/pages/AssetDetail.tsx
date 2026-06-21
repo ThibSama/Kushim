@@ -1,8 +1,12 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { ArrowLeft, Loader2, AlertCircle, ExternalLink } from "lucide-react";
+import { ArrowLeft, Loader2, AlertCircle, ExternalLink, Plus } from "lucide-react";
 import { Card } from "../components/Card";
+import { Button } from "../components/Button";
+import { CreateOperationModal } from "../components/CreateOperationModal";
+import { RefreshNotice } from "../components/RefreshNotice";
 import { useAssetsStore } from "../../stores/assets";
+import { usePortfolioStore } from "../../stores/portfolio";
 
 const ASSET_CLASS_LABELS: Record<string, string> = {
   equity: "Action",
@@ -96,10 +100,30 @@ export function AssetDetail() {
     detailError: error,
     loadAssetDetail,
   } = useAssetsStore();
+  const {
+    activePortfolioId,
+    status: portfolioStatus,
+    loadPortfolios,
+  } = usePortfolioStore();
+  const [showAddAsset, setShowAddAsset] = useState(false);
 
   useEffect(() => {
     if (id) loadAssetDetail(id);
   }, [id, loadAssetDetail]);
+
+  // AssetDetail can be reached via a direct URL (deep link), so it must not
+  // rely on Dashboard having loaded the portfolios first. Load them here when
+  // the store is still idle so the active portfolio is resolved before any
+  // operation modal can open. We do NOT fall back to the modal's EUR currency
+  // when the portfolio is still unresolved — the action stays disabled instead.
+  useEffect(() => {
+    if (portfolioStatus === "idle") loadPortfolios();
+  }, [portfolioStatus, loadPortfolios]);
+
+  const portfolioReady = portfolioStatus === "success" && !!activePortfolioId;
+  const noPortfolio = portfolioStatus === "success" && !activePortfolioId;
+  const portfolioLoading =
+    portfolioStatus === "loading" || portfolioStatus === "idle";
 
   const loading = detailStatus === "loading" || detailStatus === "idle";
 
@@ -271,7 +295,52 @@ export function AssetDetail() {
             </div>
           )}
         </div>
+
+        {/* "Ajouter au portefeuille" — records a posted buy operation against
+            the active portfolio; does not create or modify an asset row. The
+            action is disabled (not silently broken) while the portfolio is
+            loading, missing, or failed to load. */}
+        <div className="flex flex-col items-end gap-1.5">
+          {portfolioStatus === "error" ? (
+            <span
+              style={{
+                fontSize: "13px",
+                color: "var(--color-loss)",
+                textAlign: "right",
+              }}>
+              Portefeuille indisponible
+            </span>
+          ) : portfolioLoading ? (
+            <Button variant="secondary" icon={Plus} disabled>
+              Chargement…
+            </Button>
+          ) : noPortfolio ? (
+            <>
+              <Button variant="secondary" icon={Plus} disabled>
+                Ajouter au portefeuille
+              </Button>
+              <span
+                style={{
+                  fontSize: "12px",
+                  color: "var(--text-tertiary)",
+                  textAlign: "right",
+                  maxWidth: "260px",
+                }}>
+                Créez d'abord un portefeuille pour enregistrer un achat.
+              </span>
+            </>
+          ) : (
+            <Button
+              variant="primary"
+              icon={Plus}
+              onClick={() => setShowAddAsset(true)}>
+              Ajouter au portefeuille
+            </Button>
+          )}
+        </div>
       </div>
+
+      <RefreshNotice />
 
       {/* Market data card */}
       {md ? (
@@ -557,6 +626,20 @@ export function AssetDetail() {
             ))}
           </div>
         </Card>
+      )}
+
+      {/* "Ajouter au portefeuille" records a posted `buy` operation against the
+          active portfolio — it does NOT create or modify any asset-catalogue
+          row. The modal reuses the existing operation contract, idempotency-key
+          lifecycle and refresh tracking; the returned refresh request is shown
+          via the shared <RefreshNotice /> above (no second polling loop). */}
+      {showAddAsset && portfolioReady && asset && activePortfolioId && (
+        <CreateOperationModal
+          portfolioId={activePortfolioId}
+          initialOperationType="buy"
+          initialAsset={asset}
+          onClose={() => setShowAddAsset(false)}
+        />
       )}
     </div>
   );
