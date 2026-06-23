@@ -34,6 +34,59 @@ or `/connexion` → auth API → handoff code → redirect to
 code against `http://auth-api.kushim.localhost` → tokens stored → `/dashboard`.
 Only the short-lived one-time handoff code ever appears in a URL.
 
+## Same-origin service-health endpoints
+
+nginx exposes four read-only health routes on **both** browser hosts
+(`http://kushim.localhost` and `http://app.kushim.localhost`). They let the app
+and the public status page probe backend readiness same-origin (no CORS, no
+token):
+
+| Same-origin path | Proxies to | Service |
+|---|---|---|
+| `/_health/api` | `http://kushim-api:8080/ready` | Business API |
+| `/_health/auth` | `http://kushim-auth-api:3002/ready` | Auth API |
+| `/_health/worker` | `http://kushim-worker:8081/ready` | Worker |
+| `/_health/market-data` | `http://kushim-market-data:8082/ready` | Market-data |
+
+Each is an **exact** nginx location (`location = /_health/<service>`) that proxies
+only to the corresponding `/ready` endpoint — no arbitrary service path can be
+reached. Short proxy timeouts (connect 2s, send/read 4s) make an unreachable
+upstream surface quickly as a non-2xx (nginx `502`) instead of hanging the
+browser probe. No new public ports are published and no CORS headers are added.
+
+**Semantic limitation:** `/ready` means only that the service is reachable and
+considers itself ready (it runs its own DB/Redis check). It is **not** a worker
+job-processing heartbeat, **not** a market-data freshness signal, and **not** a
+provider-availability check. Those are out of scope for this pass.
+
+The public status page lives at `http://kushim.localhost/health`. It shows the
+website, auth, API, worker and market-data rows and refreshes ~every 30s.
+
+Quick probe (returns the upstream `/ready` JSON, or `502` when stopped):
+
+```powershell
+curl -i http://kushim.localhost/_health/api
+curl -i http://app.kushim.localhost/_health/worker
+```
+
+Failure simulation (stop a backend, watch the route flip to non-2xx, then
+restore):
+
+```powershell
+docker compose stop kushim-worker
+curl -i http://kushim.localhost/_health/worker   # expect 502
+docker compose start kushim-worker
+```
+
+When the **API** is stopped, the private app replaces the page with a blocking
+"temporairement indisponible" fallback (navbar/theme/footer preserved, session
+kept, `Réessayer` re-probes without a reload). When only the **worker** or
+**market-data** is stopped, the app stays usable and shows a non-blocking yellow
+banner. The public `/health` page reflects the same states.
+
+The app links to the public health page via `VITE_SITE_URL` (Docker:
+`http://kushim.localhost`; direct dev defaults to `http://localhost:3000`).
+
 ## Main command pattern
 
 Build a service:

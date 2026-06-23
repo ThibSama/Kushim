@@ -84,6 +84,9 @@ services:
       VITE_AUTH_URL: http://auth.kushim.localhost
       VITE_AUTH_API_URL: http://auth-api.kushim.localhost
       VITE_API_URL: http://api.kushim.localhost
+      # Public website origin, used only to link the service-unavailable fallback
+      # to the public health page (http://kushim.localhost/health).
+      VITE_SITE_URL: http://kushim.localhost
     expose:
       - "5173"
     networks:

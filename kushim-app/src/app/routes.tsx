@@ -11,6 +11,7 @@ import { getWebsiteLoginUrl, useAuthStore } from "../stores/auth";
 import { exchangeHandoffCode } from "../lib/api/authApi";
 import { getBusinessMe } from "../lib/api/businessApi";
 import { useRefreshTrackingStore } from "../stores/refreshTracking";
+import { ServiceGate } from "./components/ServiceGate";
 import { Root } from "./Root";
 import { Dashboard } from "./pages/Dashboard";
 import { Assets } from "./pages/Assets";
@@ -107,7 +108,14 @@ function RequireAuth() {
     return null;
   }
 
-  return <Outlet />;
+  // Session is valid: only now does the business-service gate run. It blocks the
+  // protected pages when kushim-api is down and layers degraded-service banners
+  // when only the worker / market-data are down — without touching the session.
+  return (
+    <ServiceGate>
+      <Outlet />
+    </ServiceGate>
+  );
 }
 
 function smokeTestBusinessApi() {
