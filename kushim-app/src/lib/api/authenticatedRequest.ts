@@ -19,6 +19,10 @@ export type AuthenticatedRequestOptions = {
   method?: string;
   body?: unknown;
   headers?: Record<string, string>;
+  // Optional per-request override of the centrally managed business timeout
+  // (see httpClient.DEFAULT_REQUEST_TIMEOUT_MS). Forwarded unchanged to both the
+  // initial request and the post-refresh retry so behavior is symmetric.
+  timeoutMs?: number;
 };
 
 export async function authenticatedRequest<T>(

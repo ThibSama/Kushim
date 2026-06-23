@@ -109,6 +109,32 @@ curl.exe -fsS http://127.0.0.1:8082/ready
 
 Use `curl.exe`, not the ambiguous PowerShell `curl` alias. `Invoke-RestMethod` is also suitable.
 
+### Check same-origin health routes
+
+nginx exposes exact `/_health/<service>` routes on both browser hosts; each
+proxies only to the matching service `/ready` (api → 8080, auth → 3002,
+worker → 8081, market-data → 8082). A stopped upstream returns `502` within the
+short proxy timeout. These reflect readiness only — not job-processing, price
+freshness, or provider availability.
+
+```powershell
+curl.exe -i -H "Host: kushim.localhost" http://127.0.0.1/_health/api
+curl.exe -i -H "Host: kushim.localhost" http://127.0.0.1/_health/auth
+curl.exe -i -H "Host: kushim.localhost" http://127.0.0.1/_health/worker
+curl.exe -i -H "Host: kushim.localhost" http://127.0.0.1/_health/market-data
+curl.exe -i -H "Host: app.kushim.localhost" http://127.0.0.1/_health/api
+```
+
+Simulate an outage and confirm the route flips to non-2xx, then restore:
+
+```powershell
+docker compose stop kushim-market-data
+curl.exe -i -H "Host: kushim.localhost" http://127.0.0.1/_health/market-data  # expect 502
+docker compose start kushim-market-data
+```
+
+The public status page is `http://kushim.localhost/health`.
+
 ### Check canonical nginx routing
 
 ```powershell
