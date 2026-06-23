@@ -305,7 +305,11 @@ export function Dashboard() {
     date: snapshot.snapshot_date,
     value: snapshot.total_value_minor / 100,
   }));
-  const hasPortfolioData = snapshots.status === "success" && portfolioData.length > 0;
+  const hasNoPortfolioHistory = snapshots.status === "success" && portfolioData.length === 0;
+  const hasInsufficientPortfolioHistory =
+    snapshots.status === "success" && portfolioData.length === 1;
+  const hasChartablePortfolioHistory =
+    snapshots.status === "success" && portfolioData.length >= 2;
 
   if (status === "loading" || status === "idle") {
     return (
@@ -536,7 +540,7 @@ export function Dashboard() {
               "Historique en préparation. Le graphique sera disponible après génération des snapshots."}
             {snapshotsError && `Impossible de charger l'historique: ${snapshotsError}`}
           </div>
-        ) : hasPortfolioData ? (
+        ) : hasChartablePortfolioHistory ? (
           <ResponsiveContainer width="100%" height={340}>
             <ComposedChart data={portfolioData} id="dashboard-line-chart">
               <defs>
@@ -590,7 +594,17 @@ export function Dashboard() {
               />
             </ComposedChart>
           </ResponsiveContainer>
-        ) : (
+        ) : hasInsufficientPortfolioHistory ? (
+          <div
+            className="flex items-center justify-center text-center"
+            style={{
+              minHeight: "340px",
+              fontSize: "14px",
+              color: "var(--text-tertiary)",
+            }}>
+            Historique insuffisant pour afficher une évolution. Au moins deux points sont nécessaires.
+          </div>
+        ) : hasNoPortfolioHistory ? (
           <div
             className="flex items-center justify-center text-center"
             style={{
@@ -600,6 +614,15 @@ export function Dashboard() {
             }}>
             Aucun historique de portefeuille disponible pour cette période.
           </div>
+        ) : (
+          <div
+            className="flex items-center justify-center text-center"
+            style={{
+              minHeight: "340px",
+              fontSize: "14px",
+              color: "var(--text-tertiary)",
+            }}
+          />
         )}
       </Card>
 

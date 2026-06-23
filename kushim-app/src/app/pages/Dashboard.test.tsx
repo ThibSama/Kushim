@@ -12,7 +12,9 @@ vi.mock("recharts", () => {
     children ?? null;
   return {
     ResponsiveContainer: Box,
-    ComposedChart: Box,
+    ComposedChart: ({ children }: { children?: React.ReactNode }) => (
+      <svg data-testid="dashboard-line-chart">{children}</svg>
+    ),
     PieChart: Box,
     Area: () => null,
     XAxis: () => null,
@@ -39,6 +41,7 @@ vi.mock("../../lib/api/businessApi", () => ({
 }));
 
 import * as businessApi from "../../lib/api/businessApi";
+import type { PortfolioDailySnapshot } from "../../lib/api/businessApi";
 import { useAuthStore } from "../../stores/auth";
 import { usePortfolioStore } from "../../stores/portfolio";
 import { useOperationsStore } from "../../stores/operations";
@@ -59,6 +62,39 @@ function defaultRefreshOutcome() {
       requested_at: "2026-06-15T00:00:00Z",
     },
   };
+}
+
+function dailySnapshot(
+  snapshotDate: string,
+  totalValueMinor: number,
+): PortfolioDailySnapshot {
+  return {
+    id_portfolio_snapshot_daily: `snap-${snapshotDate}`,
+    id_portfolio: "pf-eur",
+    snapshot_date: snapshotDate,
+    base_currency: "EUR",
+    cash_balance_minor: 0,
+    total_value_minor: totalValueMinor,
+    total_invested_minor: totalValueMinor,
+    total_pnl_minor: 0,
+    total_pnl_pct: null,
+    is_estimated: false,
+    source_type: "daily",
+    created_at: `${snapshotDate}T00:00:00Z`,
+  };
+}
+
+function mockDailySnapshots(snapshots: PortfolioDailySnapshot[]) {
+  vi.mocked(businessApi.getDailySnapshots).mockResolvedValue({
+    data_available: true,
+    snapshots,
+    pagination: {
+      limit: 366,
+      offset: 0,
+      returned: snapshots.length,
+      has_more: false,
+    },
+  });
 }
 
 beforeEach(() => {
@@ -168,5 +204,44 @@ describe("Dashboard quick actions", () => {
     await user.click(screen.getByRole("button", { name: /Catalogue d'actifs/ }));
 
     expect(screen.getByTestId("assets-page")).toBeInTheDocument();
+  });
+});
+
+describe("Dashboard portfolio evolution chart states", () => {
+  it("shows an insufficient-history message and does not render the chart with exactly one snapshot", async () => {
+    mockDailySnapshots([dailySnapshot("2026-06-15", 100_000)]);
+
+    renderDashboard();
+
+    expect(
+      await screen.findByText(
+        "Historique insuffisant pour afficher une évolution. Au moins deux points sont nécessaires.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId("dashboard-line-chart")).not.toBeInTheDocument();
+  });
+
+  it("renders the evolution chart with at least two snapshots", async () => {
+    mockDailySnapshots([
+      dailySnapshot("2026-06-14", 100_000),
+      dailySnapshot("2026-06-15", 110_000),
+    ]);
+
+    renderDashboard();
+
+    expect(await screen.findByTestId("dashboard-line-chart")).toBeInTheDocument();
+  });
+
+  it("keeps the empty-history state with zero snapshots", async () => {
+    mockDailySnapshots([]);
+
+    renderDashboard();
+
+    expect(
+      await screen.findByText(
+        "Aucun historique de portefeuille disponible pour cette période.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId("dashboard-line-chart")).not.toBeInTheDocument();
   });
 });
