@@ -60,7 +60,7 @@ mod tests {
     use super::upsert_current;
     use crate::{
         domain::CurrentQuote,
-        test_utils::{TEST_SYMBOL_PREFIX_CURRENT, lock_env, unique_test_symbol},
+        test_utils::{TEST_SYMBOL_PREFIX_UNSUPPORTED, lock_env, unique_test_symbol},
     };
     use sqlx::{PgPool, Row, postgres::PgPoolOptions};
     use time::{Duration, OffsetDateTime};
@@ -79,13 +79,28 @@ mod tests {
             .expect("test db must be reachable")
     }
 
+    // Fixture asset for the direct `upsert_current` repository tests.
+    //
+    // These tests exercise the conflict guard by calling `upsert_current`
+    // directly with an explicit `id_asset`, so the fixture never needs to be
+    // active or provider-supported. It is deliberately created so a concurrent
+    // `refresh_current_market_data` job test (which runs the real job against
+    // the SHARED CI database and sweeps ALL active, provider-supported assets)
+    // can never select it and rewrite this row mid-test:
+    //   - `status = 'inactive'` → excluded from `list_active_assets`;
+    //   - `TEST_SYMBOL_PREFIX_UNSUPPORTED` symbol → the test provider returns
+    //     `None`, so even a future scan that ignored status would skip it.
+    // Without this isolation, the sweep wrote a newer `now_utc()` quote over the
+    // fixture, advancing `updated_at` / changing the price and intermittently
+    // breaking the idempotence assertions. The production conflict SQL is
+    // unchanged — this only fixes test-fixture visibility, not a real race.
     async fn insert_asset(pool: &PgPool) -> Uuid {
         let id = Uuid::new_v4();
-        let symbol = unique_test_symbol(TEST_SYMBOL_PREFIX_CURRENT);
+        let symbol = unique_test_symbol(TEST_SYMBOL_PREFIX_UNSUPPORTED);
         sqlx::query(
             r#"
             INSERT INTO assets (id_asset, asset_class, status, name, native_currency, symbol)
-            VALUES ($1, 'equity', 'active', $2, 'USD', $3)
+            VALUES ($1, 'equity', 'inactive', $2, 'USD', $3)
             "#,
         )
         .bind(id)
