@@ -420,7 +420,13 @@ mod tests {
     }
 
     async fn test_pool() -> PgPool {
-        let database_url = std::env::var("DATABASE_URL").unwrap_or_default();
+        // Read DATABASE_URL under the shared env lock: the config tests mutate
+        // process env (set_var/remove_var) under the same lock, so an unguarded
+        // read here could race with them and observe an empty value.
+        let database_url = {
+            let _guard = crate::test_utils::lock_env();
+            std::env::var("DATABASE_URL").unwrap_or_default()
+        };
         assert!(
             !database_url.is_empty(),
             "DATABASE_URL must be set for fx repository integration tests"
